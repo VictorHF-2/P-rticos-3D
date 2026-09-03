@@ -1,0 +1,299 @@
+{
+  "versao": 1,
+  "nome": "viga-continua",
+  "unidades": "kN, m",
+  "materiais": [
+    {
+      "nome": "concreto C30",
+      "E": 26838405.317753144,
+      "poisson": 0.2,
+      "peso_especifico": 25.0,
+      "tipo": "concreto",
+      "fck": 30.0,
+      "agregado": "granito e gnaisse",
+      "modulo": "Ecs"
+    }
+  ],
+  "secoes": [
+    {
+      "nome": "V20x50",
+      "A": 0.1,
+      "Iy": 0.0020833333333333333,
+      "Iz": 0.00033333333333333343,
+      "J": 0.0009980501333333334,
+      "Asy": 0.0,
+      "Asz": 0.0,
+      "tipo": "retangular",
+      "b": 0.2,
+      "h": 0.5
+    }
+  ],
+  "nos": [
+    {
+      "nome": "N1",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    {
+      "nome": "N2",
+      "x": 5.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    {
+      "nome": "N3",
+      "x": 10.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    {
+      "nome": "N4",
+      "x": 15.0,
+      "y": 0.0,
+      "z": 0.0
+    }
+  ],
+  "barras": [
+    {
+      "nome": "T1",
+      "no_i": "N1",
+      "no_j": "N2",
+      "material": "concreto C30",
+      "secao": "V20x50",
+      "rotacao": 0.0,
+      "vetor_ref": null,
+      "liberacoes_i": [],
+      "liberacoes_j": [],
+      "offset_i": 0.0,
+      "offset_j": 0.0
+    },
+    {
+      "nome": "T2",
+      "no_i": "N2",
+      "no_j": "N3",
+      "material": "concreto C30",
+      "secao": "V20x50",
+      "rotacao": 0.0,
+      "vetor_ref": null,
+      "liberacoes_i": [],
+      "liberacoes_j": [],
+      "offset_i": 0.0,
+      "offset_j": 0.0
+    },
+    {
+      "nome": "T3",
+      "no_i": "N3",
+      "no_j": "N4",
+      "material": "concreto C30",
+      "secao": "V20x50",
+      "rotacao": 0.0,
+      "vetor_ref": null,
+      "liberacoes_i": [
+        "ry"
+      ],
+      "liberacoes_j": [],
+      "offset_i": 0.0,
+      "offset_j": 0.0
+    }
+  ],
+  "apoios": [
+    {
+      "no": "N1",
+      "ux": true,
+      "uy": true,
+      "uz": true,
+      "rx": true,
+      "ry": false,
+      "rz": false
+    },
+    {
+      "no": "N2",
+      "ux": false,
+      "uy": true,
+      "uz": true,
+      "rx": false,
+      "ry": false,
+      "rz": false
+    },
+    {
+      "no": "N3",
+      "ux": false,
+      "uy": true,
+      "uz": true,
+      "rx": false,
+      "ry": false,
+      "rz": false
+    },
+    {
+      "no": "N4",
+      "ux": false,
+      "uy": true,
+      "uz": false,
+      "rx": false,
+      "ry": false,
+      "rz": false
+    }
+  ],
+  "molas": [
+    {
+      "no": "N4",
+      "kx": 0.0,
+      "ky": 0.0,
+      "kz": 25000.0,
+      "krx": 0.0,
+      "kry": 0.0,
+      "krz": 0.0
+    }
+  ],
+  "lajes": [],
+  "casos": [
+    {
+      "nome": "G",
+      "natureza": "permanente",
+      "categoria": "",
+      "grupo": "",
+      "nodais": [],
+      "distribuidas": [
+        {
+          "barra": "T1",
+          "qx": 0.0,
+          "qy": 0.0,
+          "qz": -2.5,
+          "sistema": "global",
+          "inicio": 0.0,
+          "fim": 1.0,
+          "qx_fim": null,
+          "qy_fim": null,
+          "qz_fim": null
+        },
+        {
+          "barra": "T2",
+          "qx": 0.0,
+          "qy": 0.0,
+          "qz": -2.5,
+          "sistema": "global",
+          "inicio": 0.0,
+          "fim": 1.0,
+          "qx_fim": null,
+          "qy_fim": null,
+          "qz_fim": null
+        },
+        {
+          "barra": "T3",
+          "qx": 0.0,
+          "qy": 0.0,
+          "qz": -2.5,
+          "sistema": "global",
+          "inicio": 0.0,
+          "fim": 1.0,
+          "qx_fim": null,
+          "qy_fim": null,
+          "qz_fim": null
+        },
+        {
+          "barra": "T1",
+          "qx": 0.0,
+          "qy": 0.0,
+          "qz": -8.0,
+          "sistema": "global",
+          "inicio": 0.0,
+          "fim": 1.0,
+          "qx_fim": null,
+          "qy_fim": null,
+          "qz_fim": null
+        },
+        {
+          "barra": "T2",
+          "qx": 0.0,
+          "qy": 0.0,
+          "qz": -8.0,
+          "sistema": "global",
+          "inicio": 0.0,
+          "fim": 1.0,
+          "qx_fim": null,
+          "qy_fim": null,
+          "qz_fim": null
+        },
+        {
+          "barra": "T3",
+          "qx": 0.0,
+          "qy": 0.0,
+          "qz": -8.0,
+          "sistema": "global",
+          "inicio": 0.0,
+          "fim": 1.0,
+          "qx_fim": null,
+          "qy_fim": null,
+          "qz_fim": null
+        }
+      ],
+      "recalques": []
+    },
+    {
+      "nome": "Q",
+      "natureza": "variavel",
+      "categoria": "residencial",
+      "grupo": "",
+      "nodais": [],
+      "distribuidas": [
+        {
+          "barra": "T1",
+          "qx": 0.0,
+          "qy": 0.0,
+          "qz": -12.0,
+          "sistema": "global",
+          "inicio": 0.0,
+          "fim": 1.0,
+          "qx_fim": null,
+          "qy_fim": null,
+          "qz_fim": null
+        },
+        {
+          "barra": "T2",
+          "qx": 0.0,
+          "qy": 0.0,
+          "qz": -12.0,
+          "sistema": "global",
+          "inicio": 0.0,
+          "fim": 1.0,
+          "qx_fim": null,
+          "qy_fim": null,
+          "qz_fim": null
+        },
+        {
+          "barra": "T3",
+          "qx": 0.0,
+          "qy": 0.0,
+          "qz": -4.0,
+          "sistema": "global",
+          "inicio": 0.25,
+          "fim": 1.0,
+          "qx_fim": null,
+          "qy_fim": null,
+          "qz_fim": -16.0
+        }
+      ],
+      "recalques": []
+    },
+    {
+      "nome": "R",
+      "natureza": "variavel",
+      "categoria": "temperatura",
+      "grupo": "",
+      "nodais": [],
+      "distribuidas": [],
+      "recalques": [
+        {
+          "no": "N3",
+          "ux": 0.0,
+          "uy": 0.0,
+          "uz": -0.01,
+          "rx": 0.0,
+          "ry": 0.0,
+          "rz": 0.0
+        }
+      ]
+    }
+  ]
+}
