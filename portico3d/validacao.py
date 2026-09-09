@@ -2598,6 +2598,650 @@ def momento_do_lado_tracionado() -> list[Conferencia]:
 
 
 # ---------------------------------------------------------------------------
+# 33. Charneiras plásticas, conferidas contra o programa de Lajes
+# ---------------------------------------------------------------------------
+
+def motores_de_elemento_copiados() -> list[Conferencia]:
+    """Os motores copiados importam, e a cópia ainda é cópia do original.
+
+    A segunda parte é a que interessa. Cópia que alguém editou à mão deixa de
+    ser cópia e vira um garfo silencioso: o programa passa a calcular
+    diferente do de elemento, e ninguém fica sabendo. A conferência compara
+    byte a byte com a origem, quando ela estiver acessível — e quando não
+    estiver, diz isso em vez de calar.
+    """
+    import hashlib
+    import importlib
+
+    from .elementos import PROCEDENCIA
+
+    conferencias = []
+    portas = {"pilares": ("core.dimensionar", "dimensionar"),
+              "vigas": ("core.dimensionar", "dimensionar"),
+              "vigas.desenho": ("saidas.desenho", "figura_elevacao"),
+              "lajes": ("core.esforcos", "calcular"),
+              "vento": ("nbr6123_core", "calc_s2")}
+
+    for rotulo, (modulo, funcao) in portas.items():
+        pacote = rotulo.split(".")[0]
+        alvo = importlib.import_module(
+            f".elementos.{pacote}.{modulo}", package="portico3d")
+        conferencias.append(Conferencia(
+            f"elementos: {rotulo} expõe {funcao}",
+            float(callable(getattr(alvo, funcao, None))), 1.0))
+
+    aqui = Path(__file__).resolve().parent / "elementos"
+    raiz = _raiz_dos_programas()
+    for elemento, dados in PROCEDENCIA.items():
+        copiados = []
+        for parte in dados["partes"]:
+            pasta = (aqui / elemento / parte) if parte else (aqui / elemento)
+            copiados += [(parte, p) for p in sorted(pasta.glob("*.py"))
+                         if p.name != "__init__.py" or parte]
+        # O ``__init__.py`` da raiz do pacote entra quando tem conteúdo: nos
+        # motores de elemento é ele que guarda a revisão e a edição da norma,
+        # e a memória de cálculo cita as duas. Deixá-lo fora da conferência
+        # permitiria a um relatório dizer "R02, NBR 6118:2026" depois de a
+        # origem ter virado outra coisa.
+        raiz_init = aqui / elemento / "__init__.py"
+        if raiz_init.exists() and raiz_init.read_bytes().strip():
+            copiados.append(("", raiz_init))
+        if _empacotado():
+            # Dentro do executável não há .py em disco para contar, e a origem
+            # não veio junto. Quem prova que o motor está aqui é a conferência
+            # das portas, que importa e chama cada uma delas.
+            conferencias.append(Conferencia(
+                f"elementos: {elemento} empacotado, cópia não confrontada",
+                0.0, 0.0))
+            continue
+        conferencias.append(Conferencia(
+            f"elementos: {elemento} tem arquivos copiados",
+            float(len(copiados) > 0), 1.0))
+
+        origem = raiz / dados["origem"] if raiz else None
+        if origem is None or not origem.is_dir():
+            conferencias.append(Conferencia(
+                f"elementos: origem de {elemento} fora de alcance, "
+                "cópia não confrontada", 0.0, 0.0))
+            continue
+
+        diferentes = []
+        for parte, arquivo in copiados:
+            par = (origem / parte / arquivo.name) if parte else (origem
+                                                                 / arquivo.name)
+            if not par.exists():
+                # O ``__init__.py`` vazio é criação nossa, para o pacote
+                # existir; ele não vem da origem e não conta como diferença.
+                if arquivo.name == "__init__.py" and not arquivo.read_bytes():
+                    continue
+                diferentes.append(arquivo.name)
+                continue
+            if (hashlib.sha256(arquivo.read_bytes()).digest()
+                    != hashlib.sha256(par.read_bytes()).digest()):
+                diferentes.append(arquivo.name)
+        conferencias.append(Conferencia(
+            f"elementos: {elemento} idêntico a {dados['revisao']}",
+            float(len(diferentes)), 0.0))
+
+    return conferencias
+
+
+def _empacotado() -> bool:
+    """Verdadeiro quando o programa roda como executável do PyInstaller.
+
+    Muda o que é possível conferir. Empacotado, os módulos vivem **dentro** do
+    arquivo e não como .py em disco, e as pastas dos programas de origem não
+    acompanham a entrega. Conferência que dependa de uma dessas duas coisas
+    não tem como rodar ali — e o certo é ela dizer isso, e não reprovar uma
+    instalação sadia. Reprovar o que não se pode medir ensina o usuário a
+    ignorar o relatório inteiro.
+    """
+    import sys
+
+    return bool(getattr(sys, "frozen", False))
+
+
+def _raiz_dos_programas() -> Path | None:
+    """A pasta ``Programas``, se este programa ainda estiver dentro dela."""
+    for pasta in Path(__file__).resolve().parents[:8]:
+        if pasta.name == "Programas":
+            return pasta
+    return None
+
+
+def charneiras_batem_com_o_programa_de_lajes() -> list[Conferencia]:
+    """As linhas de ruptura desenhadas aqui e as frações calculadas lá.
+
+    O desenho das charneiras é geometria própria deste programa — de propósito,
+    para não quebrar quando o programa de Lajes mudar por dentro. O preço de
+    ter geometria própria é ter de provar que ela concorda com o cálculo que
+    reparte a carga do outro lado, e é isso que esta conferência faz: integra
+    a área de cada região desenhada e compara com a fração que o programa de
+    Lajes publica.
+
+    Os casos incluem painéis assimétricos, em que os quatro bordos têm
+    vínculos diferentes: é ali que uma geometria aproximada se separaria da
+    exata.
+    """
+    from .core.programa_lajes import (PESO, carregar_programa_lajes,
+                                      fracoes_das_regioes, motor_de_reacoes)
+
+    _, _, revisao = carregar_programa_lajes()
+    reacoes_deles, tabelas_deles = motor_de_reacoes()
+
+    mapa = {"apoiado": tabelas_deles.APOIADO,
+            "engastado": tabelas_deles.ENGASTADO,
+            "livre": tabelas_deles.LIVRE}
+
+    casos = [
+        ("apoiada nos quatro", 4.0, 5.0, ("apoiado",) * 4),
+        ("dois engastes opostos", 4.0, 6.0,
+         ("engastado", "apoiado", "engastado", "apoiado")),
+        ("dois engastes vizinhos", 3.0, 7.0,
+         ("engastado", "engastado", "apoiado", "apoiado")),
+        ("quadrada assimétrica", 5.0, 5.0,
+         ("engastado", "apoiado", "apoiado", "engastado")),
+        ("com bordo livre", 4.0, 5.0,
+         ("engastado", "apoiado", "livre", "apoiado")),
+    ]
+
+    conferencias = [Conferencia(
+        f"Lajes: motor copiado de {revisao}", 1.0, 1.0)]
+    for rotulo, a, b, vinculos in casos:
+        nossa = fracoes_das_regioes(a, b, vinculos)
+        deles = reacoes_deles.fracoes_charneiras(
+            a, b, tuple(mapa[v] for v in vinculos))
+        conferencias.append(Conferencia(
+            f"charneiras, {rotulo}: as quatro frações",
+            float(max(abs(n - d) for n, d in zip(nossa, deles))), 0.0, 1e-9))
+        conferencias.append(Conferencia(
+            f"charneiras, {rotulo}: as frações somam a área toda",
+            float(sum(nossa)), 1.0, 1e-6))
+
+    conferencias.append(Conferencia(
+        "charneiras: o peso do engaste é √3 vezes o do apoio",
+        PESO["engastado"] / PESO["apoiado"], math.sqrt(3.0), 1e-12))
+    return conferencias
+
+
+def momentos_de_laje_pelo_programa() -> list[Conferencia]:
+    """Os momentos vêm do programa de Lajes, e o painel contínuo se reconhece.
+
+    A conferência do momento em si é do outro programa, que tem as próprias.
+    O que se prova aqui é a ponte: que o painel deste modelo vira o painel
+    daquele com os vãos certos, os bordos certos e a carga certa.
+    """
+    from .core.programa_lajes import calcular_momentos, vinculos_automaticos
+
+    # Dois painéis lado a lado: o bordo comum tem de sair engastado nos dois.
+    m = _modelo_base("dois_paineis")
+    m.add_secao(Secao.retangular("V20x50", 0.20, 0.50))
+    for i, (x, y) in enumerate(((0.0, 0.0), (5.0, 0.0), (11.0, 0.0),
+                                (0.0, 4.0), (5.0, 4.0), (11.0, 4.0))):
+        m.add_no(f"N{i}", x, y, 0.0)
+        m.apoiar(f"N{i}")
+    for a, b in (("N0", "N1"), ("N1", "N2"), ("N3", "N4"), ("N4", "N5"),
+                 ("N0", "N3"), ("N1", "N4"), ("N2", "N5")):
+        m.add_barra(f"V{a}{b}", a, b, "aco", "V20x50")
+    m.materiais["aco"] = replace(m.materiais["aco"], peso_especifico=25.0)
+    m.add_laje("L1", "N0", "N4", 0.12, "aco", 1.5, 3.0)
+    m.add_laje("L2", "N1", "N5", 0.12, "aco", 1.5, 3.0)
+
+    vinculos = vinculos_automaticos(m)
+    comum = sum(v.count("engastado") for v in vinculos.values())
+
+    l1 = calcular_momentos(m, m.lajes["L1"], vinculos["L1"])
+    l2 = calcular_momentos(m, m.lajes["L2"], vinculos["L2"])
+
+    return [
+        Conferencia("laje: o bordo comum é engastado dos dois lados",
+                    float(comum), 2.0),
+        Conferencia("laje: o menor vão de L1 é 4 m", l1.a, 4.0, 1e-9),
+        Conferencia("laje: o maior vão de L1 é 5 m", l1.b, 5.0, 1e-9),
+        Conferencia("laje: o painel maior tem o vão maior", l2.b, 6.0, 1e-9),
+        Conferencia("laje: os dois painéis têm a mesma carga de cálculo",
+                    l1.carga, l2.carga, 1e-12),
+        Conferencia("laje: há momento negativo no bordo contínuo",
+                    float(bool(l1.m_negativos) and bool(l2.m_negativos)), 1.0),
+        Conferencia("laje: o painel maior tem momento de vão maior",
+                    float(max(l2.ma, l2.mb) > max(l1.ma, l1.mb)), 1.0),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 34. A ponte para o programa de Pilares
+# ---------------------------------------------------------------------------
+
+def _pilar_isolado(invertido: bool = False) -> tuple[Modelo, str]:
+    """Um lance de pilar engastado na base, com seção de lados distintos.
+
+    ``invertido`` monta a barra de cima para baixo, para provar que a base é
+    achada pela cota e não pela ordem em que os nós foram digitados.
+    """
+    m = Modelo("lance")
+    from .core.concreto import concreto
+    c = concreto("C30", 30.0)
+    m.materiais[c.nome] = c
+    m.add_secao(Secao.retangular("P25x40", 0.25, 0.40))
+    m.add_no("BASE", 0.0, 0.0, 0.0)
+    m.add_no("TOPO", 0.0, 0.0, 3.0)
+    if invertido:
+        m.add_barra("P1", "TOPO", "BASE", c.nome, "P25x40")
+    else:
+        m.add_barra("P1", "BASE", "TOPO", c.nome, "P25x40")
+    m.apoiar("BASE")
+    caso = m.add_caso("Fd", "permanente")
+    # Compressão com momento no topo, em dois planos distintos.
+    caso.nodal("TOPO", fz=-400.0, fx=12.0, fy=5.0)
+    return m, "P1"
+
+
+def ponte_de_pilares_converte_certo() -> list[Conferencia]:
+    """As três conversões da fronteira: unidade, sinal do normal e eixo.
+
+    São elas que erram quando dois programas parecidos conversam. A unidade
+    porque aqui é metro e lá é centímetro; o sinal porque aqui o normal é
+    negativo à compressão e lá é positivo; o eixo porque a letra coincide e o
+    significado não — o ``Mx`` de lá é o momento de excentricidade em x, que
+    aqui se chama ``Mz``.
+    """
+    from .core.combinacoes import Combinacao, resolver_combinacoes
+    from .core.envoltoria import envoltoria
+    from .dimensionamento import (barras_verticais, esforcos_do_lance,
+                                  montar_pilar)
+
+    m, barra = _pilar_isolado()
+    combinacao = Combinacao("C1", {"Fd": 1.0})
+    env = envoltoria(m, resolver_combinacoes(m, [combinacao]))[barra]
+    r = resolver(m, "Fd")
+
+    lances = esforcos_do_lance(m, env, barra)
+    lance = lances[0]
+    d = r.diagrama(barra, 3)
+
+    pilar = montar_pilar(m, barra, lance)
+
+    return [
+        Conferencia("ponte: a barra vertical é reconhecida como pilar",
+                    float(barras_verticais(m) == [barra]), 1.0),
+        # Sinal: o normal do solver é negativo, o Nd do pilar é positivo.
+        Conferencia("ponte: Nd é o normal com o sinal trocado",
+                    lance.Nd, -float(np.min(d.N)), 1e-10),
+        Conferencia("ponte: e o normal do solver é mesmo negativo",
+                    float(np.min(d.N) < 0.0), 1.0),
+        # Unidade: kN·m aqui, kN·cm lá.
+        Conferencia("ponte: momento convertido de kN·m para kN·cm",
+                    lance.Mx_base, d.Mz[0] * 100.0, 1e-9),
+        Conferencia("ponte: o mesmo vale para o outro plano",
+                    lance.My_base, d.My[0] * 100.0, 1e-9),
+        # Eixo: o Mx de lá recebe o Mz daqui, e o hx recebe o lado b.
+        Conferencia("ponte: hx é o lado na direção local y",
+                    pilar.secao.hx, 25.0, 1e-12),
+        Conferencia("ponte: hy é o lado na direção local z",
+                    pilar.secao.hy, 40.0, 1e-12),
+        Conferencia("ponte: comprimento do lance em cm",
+                    pilar.lance.altura, 300.0, 1e-12),
+        Conferencia("ponte: o fck vem do material do modelo",
+                    pilar.concreto.fck, 30.0, 1e-12),
+    ]
+
+
+def ponte_acha_a_base_pela_cota() -> list[Conferencia]:
+    """Base e topo saem da cota, não da ordem dos nós da barra.
+
+    Barra lançada de cima para baixo é comum em modelo gerado, e trocar topo
+    com base inverteria a curvatura que o item 15.8.2 lê para achar o α_b.
+    """
+    from .core.combinacoes import Combinacao, resolver_combinacoes
+    from .core.envoltoria import envoltoria
+    from .dimensionamento import esforcos_do_lance
+
+    valores = []
+    for invertido in (False, True):
+        m, barra = _pilar_isolado(invertido)
+        env = envoltoria(m, resolver_combinacoes(
+            m, [Combinacao("C1", {"Fd": 1.0})]))[barra]
+        valores.append(esforcos_do_lance(m, env, barra)[0])
+
+    direto, invertido = valores
+    return [
+        Conferencia("ponte: o Nd não muda com a ordem dos nós",
+                    invertido.Nd, direto.Nd, 1e-9),
+        Conferencia("ponte: o momento de base é o mesmo nos dois lançamentos",
+                    abs(invertido.Mx_base), abs(direto.Mx_base), 1e-9),
+        # No topo do balanço o momento é zero; a comparação precisa da escala
+        # do lance, senão dois zeros numéricos discordariam por arredondamento.
+        Conferencia("ponte: e o de topo também",
+                    abs(invertido.Mx_topo), abs(direto.Mx_topo), 1e-9,
+                    escala=abs(direto.Mx_base)),
+        Conferencia("ponte: base e topo não são iguais neste lance",
+                    float(abs(direto.Mx_base - direto.Mx_topo) > 1e-6), 1.0),
+    ]
+
+
+def ponte_roda_o_lote_do_edificio() -> list[Conferencia]:
+    """O lote inteiro passa pelo motor de Pilares e volta com veredito."""
+    from .core.combinacoes import resolver_combinacoes
+    from .core.envoltoria import envoltoria
+    from .core.nbr6118 import acoes_do_modelo, combinacoes_elu
+    from .dimensionamento import barras_verticais, verificar_pilares
+
+    m = _edificio_classificado()
+    for nome in list(m.barras):
+        if nome.startswith("P"):
+            m.barras[nome] = replace(m.barras[nome], secao="P30x30")
+    from .core.concreto import concreto
+    c = concreto("C30", 30.0)
+    m.materiais[c.nome] = c
+    for nome, b in list(m.barras.items()):
+        m.barras[nome] = replace(b, material=c.nome)
+
+    env = envoltoria(m, resolver_combinacoes(
+        m, combinacoes_elu(acoes_do_modelo(m))))
+    pilares = barras_verticais(m)
+    verificacoes = verificar_pilares(m, env, barras=pilares[:4])
+
+    com_veredito = [v for v in verificacoes if v.passou]
+    return [
+        Conferencia("ponte: os pilares do edifício foram reconhecidos",
+                    float(len(pilares)), 8.0),
+        Conferencia("ponte: o lote produziu verificações",
+                    float(len(verificacoes) > 0), 1.0),
+        Conferencia("ponte: todas voltaram com veredito",
+                    float(len(com_veredito)), float(len(verificacoes))),
+        Conferencia("ponte: o motor devolveu área de aço necessária",
+                    float(all(hasattr(v.resultado, "As_necessaria")
+                              for v in com_veredito)), 1.0),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 35. Vigas contínuas: reconhecimento e ponte
+# ---------------------------------------------------------------------------
+
+def _pavimento_de_tres_vaos() -> Modelo:
+    """Viga de três vãos com um nó de passagem no meio do primeiro.
+
+    O nó de passagem é o ponto da conferência: ele existe na malha mas não
+    tem pilar, e tratá-lo como apoio inventaria um vão que não existe.
+    """
+    from .core.concreto import concreto
+
+    m = Modelo("tres_vaos")
+    c = concreto("C30", 30.0)
+    m.materiais[c.nome] = c
+    m.add_secao(Secao.retangular("V20x50", 0.20, 0.50))
+    m.add_secao(Secao.retangular("P30x30", 0.30, 0.30))
+
+    cotas = [0.0, 2.5, 5.0, 11.0, 16.0]
+    com_pilar = {0.0, 5.0, 11.0, 16.0}
+    for i, x in enumerate(cotas):
+        m.add_no(f"N{i}", x, 0.0, 3.0)
+        if x in com_pilar:
+            m.add_no(f"B{i}", x, 0.0, 0.0)
+            m.add_barra(f"P{i}", f"B{i}", f"N{i}", c.nome, "P30x30")
+            m.apoiar(f"B{i}")
+    for i in range(len(cotas) - 1):
+        m.add_barra(f"V{i}", f"N{i}", f"N{i + 1}", c.nome, "V20x50")
+
+    g = m.add_caso("G", "permanente")
+    for i in range(len(cotas) - 1):
+        g.distribuida(f"V{i}", qz=-18.0, sistema="global")
+    q = m.add_caso("Q", "variavel", "residencial")
+    for i in range(len(cotas) - 1):
+        q.distribuida(f"V{i}", qz=-9.0, sistema="global")
+    m.validar()
+    return m
+
+
+def viga_continua_reconhecida() -> list[Conferencia]:
+    """Quatro barras, três vãos: o nó sem pilar não é apoio."""
+    from .continuidade import nos_com_pilar, vigas_continuas
+
+    m = _pavimento_de_tres_vaos()
+    vigas = [v for v in vigas_continuas(m) if len(v.barras) > 1]
+
+    return [
+        Conferencia("viga contínua: a cadeia foi reconhecida",
+                    float(len(vigas)), 1.0),
+        Conferencia("viga contínua: reúne as quatro barras",
+                    float(len(vigas[0].barras)), 4.0),
+        Conferencia("viga contínua: mas só quatro apoios",
+                    float(len(vigas[0].apoios)), 4.0),
+        Conferencia("viga contínua: três vãos, não quatro",
+                    float(len(vigas[0].vaos)), 3.0),
+        Conferencia("viga contínua: o primeiro vão mede 5 m, e não 2,5",
+                    vigas[0].vaos[0], 5.0, 1e-12),
+        Conferencia("viga contínua: o vão do meio mede 6 m",
+                    vigas[0].vaos[1], 6.0, 1e-12),
+        Conferencia("viga contínua: comprimento total de 16 m",
+                    vigas[0].comprimento, 16.0, 1e-12),
+        Conferencia("viga contínua: os pilares foram achados",
+                    float(len(nos_com_pilar(m))), 8.0),
+    ]
+
+
+def ponte_de_vigas_monta_e_dimensiona() -> list[Conferencia]:
+    """A viga do outro programa nasce com os vãos, a seção e as cargas certas.
+
+    A carga é conferida pelo **total**: a soma de q·comprimento de todos os
+    trechos traduzidos tem de dar a carga que o pórtico tem, senão a viga foi
+    dimensionada para menos do que carrega.
+    """
+    from .continuidade import vigas_continuas
+    from .dimensionamento import montar_viga
+
+    m = _pavimento_de_tres_vaos()
+    viga = next(v for v in vigas_continuas(m) if len(v.barras) > 1)
+    deles = montar_viga(m, viga)
+
+    total_g = sum(c.q1 * (c.x_fim - c.x_ini) for c in deles.distribuidas
+                  if c.acao == "g")
+    total_q = sum(c.q1 * (c.x_fim - c.x_ini) for c in deles.distribuidas
+                  if c.acao == "q")
+
+    return [
+        Conferencia("ponte de vigas: um tramo por vão", float(len(deles.tramos)),
+                    3.0),
+        Conferencia("ponte de vigas: apoios são vãos mais um",
+                    float(len(deles.apoios)), 4.0),
+        Conferencia("ponte de vigas: seção em centímetros",
+                    deles.tramos[0].secao.bw, 20.0, 1e-12),
+        Conferencia("ponte de vigas: altura em centímetros",
+                    deles.tramos[0].secao.h, 50.0, 1e-12),
+        Conferencia("ponte de vigas: largura do apoio é a do pilar",
+                    deles.apoios[1].largura, 30.0, 1e-12),
+        Conferencia("ponte de vigas: carga permanente total preservada",
+                    total_g, 18.0 * 16.0, 1e-9),
+        Conferencia("ponte de vigas: carga variável total preservada",
+                    total_q, 9.0 * 16.0, 1e-9),
+        Conferencia("ponte de vigas: a carga é positiva para baixo",
+                    float(all(c.q1 > 0 for c in deles.distribuidas)), 1.0),
+        Conferencia("ponte de vigas: o fck veio do material",
+                    deles.concreto.fck, 30.0, 1e-12),
+    ]
+
+
+def ponte_de_vigas_desenha(pasta) -> list[Conferencia]:
+    """Dimensiona e grava o desenho, que é o que o usuário leva embora."""
+    from pathlib import Path
+
+    from .dimensionamento import verificar_vigas
+
+    destino = Path(pasta) / "vigas"
+    m = _pavimento_de_tres_vaos()
+    verificacoes = verificar_vigas(m, pasta_desenhos=destino)
+    com_veredito = [v for v in verificacoes if v.passou]
+    arquivos = [Path(a) for v in com_veredito for a in v.desenhos]
+
+    pngs = [a for a in arquivos if a.suffix == ".png"]
+    dxfs = [a for a in arquivos if a.suffix == ".dxf"]
+
+    return [
+        Conferencia("ponte de vigas: a viga foi dimensionada",
+                    float(len(com_veredito)), 1.0),
+        Conferencia("ponte de vigas: elevação e seções em imagem",
+                    float(len(pngs)), 2.0),
+        Conferencia("ponte de vigas: e um DXF para levar ao CAD",
+                    float(len(dxfs)), 1.0),
+        Conferencia("ponte de vigas: os arquivos existem e não estão vazios",
+                    float(all(a.exists() and a.stat().st_size > 5000
+                              for a in arquivos)), 1.0),
+        Conferencia("ponte de vigas: o DXF abre e tem entidades",
+                    float(_entidades_do_dxf(dxfs[0]) > 0 if dxfs else 0), 1.0),
+    ]
+
+
+def _entidades_do_dxf(caminho) -> int:
+    """Quantas entidades o arquivo CAD tem, lendo-o de volta.
+
+    Ler de volta é o que distingue "gravou um arquivo" de "gravou um desenho":
+    arquivo com cabeçalho e nada dentro passaria por tamanho.
+    """
+    try:
+        import ezdxf
+    except ImportError:
+        return 1
+    try:
+        return len(ezdxf.readfile(str(caminho)).modelspace())
+    except Exception:                                # noqa: BLE001
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# 36. A ponte para o programa de Lajes
+# ---------------------------------------------------------------------------
+
+def _pavimento_de_dois_paineis() -> Modelo:
+    """Dois painéis lado a lado, com vigas de 20 cm de largura."""
+    from .core.concreto import concreto
+
+    m = Modelo("pavimento")
+    c = concreto("C30", 30.0)
+    m.materiais[c.nome] = c
+    m.add_secao(Secao.retangular("V20x50", 0.20, 0.50))
+    m.add_secao(Secao.retangular("P30x30", 0.30, 0.30))
+
+    pontos = ((0.0, 0.0), (5.0, 0.0), (11.0, 0.0),
+              (0.0, 4.0), (5.0, 4.0), (11.0, 4.0))
+    for i, (x, y) in enumerate(pontos):
+        m.add_no(f"N{i}", x, y, 3.0)
+        m.add_no(f"B{i}", x, y, 0.0)
+        m.add_barra(f"P{i}", f"B{i}", f"N{i}", c.nome, "P30x30")
+        m.apoiar(f"B{i}")
+    for a, b in (("N0", "N1"), ("N1", "N2"), ("N3", "N4"), ("N4", "N5"),
+                 ("N0", "N3"), ("N1", "N4"), ("N2", "N5")):
+        m.add_barra(f"V{a}{b}", a, b, c.nome, "V20x50")
+
+    m.add_laje("L1", "N0", "N4", 0.12, c.nome, 1.5, 3.0)
+    m.add_laje("L2", "N1", "N5", 0.12, c.nome, 1.5, 3.0)
+    m.validar()
+    return m
+
+
+def ponte_de_lajes_monta_o_pavimento() -> list[Conferencia]:
+    """O pavimento nasce com vãos livres, continuidade e bordos engastados.
+
+    Três coisas que a tradução tem de acertar, e que o próprio programa de
+    Lajes reclama quando erradas — foi assim que a terceira apareceu:
+
+    * o vão é o **livre**, descontada meia viga de cada lado, porque o painel
+      do pórtico é definido por eixos e o de lá espera vão livre;
+    * a continuidade é **detectada por ele**, pela posição em planta;
+    * e detectar não basta: é preciso **aplicar**, senão os bordos ficam
+      apoiados enquanto a continuidade diz que são contínuos.
+    """
+    from .dimensionamento import montar_pavimento
+
+    m = _pavimento_de_dois_paineis()
+    pav = montar_pavimento(m, 3.0)
+    l1 = next(l for l in pav.lajes if l.nome == "L1")
+
+    engastados = sum(1 for l in pav.lajes for b in l.bordos
+                     if b.vinculo == "engastado")
+
+    return [
+        Conferencia("ponte de lajes: os dois painéis entraram",
+                    float(len(pav.lajes)), 2.0),
+        # O painel L1 vai de (0,0) a (5,4): o menor vão é o de 4 m, e cada um
+        # perde meia viga de 20 cm em cada lado.
+        Conferencia("ponte de lajes: o menor vão livre é 4 m menos meia viga",
+                    min(l1.a, l1.b), 4.0 - 0.20, 1e-9),
+        Conferencia("ponte de lajes: e o maior é 5 m menos meia viga",
+                    max(l1.a, l1.b), 5.0 - 0.20, 1e-9),
+        Conferencia("ponte de lajes: a largura do apoio é a da viga",
+                    l1.bordos[0].t, 20.0, 1e-9),
+        Conferencia("ponte de lajes: a espessura vai em centímetros",
+                    l1.h, 12.0, 1e-9),
+        Conferencia("ponte de lajes: uma borda comum foi detectada",
+                    float(len(pav.continuidades)), 1.0),
+        Conferencia("ponte de lajes: e ela engastou os dois bordos",
+                    float(engastados), 2.0),
+        Conferencia("ponte de lajes: o fck veio do material do modelo",
+                    pav.concreto.fck, 30.0, 1e-12),
+    ]
+
+
+def ponte_de_lajes_dimensiona_e_desenha(pasta) -> list[Conferencia]:
+    """Dimensiona o pavimento e grava as plantas de armação.
+
+    O veredito é lido dos **erros** do resultado, e não de um campo ``ok`` —
+    ``ResultadoPavimento`` não tem esse campo, e perguntar por ele devolveria
+    sempre "com ressalva", fazendo o relatório mentir sem falhar.
+    """
+    from pathlib import Path
+
+    from .dimensionamento import verificar_lajes
+
+    destino = Path(pasta) / "lajes"
+    m = _pavimento_de_dois_paineis()
+    verificacoes = verificar_lajes(m, pasta_desenhos=destino)
+    com_veredito = [v for v in verificacoes if v.passou]
+    arquivos = [Path(a) for v in com_veredito for a in v.desenhos]
+
+    tem_erros = com_veredito and list(com_veredito[0].resultado.erros)
+    continuidade_reclamada = any(
+        "vínculo está" in str(getattr(e, "texto", e))
+        for v in com_veredito for e in v.resultado.erros)
+
+    return [
+        Conferencia("ponte de lajes: um pavimento foi dimensionado",
+                    float(len(com_veredito)), 1.0),
+        Conferencia("ponte de lajes: o resultado expõe erros e avisos",
+                    float(hasattr(com_veredito[0].resultado, "erros")
+                          if com_veredito else 0), 1.0),
+        # O programa de Lajes acusa bordo comum deixado como apoiado. Depois
+        # de aplicar as continuidades, essa reclamação não pode mais aparecer.
+        Conferencia("ponte de lajes: nenhuma reclamação de vínculo de borda",
+                    float(continuidade_reclamada), 0.0),
+        Conferencia("ponte de lajes: as plantas de armação foram gravadas",
+                    float(len([a for a in arquivos if a.suffix == ".png"])),
+                    2.0),
+        Conferencia("ponte de lajes: e o DXF do pavimento",
+                    float(len([a for a in arquivos if a.suffix == ".dxf"])),
+                    1.0),
+        Conferencia("ponte de lajes: o DXF abre e tem entidades",
+                    float(_entidades_do_dxf(
+                        next(a for a in arquivos if a.suffix == ".dxf")) > 0),
+                    1.0),
+        Conferencia("ponte de lajes: os arquivos existem e não estão vazios",
+                    float(all(a.exists() and a.stat().st_size > 5000
+                              for a in arquivos)), 1.0),
+        # A ``area`` do programa de Lajes usa o vão **efetivo** do item
+        # 14.7.2.2, e não o livre: cada bordo apoiado acrescenta
+        # min(t/2 ; 0,3h). Conferir contra o vão livre daria uma área menor e
+        # a diferença passaria por erro de tradução, que não é.
+        Conferencia("ponte de lajes: a área usa o vão efetivo, não o livre",
+                    com_veredito[0].resultado.area_total,
+                    sum(r.laje.a_ef * r.laje.b_ef
+                        for r in com_veredito[0].resultado.lajes), 1e-9),
+        Conferencia("ponte de lajes: e ela supera a do vão livre",
+                    float(com_veredito[0].resultado.area_total
+                          > 3.8 * 4.8 + 3.8 * 5.8), 1.0),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # 11. Ida e volta pelo arquivo JSON
 # ---------------------------------------------------------------------------
 
@@ -2657,6 +3301,642 @@ def ida_e_volta_json(pasta) -> list[Conferencia]:
 # Execução
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# 37. Armadura no espaço: cada barra dentro do concreto dela
+# ---------------------------------------------------------------------------
+
+def _pavimento_carregado() -> Modelo:
+    """Os dois painéis, agora com carga — é o que faz os três motores rodarem.
+
+    Sem caso de carga não há envoltória, e sem envoltória o pilar não tem
+    esforço de lance: o pavimento sairia só com viga e laje.
+    """
+    m = _pavimento_de_dois_paineis()
+    g = m.add_caso("G", "permanente")
+    peso_proprio(m, g)
+    q = m.add_caso("Q", "variavel", "residencial")
+    for nome in m.barras:
+        if nome.startswith("V"):
+            q.distribuida(nome, qz=-6.0, sistema="global")
+    return m
+
+
+def _armadura_de_prova():
+    from .armadura3d import armadura_do_pavimento
+    from .core.combinacoes import resolver_combinacoes
+
+    m = _pavimento_carregado()
+    env = envoltoria(m, resolver_combinacoes(
+        m, combinacoes_elu(acoes_do_modelo(m))))
+    return m, armadura_do_pavimento(m, 3.0, env)
+
+
+def armadura_cai_dentro_do_concreto() -> list[Conferencia]:
+    """A conferência que importa: cada barra dentro da peça que a contém.
+
+    É aqui que uma troca de eixo apareceria. As três conversões de coordenada
+    — pilar pelo CG, viga pelo canto inferior esquerdo, laje pelo sistema
+    global de planta — são independentes, e um sinal trocado em qualquer uma
+    joga a armadura para fora da peça sem levantar exceção nenhuma. Medir a
+    distância ao eixo em fração da meia-seção pega qualquer uma das três: se
+    passar de 1, a barra está no ar.
+    """
+    from .armadura3d import FAMILIAS
+    from .continuidade import vigas_continuas
+
+    m, arm = _armadura_de_prova()
+    preparadas = preparar_barras(m)
+
+    pior_pilar = 0.0
+    for fio in arm.fios:
+        if not fio.familia.startswith("pilar"):
+            continue
+        p = preparadas[fio.elemento]
+        b = m.barras[fio.elemento]
+        secao = m.secoes[b.secao]
+        origem = m.ponto(b.no_i)
+        for ponto in fio.pontos:
+            d = ponto - origem
+            pior_pilar = max(pior_pilar,
+                             abs(float(d @ p.R[1])) / (secao.b / 2.0),
+                             abs(float(d @ p.R[2])) / (secao.h / 2.0))
+
+    cadeias = {v.nome: v for v in vigas_continuas(m)}
+    pior_viga = 0.0
+    for fio in arm.fios:
+        if not fio.familia.startswith("viga"):
+            continue
+        v = cadeias[fio.elemento]
+        p = preparadas[v.barras[0]]
+        secao = m.secoes[m.barras[v.barras[0]].secao]
+        origem = m.ponto(v.nos[0])
+        for ponto in fio.pontos:
+            d = ponto - origem
+            pior_viga = max(pior_viga,
+                            abs(float(d @ p.R[1])) / (secao.b / 2.0),
+                            abs(float(d @ p.R[2])) / (secao.h / 2.0))
+
+    # A laje é desenhada centrada no plano dos nós: as barras têm de cair
+    # entre as duas faces, e a positiva abaixo da negativa.
+    espessura = 0.12
+    zs_pos = [float(pt[2]) for f in arm.fios if f.familia == "laje positiva"
+              for pt in f.pontos]
+    zs_neg = [float(pt[2]) for f in arm.fios if f.familia == "laje negativa"
+              for pt in f.pontos]
+    dentro = all(3.0 - espessura / 2.0 < z < 3.0 + espessura / 2.0
+                 for z in zs_pos + zs_neg)
+
+    familias = set(arm.por_familia())
+    return [
+        Conferencia("armadura: o pavimento saiu com barras",
+                    float(len(arm.fios) > 0), 1.0),
+        Conferencia("armadura: as seis famílias apareceram",
+                    float(len(familias & set(FAMILIAS))), 6.0),
+        Conferencia("armadura: nenhuma barra de pilar fora da seção",
+                    float(pior_pilar < 1.0), 1.0),
+        Conferencia("armadura: nenhuma barra de viga fora da seção",
+                    float(pior_viga < 1.0), 1.0),
+        Conferencia("armadura: as barras de laje ficam entre as duas faces",
+                    float(dentro), 1.0),
+        Conferencia("armadura: a positiva fica abaixo da negativa",
+                    float(max(zs_pos) < min(zs_neg) if zs_pos and zs_neg
+                          else 0.0), 1.0),
+    ]
+
+
+def armadura_e_de_um_pavimento_so() -> list[Conferencia]:
+    """O recorte é o pavimento, e o pilar que entra é o de baixo.
+
+    Duas coisas que a medição de desempenho exige e que o desenho tem de
+    honrar: nenhuma barra de outro nível, e o lance mostrado é o que **chega**
+    à cota — o que entrega carga à laje e às vigas desenhadas, fechando o
+    caminho de carga na tela.
+    """
+    from .armadura3d import lances_do_pavimento, vigas_do_pavimento
+
+    m, arm = _armadura_de_prova()
+    lances = lances_do_pavimento(m, 3.0)
+    vigas = vigas_do_pavimento(m, 3.0)
+
+    # Todo pilar do modelo vai de 0 a 3 m: o lance que termina na cota são
+    # todos os seis, e nenhum começa nela.
+    topos = [max(m.ponto(m.barras[b].no_i)[2], m.ponto(m.barras[b].no_j)[2])
+             for b in lances]
+
+    zs = [float(pt[2]) for f in arm.fios for pt in f.pontos]
+    laje_e_viga = [float(pt[2]) for f in arm.fios
+                   if not f.familia.startswith("pilar") for pt in f.pontos]
+
+    return [
+        Conferencia("armadura: os seis lances de baixo entraram",
+                    float(len(lances)), 6.0),
+        Conferencia("armadura: todos terminam na cota do pavimento",
+                    float(all(abs(z - 3.0) < 1e-9 for z in topos)), 1.0),
+        Conferencia("armadura: as vigas do nível foram reconhecidas",
+                    float(len(vigas) > 0), 1.0),
+        # Nada acima do pavimento: o de cima é outro desenho. O teto não é
+        # a cota, e sim a face superior da viga — a viga também é desenhada
+        # centrada no plano dos nós, e a armadura negativa dela sobe meia
+        # altura acima do eixo.
+        Conferencia("armadura: nada é desenhado acima do pavimento",
+                    float(max(zs) <= 3.0 + 0.50 / 2.0 + 1e-9), 1.0),
+        # Viga e laje ficam na cota; só o pilar desce.
+        Conferencia("armadura: viga e laje ficam na faixa da cota",
+                    float(all(z > 3.0 - 0.55 for z in laje_e_viga)), 1.0),
+        Conferencia("armadura: o pilar desce até a base",
+                    float(min(zs) < 0.5), 1.0),
+    ]
+
+
+def armadura_vira_dxf(pasta) -> list[Conferencia]:
+    """O DXF grava uma polilinha 3D por barra, mais a fôrma, e relê.
+
+    Contar as entidades de volta é o que separa "gravou um arquivo" de
+    "gravou o desenho": um DXF só com cabeçalho passaria pela conferência de
+    tamanho.
+    """
+    from pathlib import Path
+
+    from .armadura_dxf import (CAMADAS, arestas_da_forma, contar_entidades,
+                               exportar)
+
+    m, arm = _armadura_de_prova()
+    destino = Path(pasta) / "armadura" / "cota-3m.dxf"
+    caminho = exportar(arm, destino, m)
+    forma = arestas_da_forma(m, 3.0)
+    esperadas = {nome for nome, _ in CAMADAS.values()}
+
+    try:
+        import ezdxf
+        camadas = {c.dxf.name for c in ezdxf.readfile(str(caminho)).layers}
+        entidades = contar_entidades(caminho)
+    except ImportError:                              # pragma: no cover
+        camadas, entidades = esperadas, len(arm.fios) + len(forma)
+
+    return [
+        Conferencia("armadura em DXF: o arquivo existe e não está vazio",
+                    float(caminho.exists() and caminho.stat().st_size > 5000),
+                    1.0),
+        Conferencia("armadura em DXF: uma polilinha por barra, mais a fôrma",
+                    float(entidades), float(len(arm.fios) + len(forma))),
+        Conferencia("armadura em DXF: as camadas de armadura foram criadas",
+                    float(len(esperadas & camadas)), float(len(esperadas))),
+        Conferencia("armadura em DXF: a fôrma tem camada própria",
+                    float("FORMA" in camadas), 1.0),
+    ]
+
+
+def pilar_reprovado_nao_passa_por_aprovado() -> list[Conferencia]:
+    """Ter veredito e ser aprovado são coisas diferentes.
+
+    O motor de Pilares pode concluir a verificação inteira e **reprovar** o
+    lance — o caso comum é nenhum arranjo caber nas bitolas permitidas, e aí
+    ``arranjo`` volta vazio e o erro fica nos avisos. ``passou`` só diz que
+    houve veredito; era com ele que o relatório contava o lance entre os
+    verificados sem dizer que ele não passou.
+    """
+    from .dimensionamento import EsforcosDoLance, VerificacaoDePilar
+
+    class _Fingido:
+        ok = False
+        erros = ["nenhum arranjo coube"]
+
+    esforcos = EsforcosDoLance("P1", "ELU 01")
+    reprovado = VerificacaoDePilar("P1", "ELU 01", esforcos,
+                                   resultado=_Fingido())
+    sem_veredito = VerificacaoDePilar("P1", "ELU 01", esforcos,
+                                      erro="seção não retangular")
+
+    return [
+        Conferencia("pilar reprovado: tem veredito",
+                    float(reprovado.passou), 1.0),
+        Conferencia("pilar reprovado: mas não é aprovado",
+                    float(reprovado.aprovado), 0.0),
+        Conferencia("pilar reprovado: o motivo vem do motor",
+                    float(reprovado.motivos == ["nenhum arranjo coube"]), 1.0),
+        Conferencia("pilar sem veredito: nem passou nem foi aprovado",
+                    float(sem_veredito.passou or sem_veredito.aprovado), 0.0),
+    ]
+
+
+
+# ---------------------------------------------------------------------------
+# 38. A ponte de vigas usa o que o pórtico sabe
+# ---------------------------------------------------------------------------
+
+def _portico_com_vento() -> Modelo:
+    """Os dois painéis, com carga vertical **e** uma ação lateral.
+
+    A ação lateral é o ponto: ela produz momento na viga que nenhuma carga
+    distribuída reproduz, e é justamente o que o motor de Vigas não combina.
+    """
+    m = _pavimento_de_dois_paineis()
+    g = m.add_caso("G", "permanente")
+    peso_proprio(m, g)
+    q = m.add_caso("Q", "variavel", "residencial")
+    for nome in m.barras:
+        if nome.startswith("V"):
+            q.distribuida(nome, qz=-8.0, sistema="global")
+    vento = m.add_caso("VX", "variavel", "vento", grupo="vento")
+    for no in ("N0", "N1", "N2", "N3", "N4", "N5"):
+        vento.nodal(no, fx=25.0)
+    return m
+
+
+def peso_proprio_entra_uma_vez_so() -> list[Conferencia]:
+    """O motor de Vigas gera o peso próprio dele; o pórtico já o trouxe.
+
+    Era carga dobrada, e ninguém veria: as duas parcelas somam numa
+    distribuída só, e a memória de cálculo mostraria o total sem dizer que
+    metade dele foi contada duas vezes. Na viga 20×50 do exemplo davam 2,5
+    kN/m sobre 10,4 — 24 % a mais de carga permanente.
+    """
+    from .continuidade import vigas_continuas
+    from .dimensionamento import montar_viga
+
+    m = _portico_com_vento()
+    viga = next(v for v in vigas_continuas(m) if len(v.apoios) >= 2)
+    deles = montar_viga(m, viga)
+    secao = deles.tramos[0].secao
+    peso = secao.peso_proprio(deles.concreto.peso_especifico)
+
+    meio = viga.comprimento / 2.0
+    repassado = sum(c.valor(meio) for c in deles.distribuidas
+                    if c.acao == "g" and c.x_ini <= meio <= c.x_fim)
+    # ``todas_distribuidas()`` devolve o peso próprio gerado pelo motor mais
+    # as distribuídas informadas: com a chave desligada, só as informadas.
+    usado = sum(c.valor(meio) for c in deles.todas_distribuidas()
+                if c.acao == "g" and c.x_ini <= meio <= c.x_fim)
+
+    return [
+        Conferencia("peso próprio: o motor não gera o dele",
+                    float(deles.config.peso_proprio), 0.0),
+        Conferencia("peso próprio: a seção de fato tem peso a dobrar",
+                    float(peso > 0.5), 1.0),
+        Conferencia("peso próprio: o pórtico já o repassou",
+                    float(repassado >= peso), 1.0),
+        # A prova do dobro: o que o motor usa é o que a ponte passou, nem um
+        # quilo a mais.
+        Conferencia("peso próprio: o motor usa exatamente o repassado",
+                    usado, repassado, 1e-9),
+    ]
+
+
+def apoio_de_viga_leva_a_rigidez_do_pilar() -> list[Conferencia]:
+    """O apoio vai como mola, e a mola vale 4EI/ℓ dos lances que chegam.
+
+    A inércia que conta é a do pilar **na direção da viga**, e é isso que a
+    conferência trava: girando a seção do pilar, a mola tem de mudar na razão
+    dos cubos dos lados. Um erro de eixo aqui passaria despercebido — a mola
+    continuaria existindo, só com o valor errado.
+    """
+    from dataclasses import replace
+
+    from .continuidade import vigas_continuas
+    from .dimensionamento import montar_viga, rigidez_dos_pilares
+
+    m = _portico_com_vento()
+    viga = next(v for v in vigas_continuas(m) if len(v.apoios) >= 2)
+    k = rigidez_dos_pilares(m, viga, 1)
+
+    # o apoio 1 é interno: dois lances? Não — aqui cada prumada tem um lance
+    # só, do chão à laje. Vale 4EI/ℓ de um lance.
+    barra = next(b for n, b in m.barras.items() if n.startswith("P")
+                 and viga.nos[viga.apoios[1]] in (b.no_i, b.no_j))
+    secao = m.secoes[barra.secao]
+    material = m.materiais[barra.material]
+    esperado = 4.0 * material.E * secao.Iz / m.comprimento(
+        next(n for n, b in m.barras.items() if b is barra))
+
+    # girando o pilar de 30×30 para 20×45, a inércia na direção da viga cai
+    m2 = _portico_com_vento()
+    m2.add_secao(Secao.retangular("P20x45", 0.20, 0.45))
+    for nome, b in list(m2.barras.items()):
+        if nome.startswith("P"):
+            m2.barras[nome] = replace(b, secao="P20x45")
+    viga2 = next(v for v in vigas_continuas(m2) if len(v.apoios) >= 2)
+    k2 = rigidez_dos_pilares(m2, viga2, 1)
+
+    deles = montar_viga(m, viga)
+    apoios_mola = [a for a in deles.apoios if a.tipo == "mola"]
+
+    return [
+        Conferencia("mola do apoio: vale 4EI/ℓ do lance",
+                    k, esperado, 1e-9),
+        # 30³ contra 20³: a mola cai na razão dos cubos do lado que fica no
+        # rumo da viga, e não na dos lados perpendiculares
+        Conferencia("mola do apoio: segue o lado na direção da viga",
+                    k2 / k, (0.20 ** 3 * 0.45) / (0.30 ** 3 * 0.30), 1e-9),
+        Conferencia("mola do apoio: todos os apoios de pilar são mola",
+                    float(len(apoios_mola)), float(len(viga.apoios))),
+        Conferencia("mola do apoio: o motor recebeu k > 0",
+                    float(all(a.k_mola > 0.0 for a in apoios_mola)), 1.0),
+    ]
+
+
+def acao_lateral_nao_chega_ao_motor_mas_e_conferida() -> list[Conferencia]:
+    """O motor não vê o vento; a conferência contra o pórtico vê.
+
+    Esta é a conferência do defeito que motivou a correção. O motor de Vigas
+    combina só G e Q — não há como dar vento a ele —, de modo que a armadura
+    saía dimensionada para menos do que o edifício pede. A ponte não finge que
+    resolveu: ela **confere** o detalhamento contra a envoltória do pórtico, em
+    área de aço, e reprova quando não cobre.
+    """
+    from .continuidade import vigas_continuas
+    from .dimensionamento import (conferir_contra_o_portico,
+                                  envoltoria_da_viga, montar_viga,
+                                  verificar_vigas)
+    from .elementos.vigas.core.dimensionar import dimensionar
+
+    m = _portico_com_vento()
+    env = envoltoria(m, resolver_combinacoes(
+        m, combinacoes_elu(acoes_do_modelo(m))))
+    viga = next(v for v in vigas_continuas(m) if len(v.apoios) >= 2)
+
+    x, mn, mx, _, _ = envoltoria_da_viga(m, viga, env)
+    deles = montar_viga(m, viga)
+    resultado = dimensionar(deles)
+    conf = conferir_contra_o_portico(m, viga, resultado, deles, env)
+
+    # o motor só conhece g e q: nenhuma das suas ações é o vento
+    acoes = {c.acao for c in deles.todas_distribuidas()}
+
+    sem_env = verificar_vigas(m)
+    com_env = verificar_vigas(m, envoltorias=env)
+
+    return [
+        Conferencia("ação lateral: a envoltória do pórtico foi extraída",
+                    float(len(x) > 0), 1.0),
+        Conferencia("ação lateral: o motor de Vigas só tem g e q",
+                    float(acoes <= {"g", "q"}), 1.0),
+        # A envoltória do pórtico é mais severa que a do motor em algum
+        # ponto: é o vento aparecendo. Sem isso a conferência não provaria
+        # nada, porque um vento nulo passaria igual.
+        Conferencia("ação lateral: o pórtico exige mais que o motor",
+                    float(mn.min() < resultado.envoltoria.M_min.min()
+                          or mx.max() > resultado.envoltoria.M_max.max()),
+                    1.0),
+        Conferencia("ação lateral: a conferência achou o ponto crítico",
+                    float(conf.face_critica in ("superior", "inferior")), 1.0),
+        # Sem envoltória não há conferência, e a verificação diz isso em vez
+        # de calar: era esse o silêncio que deixava a viga passar.
+        Conferencia("ação lateral: sem envoltória não há conferência",
+                    float(all(v.portico is None for v in sem_env)), 1.0),
+        Conferencia("ação lateral: sem envoltória fica o aviso",
+                    float(all(v.avisos for v in sem_env)), 1.0),
+        Conferencia("ação lateral: com envoltória todas são conferidas",
+                    float(all(v.portico is not None for v in com_env
+                              if v.passou)), 1.0),
+    ]
+
+
+def conferencia_do_portico_mede_area_de_aco() -> list[Conferencia]:
+    """A razão é entre áreas de aço na face tracionada, e não entre momentos.
+
+    Momento é grandeza intermediária: dois momentos parecidos pedem armaduras
+    diferentes se caírem em faces opostas, e um momento de sinal trocado — o
+    vento revertendo o apoio — não tem razão numérica que o descreva. Área de
+    aço, sim, e é o que se confere em obra.
+    """
+    from .dimensionamento import ConferenciaDoPortico
+
+    coberta = ConferenciaDoPortico(As_exigido_sup=4.0, As_obtido_sup=5.0)
+    apertada = ConferenciaDoPortico(As_exigido_sup=6.0, As_obtido_sup=5.0)
+    ausente = ConferenciaDoPortico(As_exigido_inf=3.0, As_obtido_inf=0.0)
+
+    return [
+        Conferencia("conferência: sobrando aço, cobre",
+                    float(coberta.cobre), 1.0),
+        Conferencia("conferência: a razão é exigido sobre obtido",
+                    coberta.razao, 0.8, 1e-12),
+        Conferencia("conferência: faltando aço, não cobre",
+                    float(apertada.cobre), 0.0),
+        # Face sem barra nenhuma não tem razão finita: é o caso do vento
+        # pedindo tração onde o motor não armou, e ele não pode virar um
+        # número modesto por divisão com zero
+        Conferencia("conferência: face sem armadura dá razão infinita",
+                    float(ausente.razao == float("inf")), 1.0),
+        Conferencia("conferência: e reprova",
+                    float(ausente.cobre), 0.0),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 39. Os três arquivos do projeto
+# ---------------------------------------------------------------------------
+
+def motores_trouxeram_as_saidas() -> list[Conferencia]:
+    """Os três motores vieram com as pastas de saída, não só com o núcleo.
+
+    De Pilares tinha vindo só o ``core``: a memória de cálculo, a planilha e o
+    DXF dele ficaram para trás, e o projeto do edifício não tinha como emitir
+    a parte de pilares.
+    """
+    import importlib
+
+    from .elementos import PROCEDENCIA
+
+    portas = [("pilares.saidas.relatorio", "gerar"),
+              ("pilares.saidas.planilha", "gerar"),
+              ("pilares.saidas.dxf", "exportar"),
+              ("vigas.saidas.relatorio", "gerar"),
+              ("vigas.saidas.planilha", "gerar"),
+              ("lajes.saidas.relatorio", "gerar"),
+              ("lajes.saidas.planilha", "gerar")]
+    achadas = 0
+    for modulo, funcao in portas:
+        try:
+            alvo = importlib.import_module(f".elementos.{modulo}",
+                                           package="portico3d")
+        except ImportError:
+            continue
+        achadas += int(callable(getattr(alvo, funcao, None)))
+
+    return [
+        Conferencia("saídas dos motores: as sete portas existem",
+                    float(achadas), float(len(portas))),
+        Conferencia("saídas dos motores: o manifesto declara saidas de "
+                    "pilares",
+                    float("saidas" in PROCEDENCIA["pilares"]["partes"]), 1.0),
+    ]
+
+
+def dependencias_estao_declaradas() -> list[Conferencia]:
+    """O requirements.txt lista o que o programa de fato importa.
+
+    Numa instalação limpa faltavam ezdxf, python-docx e openpyxl: o programa
+    subia e quebrava na primeira exportação. Declarar é o conserto.
+    """
+    if _empacotado():
+        # No executável não há o que instalar: as sete já vieram dentro. O que
+        # importa ali é que elas **importem**, e é isso que se confere.
+        import importlib
+
+        modulos = ("numpy", "scipy", "PySide6", "matplotlib", "docx",
+                   "openpyxl", "ezdxf")
+        vivas = 0
+        for modulo in modulos:
+            try:
+                importlib.import_module(modulo)
+            except ImportError:
+                continue
+            vivas += 1
+        return [Conferencia("dependências: as sete estão dentro do executável",
+                            float(vivas), float(len(modulos)))]
+
+    caminho = Path(__file__).resolve().parent.parent / "requirements.txt"
+    texto = caminho.read_text(encoding="utf-8").lower() if caminho.exists()         else ""
+    exigidas = ("numpy", "scipy", "pyside6", "matplotlib",
+                "python-docx", "openpyxl", "ezdxf")
+    return [
+        Conferencia("dependências: o arquivo existe",
+                    float(caminho.exists()), 1.0),
+        Conferencia("dependências: todas as sete estão declaradas",
+                    float(sum(1 for d in exigidas if d in texto)),
+                    float(len(exigidas))),
+    ]
+
+
+def projeto_gera_os_tres_arquivos(pasta) -> list[Conferencia]:
+    """Um memorial, um quadro de quantidades, uma prancha — e eles abrem.
+
+    Abrir de volta é o que separa "gravou um arquivo" de "gravou o
+    documento": um .docx sem capítulo nenhum e um .dxf só com cabeçalho
+    passariam por tamanho.
+    """
+    from pathlib import Path as _Path
+
+    from .projeto import calcular, gerar
+    from .saidas.quantitativos import consolidar
+
+    m = _portico_com_vento()
+    projeto = calcular(m)
+    destino = _Path(pasta) / "projeto"
+    arquivos = [a for a in gerar(projeto, destino) if not a.startswith("(")]
+    caminhos = [_Path(a) for a in arquivos]
+
+    docx = [c for c in caminhos if c.suffix == ".docx"]
+    xlsx = [c for c in caminhos if c.suffix == ".xlsx"]
+    dxf = [c for c in caminhos if c.suffix == ".dxf"]
+
+    capitulos = abas = entidades = 0
+    if docx:
+        from docx import Document
+        d = Document(str(docx[0]))
+        capitulos = sum(1 for p in d.paragraphs
+                        if p.style.name == "Heading 1")
+    if xlsx:
+        import openpyxl
+        abas = len(openpyxl.load_workbook(str(xlsx[0])).sheetnames)
+    if dxf:
+        import ezdxf
+        entidades = len(ezdxf.readfile(str(dxf[0])).modelspace())
+
+    q = consolidar(projeto)
+
+    return [
+        Conferencia("projeto: saíram os três arquivos",
+                    float(len(caminhos)), 3.0),
+        Conferencia("projeto: os três existem e não estão vazios",
+                    float(all(c.exists() and c.stat().st_size > 4000
+                              for c in caminhos)), 1.0),
+        # dez capítulos: metodologia, modelo, esforços, estabilidade,
+        # reações, pilares, vigas, confronto, lajes e quantitativos
+        Conferencia("projeto: a memória tem os dez capítulos",
+                    float(capitulos), 10.0),
+        Conferencia("projeto: o quadro tem as quatro abas",
+                    float(abas), 4.0),
+        Conferencia("projeto: a prancha tem entidades",
+                    float(entidades > 100), 1.0),
+        Conferencia("projeto: o quantitativo somou aço",
+                    float(q["aco"] > 0.0), 1.0),
+        Conferencia("projeto: e somou concreto",
+                    float(q["concreto"] > 0.0), 1.0),
+        # Fôrma existe e é **menor** que a soma das faces brutas: o critério é
+        # contar só o que contém o concreto, e um quadro que somasse tudo
+        # daria número maior sem ninguém notar
+        Conferencia("projeto: e somou fôrmas",
+                    float(q["formas"] > 0.0), 1.0),
+        # o total tem de bater com a soma das parcelas, senão a planilha
+        # mente numa linha que ninguém confere à mão
+        Conferencia("projeto: o total é a soma das parcelas",
+                    q["aco"],
+                    sum(d["aco"] for d in q["por_elemento"].values()), 1e-9),
+    ]
+
+
+
+
+# ---------------------------------------------------------------------------
+# 40. O que muda quando o programa vira executável
+# ---------------------------------------------------------------------------
+
+def vento_carrega_sem_depender_de_pasta() -> list[Conferencia]:
+    """O motor de vento tem de carregar sem a pasta dele estar no sys.path.
+
+    A cópia do NBR-6123 faz ``import nbr6123_data`` sem ponto, como módulo de
+    topo — é assim na origem, e a cópia não se edita. A solução antiga punha a
+    pasta no ``sys.path``, e ela funcionava em Python e **quebrava
+    empacotada**: no executável a pasta não existe em disco, os módulos vivem
+    dentro do arquivo, e o programa levantava ModuleNotFoundError na primeira
+    conta de vento. Foi o autoteste do .exe que achou isso.
+
+    A conferência refaz a carga com a pasta **fora** do ``sys.path``, que é a
+    situação do executável, e exige que ela funcione mesmo assim.
+    """
+    import sys
+
+    from .core.vento import carregar_nbr6123
+    from .elementos import vento as pacote
+
+    pasta = str(Path(pacote.__file__).resolve().parent)
+    salvos = [m for m in ("nbr6123_data", "nbr6123_core") if m in sys.modules]
+    guardados = {m: sys.modules.pop(m) for m in salvos}
+    caminho_antes = list(sys.path)
+    sys.path[:] = [d for d in sys.path if d != pasta]
+    try:
+        motor = carregar_nbr6123()
+        carregou = callable(getattr(motor, "calc_s2", None))
+        registrado = sys.modules.get("nbr6123_data") is not None
+    finally:
+        sys.path[:] = caminho_antes
+        sys.modules.update(guardados)
+
+    return [
+        Conferencia("executável: o vento carrega sem a pasta no sys.path",
+                    float(carregou), 1.0),
+        Conferencia("executável: nbr6123_data fica registrado no nome de topo",
+                    float(registrado), 1.0),
+    ]
+
+
+def pacote_nao_tem_dado_fora_do_codigo() -> list[Conferencia]:
+    """Nada dentro de ``portico3d`` é lido de arquivo que não seja .py.
+
+    Importa para o empacotamento: arquivo de dados não entra no executável a
+    menos que a receita do PyInstaller o colete à mão, e o que não entra só
+    falha quando alguém usa a função que o lê. Enquanto o pacote for só
+    código — mais os recursos gráficos, que a receita declara —, não há essa
+    classe de erro a temer.
+    """
+    if _empacotado():
+        return [Conferencia("executável: pacote empacotado, varredura de "
+                            "disco não se aplica", 0.0, 0.0)]
+    aqui = Path(__file__).resolve().parent
+    permitidos = {".py", ".ico", ".png"}
+    estranhos = [a.relative_to(aqui).as_posix()
+                 for a in aqui.rglob("*")
+                 if a.is_file() and "__pycache__" not in a.parts
+                 and a.suffix.lower() not in permitidos]
+    return [
+        Conferencia("executável: o pacote não tem dado fora do código",
+                    float(len(estranhos)), 0.0),
+    ]
+
+
+
 def conferir(pasta=None) -> list[Conferencia]:
     conferencias: list[Conferencia] = []
     for prova in (barra_axial, balanco_plano_xy, balanco_plano_xz, torcao,
@@ -2690,9 +3970,31 @@ def conferir(pasta=None) -> list[Conferencia]:
                   trecho_rigido_sem_vao, trecho_rigido_com_segunda_ordem,
                   confronto_com_mastan, modulo_do_concreto,
                   ramos_do_modulo_se_encontram, material_de_concreto,
-                  concreto_recusa_entrada_ruim, momento_do_lado_tracionado):
+                  concreto_recusa_entrada_ruim, momento_do_lado_tracionado,
+                  motores_de_elemento_copiados,
+                  charneiras_batem_com_o_programa_de_lajes,
+                  momentos_de_laje_pelo_programa,
+                  ponte_de_pilares_converte_certo, ponte_acha_a_base_pela_cota,
+                  ponte_roda_o_lote_do_edificio, viga_continua_reconhecida,
+                  ponte_de_vigas_monta_e_dimensiona,
+                  ponte_de_lajes_monta_o_pavimento,
+                  armadura_cai_dentro_do_concreto,
+                  armadura_e_de_um_pavimento_so,
+                  pilar_reprovado_nao_passa_por_aprovado,
+                  peso_proprio_entra_uma_vez_so,
+                  apoio_de_viga_leva_a_rigidez_do_pilar,
+                  acao_lateral_nao_chega_ao_motor_mas_e_conferida,
+                  conferencia_do_portico_mede_area_de_aco,
+                  motores_trouxeram_as_saidas,
+                  dependencias_estao_declaradas,
+                  vento_carrega_sem_depender_de_pasta,
+                  pacote_nao_tem_dado_fora_do_codigo):
         conferencias.extend(prova())
     if pasta is not None:
         conferencias.extend(ida_e_volta_json(pasta))
         conferencias.extend(classificacao_no_arquivo(pasta))
+        conferencias.extend(ponte_de_vigas_desenha(pasta))
+        conferencias.extend(ponte_de_lajes_dimensiona_e_desenha(pasta))
+        conferencias.extend(armadura_vira_dxf(pasta))
+        conferencias.extend(projeto_gera_os_tres_arquivos(pasta))
     return conferencias

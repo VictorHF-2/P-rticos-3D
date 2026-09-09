@@ -31,4 +31,6 @@ __all__ = ["Apoio", "Barra", "CargaDistribuida", "CargaNodal", "CasoDeCarga",
            "Diagrama", "ErroDeModelo", "Material", "Modelo", "No", "Resultado",
            "Secao", "resolver"]
 
-__version__ = "0.1.0"
+#: A revisão, como nos demais programas da pasta: é ela que nomeia o
+#: pacote de distribuição.
+__version__ = "R02"

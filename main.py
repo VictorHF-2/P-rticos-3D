@@ -18,9 +18,28 @@ from __future__ import annotations
 import os
 import sys
 
-PASTA = os.path.dirname(os.path.abspath(__file__))
-if PASTA not in sys.path:
-    sys.path.insert(0, PASTA)
+if getattr(sys, "frozen", False):
+    # Empacotado pelo PyInstaller, ``__file__`` aponta para o diretório
+    # temporário em que o executável se descompacta — que some ao fechar, e
+    # que ninguém vai procurar. A pasta do programa, aqui, é onde o .exe
+    # está: é lá que o usuário espera achar o que o programa gravou.
+    PASTA = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    PASTA = os.path.dirname(os.path.abspath(__file__))
+    if PASTA not in sys.path:
+        sys.path.insert(0, PASTA)
+
+# Os nomes das conferências trazem δ, γ, Δ e ². Num console em cp1252 — que é
+# o do cmd.exe e o do Git Bash em português — imprimir isso levanta
+# UnicodeEncodeError e derruba o programa no meio do relatório. Forçar UTF-8
+# resolve onde o console aceita, e o "replace" garante que, onde não aceitar,
+# o caractere vire "?" em vez de interromper a execução.
+for fluxo in (sys.stdout, sys.stderr):
+    if hasattr(fluxo, "reconfigure"):
+        try:
+            fluxo.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
 
 
 def conferir_janela(destino: str) -> list[str]:
@@ -92,6 +111,23 @@ def conferir_janela(destino: str) -> list[str]:
     janela.analisar_estabilidade()
     notas.append("janela: combinações, estabilidade e flambagem percorridas")
 
+    # ``dimensionar_lajes`` e ``dimensionar_vigas`` abrem diálogo de pasta, e
+    # diálogo modal em modo offscreen fica esperando para sempre. O que se
+    # prova aqui é a função por baixo, que é onde mora o cálculo; o botão em
+    # si já é exercitado pelos outros que não pedem pasta.
+    from portico3d.dimensionamento import cotas_com_laje, verificar_lajes
+    cotas = cotas_com_laje(janela.modelo)
+    lajes = verificar_lajes(janela.modelo)
+    if not any(v.passou for v in lajes):
+        raise RuntimeError("nenhum pavimento de laje foi dimensionado")
+    notas.append(f"janela: {len(cotas)} pavimentos de laje dimensionados")
+
+    antes = len(janela.relatorio.toPlainText())
+    janela.dimensionar_pilares()
+    if "Dimensionamento de pilares" not in janela.relatorio.toPlainText()[antes:]:
+        raise RuntimeError("o dimensionamento de pilares não produziu relatório")
+    notas.append("janela: pilares dimensionados pelo motor copiado")
+
     janela.escolha_caso.setCurrentText("G")
     antes = len(janela.relatorio.toPlainText())
     janela.mostrar_reacoes()
@@ -100,15 +136,121 @@ def conferir_janela(destino: str) -> list[str]:
         raise RuntimeError("a tabela de reações não foi para o relatório")
     notas.append("janela: tabela de reações emitida")
 
-    for vista in ["Modelo", "Deformada", *VISTAS_DE_ESFORCO,
-                  "Modo de flambagem"]:
+    for vista in ["Modelo", "3D", "Laje", "Armadura", "Deformada",
+                  *VISTAS_DE_ESFORCO, "Modo de flambagem"]:
         janela.escolha_vista.setCurrentText(vista)
         janela.redesenhar()
-    notas.append(f"janela: {len(VISTAS_DE_ESFORCO) + 3} vistas desenhadas")
+    notas.append(f"janela: {len(VISTAS_DE_ESFORCO) + 6} vistas desenhadas")
+
+    # A vista de Armadura roda os três motores de elemento e guarda o
+    # resultado por cota. Conferir o cache é conferir que girar o desenho não
+    # redimensiona o prédio de novo, que é a razão de ele existir.
+    if not janela.armaduras:
+        raise RuntimeError("a vista de armadura não calculou pavimento nenhum")
+    cota, armadura = next(iter(janela.armaduras.items()))
+    if not armadura.fios:
+        raise RuntimeError(f"a armadura da cota {cota:g} m saiu vazia")
+    janela.redesenhar()
+    if len(janela.armaduras) != 1:
+        raise RuntimeError("o redesenho recalculou a armadura em vez de "
+                           "reaproveitar a guardada")
+    notas.append(f"janela: armadura da cota {cota:g} m com "
+                 f"{len(armadura.fios)} barras e "
+                 f"{armadura.segmentos} segmentos")
+
+    # ``exportar_armadura`` abre diálogo de pasta, como os outros botões que
+    # gravam: o que se prova aqui é a gravação por baixo.
+    from portico3d.armadura_dxf import contar_entidades, exportar
+    caminho = exportar(armadura, os.path.join(destino, "armadura.dxf"),
+                       janela.modelo)
+    entidades = contar_entidades(caminho)
+    if entidades < len(armadura.fios):
+        raise RuntimeError(f"o DXF da armadura tem {entidades} entidades para "
+                           f"{len(armadura.fios)} barras")
+    notas.append(f"janela: armadura em DXF com {entidades} polilinhas 3D")
+
+    # ``gerar_projeto`` abre diálogo de pasta, como os demais botões que
+    # gravam. O que se prova aqui é o caminho por baixo: calcular o edifício e
+    # emitir os três arquivos.
+    from portico3d.projeto import calcular, gerar
+    projeto = calcular(janela.modelo)
+    if not projeto.vigas or not projeto.lajes:
+        raise RuntimeError("o projeto não reconheceu vigas ou lajes")
+    conferidas = [v for v in projeto.vigas if v.portico is not None]
+    if not conferidas:
+        raise RuntimeError("nenhuma viga foi conferida contra a envoltória "
+                           "do pórtico — o efeito das ações laterais não "
+                           "estaria entrando")
+    notas.append(f"janela: projeto com {len(projeto.pilares)} verificações de "
+                 f"pilar, {len(projeto.vigas)} vigas ({len(conferidas)} "
+                 f"conferidas contra o pórtico) e {len(projeto.lajes)} "
+                 "pavimentos")
+
+    emitidos = gerar(projeto, os.path.join(destino, "projeto"))
+    falhos = [a for a in emitidos if a.startswith("(")]
+    if falhos:
+        raise RuntimeError(f"o projeto não emitiu tudo: {falhos}")
+    for arquivo in emitidos:
+        if os.path.getsize(arquivo) < 4000:
+            raise RuntimeError(f"{arquivo} saiu pequeno demais")
+    notas.append("janela: projeto emitido — "
+                 + ", ".join(os.path.splitext(a)[1] for a in emitidos))
+
+    if janela._ultimo_relatorio_de_laje is None:
+        raise RuntimeError("a vista de laje não produziu relatório")
+    notas.append(f"janela: vista de laje com {len(janela._ultimo_relatorio_de_laje)}"
+                 " painéis calculados")
 
     figura = os.path.join(destino, "janela.png")
     janela.vista.figure.savefig(figura, dpi=110, facecolor="white")
     notas.append(f"janela: figura gravada em {figura}")
+
+    # -- cabe em qualquer tela --------------------------------------------
+    # O que decide isto é o ``minimumSizeHint``: o Qt ignora um mínimo menor
+    # que o do conteúdo, e era por isso que a janela não descia de 1752 px de
+    # largura — não cabia em notebook de 1366, nem em 1920 com escala de
+    # 150 %, que dá 1280 lógicos. A conferência mede o que o conteúdo exige e
+    # depois abre a janela nos tamanhos reais que se encontram por aí.
+    from portico3d.ui.janela import JANELA_MINIMA
+
+    exigido = janela.minimumSizeHint()
+    if (exigido.width() > JANELA_MINIMA[0]
+            or exigido.height() > JANELA_MINIMA[1]):
+        raise RuntimeError(
+            f"o conteúdo da janela exige {exigido.width()}x"
+            f"{exigido.height()} px, acima do piso declarado "
+            f"{JANELA_MINIMA[0]}x{JANELA_MINIMA[1]} — ela não caberia numa "
+            "tela pequena")
+    notas.append(f"janela: o conteúdo cabe em {exigido.width()}x"
+                 f"{exigido.height()} px, dentro do piso de "
+                 f"{JANELA_MINIMA[0]}x{JANELA_MINIMA[1]}")
+
+    for largura, altura in ((1920, 1080), (1366, 768), (1280, 720),
+                            (1024, 768), (800, 600)):
+        janela.showNormal()
+        janela.resize(largura, altura)
+        janela.repartir()
+        aplicacao.processEvents()
+        esquerda, direita = janela.divisor.sizes()
+        if min(esquerda, direita) < 200:
+            raise RuntimeError(
+                f"em {largura}x{altura} o divisor deixou {esquerda}/{direita} "
+                "px — um dos lados ficou inutilizável")
+        if janela.relatorio.height() > altura // 2:
+            raise RuntimeError(
+                f"em {largura}x{altura} o relatório tomou "
+                f"{janela.relatorio.height()} px, mais de meia tela")
+    notas.append("janela: utilizável de 1920x1080 a 800x600")
+
+    # Os atalhos passaram a morar dentro de menus, e menu que não está aberto
+    # só responde ao atalho se a ação estiver na cadeia da janela.
+    faltando = [t for t in ("F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9")
+                if not any(a.shortcuts()
+                           and a.shortcuts()[0].toString() == t
+                           for a in janela.actions())]
+    if faltando:
+        raise RuntimeError(f"atalhos fora do alcance da janela: {faltando}")
+    notas.append("janela: os oito atalhos de F2 a F9 alcançam a janela")
 
     janela.close()
     return notas

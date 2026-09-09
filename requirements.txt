@@ -1,4 +1,13 @@
+# Núcleo de cálculo e interface
 numpy>=1.26
 scipy>=1.11
 PySide6>=6.6
 matplotlib>=3.8
+
+# Saídas de projeto. Não são opcionais: os motores de elemento copiados em
+# portico3d/elementos gravam memória de cálculo em Word e planilha em Excel, e
+# o desenho de armadura sai em DXF. Sem estas três, a exportação quebra na
+# primeira tentativa — e era o que acontecia numa instalação limpa.
+python-docx>=1.1     # memória de cálculo (.docx)
+openpyxl>=3.1        # quadro de quantidades (.xlsx)
+ezdxf>=1.1           # desenho para CAD (.dxf)

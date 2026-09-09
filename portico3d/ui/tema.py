@@ -32,6 +32,12 @@ COR_DEFORMADA = "#2e75b6"
 COR_CARGA = "#2e7d4f"
 COR_DIAGRAMA_POSITIVO = "#2e75b6"
 COR_DIAGRAMA_NEGATIVO = "#a5232f"
+COR_SOLIDO = "#c3cbd6"
+COR_LAJE = "#9fb3c8"
+COR_CONTEXTO = "#d4d9e0"
+COR_CHARNEIRA = "#a5232f"
+COR_MOMENTO_VAO = "#1f4e79"
+COR_MOMENTO_APOIO = "#c26a00"
 
 FOLHA_DE_ESTILO = f"""
 QMainWindow, QWidget {{ font-size: 10pt; }}
@@ -80,3 +86,16 @@ def aplicar_tema_claro(aplicacao: QApplication) -> None:
     p.setColor(QPalette.HighlightedText, QColor("#ffffff"))
     aplicacao.setPalette(p)
     aplicacao.setStyleSheet(FOLHA_DE_ESTILO)
+
+# Cores da vista de Armadura, uma por família. São seis linhas finas
+# superpostas ao concreto translúcido: precisam contrastar entre si e com o
+# cinza da fôrma, e por isso saem da paleta de diagramas em vez de variações
+# de um mesmo tom.
+COR_ARMADURA = {
+    "pilar longitudinal": "#a5232f",
+    "pilar estribo": "#d98b93",
+    "viga longitudinal": "#1f4e79",
+    "viga estribo": "#7fa8cc",
+    "laje positiva": "#2e7d4f",
+    "laje negativa": "#c26a00",
+}

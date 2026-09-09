@@ -128,9 +128,16 @@ class TabelaDeRegistros(QWidget):
             len(colunas) - 1, QHeaderView.Stretch)
         self.tabela.itemChanged.connect(self._ao_mudar)
 
-        acrescentar = QPushButton(f"Acrescentar {rotulo}")
+        # Rótulo curto no botão, frase inteira no balão. "Acrescentar material"
+        # e "Remover selecionadas" somavam 508 px de largura mínima — mais que
+        # a própria tabela, que precisa de 70 —, e eram eles que impediam o
+        # painel de encolher numa tela pequena. A aba já diz de que registro se
+        # trata, de modo que o verbo sozinho basta.
+        acrescentar = QPushButton("Acrescentar")
+        acrescentar.setToolTip(f"Acrescentar {rotulo}")
         acrescentar.clicked.connect(self.acrescentar_linha)
-        remover = QPushButton("Remover selecionadas")
+        remover = QPushButton("Remover")
+        remover.setToolTip("Remover as linhas selecionadas")
         remover.clicked.connect(self.remover_selecionadas)
 
         botoes = QHBoxLayout()

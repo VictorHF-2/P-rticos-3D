@@ -22,7 +22,7 @@ ou, direto no Python:
 ```
 py main.py                             abre a janela
 py main.py modelo.json --janela        abre a janela já com um modelo
-py main.py --autoteste                 roda as 277 conferências de referência
+py main.py --autoteste                 roda as 421 conferências de referência
 py main.py modelo.json [caso]          resolve um caso e imprime o resumo
 py main.py modelo.json --envoltoria    gera as combinações da NBR 6118,
                                        resolve todas e imprime a envoltória
@@ -30,15 +30,47 @@ py main.py modelo.json --estabilidade  γz por combinação, classificação de
                                        nós fixos ou móveis, e flambagem
 ```
 
-Dependências: `py -m pip install -r requirements.txt` (numpy, scipy, PySide6 e
-matplotlib).
+Dependências: `py -m pip install -r requirements.txt` — numpy, scipy, PySide6 e
+matplotlib para calcular e desenhar, mais **python-docx, openpyxl e ezdxf**
+para emitir. Estas três não são opcionais: são elas que gravam a memória de
+cálculo, o quadro de quantidades e o CAD. Faltavam no arquivo, e numa
+instalação limpa o programa subia e quebrava na primeira exportação.
 
 ## A janela
 
 Tabelas à esquerda, desenho à direita, relatório embaixo. O caminho é montar,
 analisar e ler o resultado, e a interface existe só para encurtá-lo: não há
 uma linha de mecânica nela, e é de propósito — tudo continua no `core`, que é
-o que as 277 conferências cobrem.
+o que as 421 conferências cobrem.
+
+**A janela cabe em qualquer tela.** O tamanho de abertura sai da área útil
+da tela desta máquina — já sem a barra de tarefas —, a janela é centrada nela,
+e em tela pequena abre maximizada. Abaixo de 1200×720 de área útil isso
+importa muito: um monitor de 1920×1080 com a escala do Windows em 150 % tem
+1280×720 de área **lógica**, que é em pixels lógicos que o Qt trabalha.
+
+Isso não bastaria sozinho. O Qt ignora um mínimo menor que o `minimumSizeHint`
+do conteúdo, e o conteúdo aqui exigia **1752 px de largura** — a janela não
+descia disso em tela nenhuma. Eram três coisas, e as três foram medidas antes
+de serem mexidas:
+
+| o que empurrava | quanto | o que mudou |
+|---|---|---|
+| Linha de controles do desenho | ~1 100 px | virou uma segunda barra de ferramentas, que transborda sozinha no botão `»` |
+| Botões "Acrescentar material" e "Remover selecionadas" | 508 px | viraram "Acrescentar" e "Remover", com a frase no balão — a aba já diz de que registro se trata |
+| Listas suspensas dimensionadas pelo maior item | 234 px só a de Vista | truncadas em 12 caracteres; o texto inteiro continua na lista aberta |
+
+Hoje o conteúdo cabe em **334×275 px**, e o piso declarado é 800×520 — o mesmo
+do programa de Pilares. Há conferência medindo isso: se algum widget novo
+voltar a empurrar o mínimo acima do piso, o autoteste reprova.
+
+**A barra principal agrupa por assunto.** Dezesseis ações lado a lado pediam
+3 322 px e transbordavam **até num monitor de 1920**, deixando metade do
+programa a dois cliques em qualquer tela. Agrupadas em `Análise ▾`,
+`Dimensionar ▾`, `Emitir ▾` e `Relatório ▾`, cabem inteiras. Os atalhos não
+mudaram — e como menu que não está aberto só responde ao atalho se a ação
+estiver na cadeia da janela, cada ação com atalho é registrada nela; há
+conferência exigindo que os oito, de F2 a F9, continuem alcançáveis.
 
 **O assistente é o que resolve o caso comum.** Um edifício de quatro
 pavimentos com seis prumadas tem umas cem barras; digitá-las uma a uma seria
@@ -119,12 +151,80 @@ precisa da inversão. Há conferência exigindo, nos dois planos, que o traçado
 caia do lado que desceu — igualar os sinais por simetria aparente poria um dos
 diagramas do lado errado.
 
+**A vista 3D desenha as seções, não linhas.** Cada barra vira o sólido da sua
+seção, orientado pelos eixos locais, e as lajes viram placas da sua espessura.
+Seção trocada, barra girada, laje na cota errada — tudo isso salta aos olhos
+aqui e passa despercebido no desenho de eixos. Seção genérica, que só tem
+propriedades, ganha o **retângulo equivalente**: o de mesma área e mesmas
+inércias. É desenho, não cálculo.
+
+**A vista de Laje é planta de um pavimento.** As vigas e os pilares aparecem
+apagados e sem dado nenhum — são contorno, não o assunto. O assunto é o painel:
+as **charneiras plásticas** e os momentos nas duas direções. O seletor de nível
+existe porque planta de laje é de um pavimento por vez: com quatro pavimentos
+sobrepostos, as charneiras de todos caem umas sobre as outras e não se lê nada.
+
+Os momentos vêm do **programa de Lajes** desta mesma pasta, como o vento vem do
+NBR-6123: o solver não refaz o que outro programa já resolve. Daqui sai o que
+só o modelo do pórtico sabe — a geometria dos painéis e **quais bordos são
+contínuos**, que é derivável: bordo que separa dois painéis é engastado, bordo
+que só tem painel de um lado é apoiado.
+
+A geometria das charneiras, essa sim, é traçada aqui — de propósito, para não
+quebrar quando o programa de Lajes mudar por dentro. O preço de ter geometria
+própria é ter de provar que ela concorda com o cálculo do outro lado, e é o que
+o autoteste faz: integra a área de cada região desenhada e compara com as
+frações de carga que o programa de Lajes publica, em cinco painéis, inclusive
+assimétricos e com bordo livre. As diferenças dão zero.
+
 **A deformada não liga os nós deslocados por retas.** Ela é traçada com as
 mesmas funções de forma que o solver usa para o engastamento perfeito, de modo
 que a curva desenhada é a que a formulação descreve — inclusive a curvatura
 dentro de uma barra carregada, que a ligação por retas esconderia justamente
 onde ela interessa. A escala vai escrita no título, porque deformada em escala
 real de um pórtico bem projetado é uma linha reta.
+
+**A vista de Armadura mostra o aço de um pavimento no espaço.** Pilares,
+vigas e laje daquele nível, cada barra no lugar em que ela fica, sobre o
+concreto translúcido — sem essa referência não há como julgar cobrimento
+nenhum. Seis famílias, seis cores: longitudinal e estribo do pilar,
+longitudinal e estribo da viga, positiva e negativa da laje.
+
+Não se dimensiona nada aqui. Os três motores de elemento já resolveram a
+armadura, e o que este programa faz é **pôr essa armadura no lugar dela**,
+convertendo a coordenada de seção de cada um para os eixos locais da barra e
+daí para o global. São três conversões independentes, e um sinal trocado em
+qualquer uma joga a barra para fora da peça sem levantar erro nenhum: por isso
+há conferência medindo, para cada barra, a distância ao eixo em fração da
+meia-seção. Passou de 1, a barra está no ar.
+
+**Um pavimento por vez, e o número é medido, não estimado.** O edifício de
+quatro pavimentos do exemplo tem 1 724 barras longitudinais e 964 estribos, que
+dão cerca de 10 000 segmentos de reta; o matplotlib os desenha em 560 ms por
+rotação, e a vista abre mas não gira. Um pavimento fica na casa dos 2 000
+segmentos — 106 ms —, e aí ela responde ao arrasto do mouse. O recorte não é
+arbitrário: é o mesmo que o projeto já usa em planta de fôrma e de armação.
+
+O pilar que entra é o lance **de baixo**, o que termina na cota. É ele que
+entrega carga à laje e às vigas mostradas, de modo que o que está na tela é um
+caminho de carga fechado; o lance de cima é o desenho do pavimento de cima.
+
+Rodar os três motores custa alguns segundos, e por isso a armadura de cada cota
+fica guardada: girar o desenho não redimensiona o prédio de novo. Trocar o
+modelo joga fora o que estava guardado.
+
+**"Armadura em DXF" (F3) grava esse mesmo aço em três dimensões**: uma
+polilinha 3D por barra, na camada da sua família (`ARM-PILAR`, `ARM-VIGA-EST`,
+`ARM-LAJE-POS`…), mais a fôrma em `FORMA` — só o contorno das peças, que é o
+bastante para conferir cobrimento no CAD sem dobrar o tamanho do arquivo. Não é
+uma planta; é o arame do pavimento no espaço, que é justamente o que não cabe
+numa folha. Vale aqui a mesma observação sobre DWG que está mais abaixo.
+
+Um pilar que o motor reprova continua sendo desenhado, com o arranjo da
+combinação mais armada e um aviso dizendo que foi reprovado — é no desenho que
+se vê por que ele não coube, e apagá-lo esconderia o problema. O que não dá
+para desenhar é o lance para o qual nenhum arranjo foi achado, e esse vira
+aviso em vez de sumir calado.
 
 O visualizador é matplotlib, e não uma biblioteca 3D dedicada, para não
 acrescentar dependência ao que os outros programas da pasta já usam. O preço é
@@ -140,7 +240,7 @@ com os valores concomitantes e a combinação que os governou.
 
 | Fora do escopo desta revisão | Fase prevista |
 |---|---|
-| Ponte com os programas de elemento (Pilares, Vigas) | 4 |
+| Ponte com Vigas e com Fundações | 4 |
 | Efeitos locais de 2ª ordem nos elementos | 4 |
 | Edição por clique no desenho 3D | — |
 | Saídas em DXF, Word e Excel | 4 |
@@ -367,6 +467,7 @@ ou uma invariância que a formulação tem obrigação de respeitar:
 | γz contra P-Δ | duas formulações independentes chegando ao mesmo número |
 | Rigidez secante | 0,8 nos pilares, 0,4 e 0,5 nas vigas, área intocada |
 | Módulo do concreto | as fórmulas de 8.2.8, e que os dois ramos se encontram em C50 |
+| Charneiras plásticas | que a geometria desenhada dá as frações que o programa de Lajes calcula |
 | Lajes | que a soma dos quinhões devolve o peso do painel, com e sem trecho rígido |
 | Cortante em balanço e em vão | PL/GAs e wL²/8GAs somados às parcelas de flexão |
 | Engastamento com cortante | que wL²/12 e wL/2 sobrevivem ao Φ |
@@ -395,13 +496,83 @@ JSON, descrito em `portico3d/arquivo.py`. O autoteste grava um exemplo em
 fases, os modelos vindos de planilha ou de CAD, e é ele que o orquestrador
 vai ler quando o solver for acoplado aos programas de elemento.
 
+## O executável
+
+```
+py construir.py                 monta, verifica e publica
+py construir.py --sem-teste     pula a verificação (mais rápido)
+```
+
+Sai em `dist/`, no molde do Hidra: uma **pasta do programa**
+(`Porticos.exe` mais `_internal`, que abre rápido) e um **arquivo único**
+(`Porticos-portatil.exe`, cômodo de enviar, lento de abrir porque se
+descompacta a cada vez). A receita é o `Porticos.spec`; o ícone é desenhado
+por `criar_icone.py` — um pórtico de dois vãos com apoios engastados, sem
+arquivo de arte para alguém ter de manter.
+
+Depois de montar, `construir.py` **publica em `Pórticos 3D/Exe atual`**, que é
+irmã das pastas de revisão. O nome quer dizer o que está escrito: ali fica o
+build corrente, e a pasta é apagada e reescrita a cada construção — duas
+versões convivendo ali seria justamente o que o nome promete que não acontece.
+
+### Três coisas que o Hidra exclui e aqui são obrigatórias
+
+`scipy` (autovalores da flambagem e sistemas esparsos), `openpyxl` (o quadro
+de quantidades) e a dupla `python-docx`/`ezdxf` (memória de cálculo e CAD).
+As duas últimas carregam **arquivos de dados** — os modelos .xml do docx, os
+recursos do ezdxf —, que a receita coleta à mão: sem eles o pacote monta e só
+falha na hora de gravar, que é o pior momento para descobrir.
+
+### O que o empacotamento quebrou, e a conferência que ficou
+
+Duas coisas funcionavam em Python e quebravam empacotadas. As duas foram
+achadas rodando `--autoteste` **no executável**, que é a razão de
+`construir.py` fazer isso antes de publicar.
+
+**O motor de vento não carregava.** A cópia do NBR-6123 faz
+`import nbr6123_data` sem ponto, como módulo de topo, e o carregador punha a
+pasta dela no `sys.path` para que isso funcionasse. No executável essa pasta
+não existe em disco — os módulos vivem dentro do arquivo —, o `sys.path` não
+achava nada e o programa levantava `ModuleNotFoundError` na primeira conta de
+vento. Hoje o carregador **registra o módulo em `sys.modules` sob o nome de
+topo**, que funciona nos dois casos, e há conferência que refaz a carga com a
+pasta fora do `sys.path` para provar isso.
+
+**Metade dos motores de elemento ficava de fora.** O programa alcança boa
+parte deles por nome montado em tempo de execução, e o que o PyInstaller não
+vê importado ele não empacota. A receita passou a arrastar
+`portico3d.elementos` inteiro: vendorizar é prometer que a cópia dentro do
+programa é a cópia **inteira**, e a promessa vale também depois de empacotado.
+
+Há ainda um terceiro caso, que não é defeito e sim limite: **as conferências
+que olham o disco não podem rodar empacotadas.** Contar os `.py` copiados ou
+ler o `requirements.txt` não faz sentido dentro de um executável, e as que
+dependem disso agora **declaram que não se aplicam** em vez de reprovar.
+Reprovar o que não se pode medir ensina o usuário a ignorar o relatório
+inteiro. No lugar delas, o executável confere o que ali importa: que as sete
+bibliotecas importem e que as sete portas dos motores de elemento respondam.
+
 ## Organização
 
 ```
 main.py                     linha de comando
+construir.py                monta o executável e publica em "Exe atual"
+criar_icone.py              desenha o ícone
+Porticos.spec               a receita do PyInstaller
 portico3d/
     arquivo.py              leitura e gravação do modelo em JSON
     mastan.py               leitura dos modelos .mat do MASTAN2
+    dimensionamento.py      a ponte da envoltória para os motores
+    continuidade.py         reconhece as cadeias de viga contínua
+    armadura3d.py           a armadura de um pavimento posta no espaço
+    armadura_dxf.py         essa armadura em polilinhas 3D, para o CAD
+    projeto.py              o edifício inteiro: calcula e emite
+    recursos/               o ícone e o logotipo, desenhados por código
+    saidas/
+        memoria.py          a memória de cálculo em Word
+        quantitativos.py    o quadro de quantidades em Excel, com fôrmas
+        desenho_unico.py    a prancha única em DXF
+    elementos/              cópias de Pilares, Vigas, Lajes e NBR-6123
     validacao.py            os problemas de referência
     core/
         modelo.py           nós, barras, seções, materiais, apoios, cargas
@@ -414,6 +585,7 @@ portico3d/
         lajes.py            painéis de carga e repartição às vigas
         nbr6118.py          γ, ψ, geração das combinações, desaprumo
         vento.py            integração com o programa NBR-6123
+        programa_lajes.py   momentos e charneiras, pelo programa de Lajes
         combinacoes.py      superposição dos casos e caso efetivo
         envoltoria.py       extremos com esforços concomitantes
         segunda_ordem.py    rigidez geométrica, P-Δ e flambagem
@@ -423,11 +595,11 @@ portico3d/
         tabelas.py          as dez tabelas de entrada
         conversao.py        modelo ↔ linhas das tabelas
         assistente.py       gerador de pórtico regular
-        vista3d.py          modelo, deformada, diagramas e modos
+        vista3d.py          modelo, sólido, laje, armadura, diagramas
         tema.py             paleta clara, a mesma dos outros programas
 ```
 
-Além das 277 conferências numéricas, o autoteste **monta a janela sem tela** e
+Além das 421 conferências numéricas, o autoteste **monta a janela sem tela** e
 faz dois percursos. No primeiro, gera um pórtico pelo assistente, acrescenta e
 remove linha em cada uma das dez tabelas, analisa, combina, avalia
 estabilidade e flambagem, e desenha as nove vistas. No segundo, monta uma viga
@@ -439,6 +611,229 @@ O passo de acrescentar linha parece bobo e não é: foi exatamente ali que a
 primeira versão quebrava, porque a célula nova nasce vazia e formatar vazio
 como número derrubava a janela. Conferência de interface que só verifica se a
 janela abre não pega esse tipo de defeito.
+
+## Os motores de elemento são cópias, não importações
+
+`portico3d/elementos/` guarda os `core/` dos programas de Pilares, Vigas e
+Lajes — **cópias**, e não importações da pasta onde eles moram. O que se ganha
+é reprodutibilidade: o resultado deste programa não muda sozinho quando
+aqueles evoluem. O que se paga é ter de atualizar a cópia de propósito.
+
+A procedência de cada uma está em `elementos/__init__.py`, e o autoteste
+compara **byte a byte** com a origem quando ela está ao alcance. Cópia editada
+à mão deixa de ser cópia e vira um garfo silencioso — a conferência existe para
+que isso não passe.
+
+Só o `core/` foi copiado: as interfaces e as saídas dependem de PySide6,
+matplotlib, ezdxf e python-docx, e nada disso é preciso para calcular.
+
+## A ponte com o dimensionamento
+
+`Dimensionar pilares` (F7) gera as combinações últimas, monta a envoltória e
+entrega a cada lance vertical os trios de esforço **concomitantes** que o
+governam — que é exatamente o que a flexão composta oblíqua precisa, e a razão
+de a envoltória guardar os concomitantes desde a fase 2. O veredito é do motor
+de Pilares; daqui sai só a tradução.
+
+**Três coisas mudam na fronteira, e cada uma tem conferência própria.** É
+justamente por os dois programas falarem línguas parecidas que a tradução é
+perigosa:
+
+| | Aqui | No programa de Pilares |
+|---|---|---|
+| Unidade | kN e **metro** | kN e **centímetro** |
+| Normal | negativo à compressão | `Nd` **positivo** à compressão |
+| Eixo | `Mz` tem excentricidade em y local | `Mx` tem excentricidade em x |
+
+A última é a que engana: a letra coincide e o significado não. O `Mx` de lá
+recebe o **`Mz`** daqui. Numa barra vertical o eixo local y é o X global e o
+local z é o Y global, então a seção do pilar sai alinhada com os eixos do
+prédio sem giro nenhum, e `hx` recebe o lado `b`.
+
+Base e topo saem da **cota**, não da ordem dos nós da barra: barra lançada de
+cima para baixo é comum em modelo gerado, e trocar topo com base inverteria a
+curvatura que o item 15.8.2 lê para achar o α_b.
+
+Armadura, cobrimento, agressividade e arranjo continuam sendo do programa de
+Pilares.
+
+### Vigas contínuas
+
+No modelo do pórtico não existe "viga de três vãos": existem três barras
+alinhadas, uma atrás da outra. `continuidade.py` ensina o programa a ver o que
+quem lê o desenho vê — duas barras entram na mesma viga quando são
+horizontais, colineares e se encontram num nó.
+
+Dentro da cadeia, os nós se dividem em dois, e a distinção define os vãos:
+**apoio** é o nó em que chega um pilar; **passagem** é o nó que existe só
+porque a malha foi dividida ali. Tratar um nó de passagem como apoio
+inventaria um vão que não existe — há conferência com uma viga de quatro
+barras que tem três vãos, justamente por causa disso.
+
+`Dimensionar vigas` (F6) monta a viga do programa de Vigas a partir da cadeia
+— vãos, seção, largura dos apoios tirada do pilar, e as cargas traduzidas para
+a coordenada da viga em kN/m positivos para baixo —, chama o
+`dimensionar` dele e **grava os desenhos**: a elevação com armadura e estribos
+e o quadro de barras explodido, mais as seções transversais. O desenho é o do
+programa de Vigas; daqui sai só a tradução e o destino.
+
+**Uma consequência da escolha de usar o dimensionamento dele**: aquele
+programa faz a própria análise da viga contínua, com os pilares entrando como
+apoio simples. Os momentos de apoio saem, portanto, dos dele, e não da rigidez
+que o pórtico 3D conhece. É o comportamento pedido, e está declarado aqui para
+não surpreender quem comparar os dois.
+
+A carga é conferida pelo **total**: a soma de q·comprimento dos trechos
+traduzidos tem de dar a carga que o pórtico tem, senão a viga seria
+dimensionada para menos do que carrega.
+
+### Lajes
+
+`Dimensionar lajes` (F4) vai por **pavimento**, e não painel a painel, porque a
+compatibilização dos momentos negativos do item 14.7.6.2 acontece entre painéis
+vizinhos — as duas lajes de uma borda comum recebem **uma** armadura negativa,
+dimensionada para o maior dos dois momentos. Painel sozinho não tem com quem
+compatibilizar.
+
+Três coisas que a tradução tem de acertar, e o programa de Lajes reclama quando
+erradas:
+
+* **O vão é o livre**, descontada meia viga de cada lado. O painel do pórtico é
+  definido por nós, que estão nos eixos das vigas; o programa de Lajes espera o
+  vão livre mais a largura do apoio, e monta o vão efetivo do item 14.7.2.2 a
+  partir dos dois. Passar eixo a eixo daria uma laje maior do que ela é.
+* **A continuidade quem detecta é ele**, pela posição dos painéis em planta.
+* **Detectar não basta: é preciso aplicar.** `aplicar_continuidades` é o que
+  engasta os bordos e anota a vizinha. Só detectar deixava os bordos apoiados,
+  e o programa acusou a incoerência — foi assim que este passo apareceu.
+
+Saem duas plantas de armação por pavimento, a da face inferior e a da superior,
+com as posições numeradas e as bitolas. São os desenhos do programa de Lajes.
+
+Um detalhe de leitura do resultado: `ResultadoPavimento` **não tem um campo
+`ok`** — o veredito é a lista de erros estar vazia. Perguntar por um `ok` que
+não existe devolvia sempre "com ressalva", e o relatório mentia sem falhar.
+
+### Vigas: o que o pórtico sabe e o motor não
+
+O motor de Vigas resolve a viga contínua a partir das cargas e das **suas**
+combinações, e isso deixava três coisas para trás. As três estão corrigidas, e
+vale saber quais são porque cada uma muda o resultado:
+
+**A rigidez dos pilares.** Os apoios vão como **mola**, e não como rótula. O
+motor já previa isso — o `Apoio` dele tem o tipo `mola` com `k_mola`, e o
+docstring diz "útil para representar a rigidez dos pilares" —, e a ponte é que
+não usava. A mola vale `4EI/ℓ` somado sobre os lances que chegam ao nó, com a
+inércia medida **na direção da viga**: pilar 20×60 com os 60 cm no rumo da
+viga trava muito mais que o mesmo pilar virado, e há conferência travando isso
+pela razão dos cubos.
+
+**O peso próprio, uma vez só.** Ele vem do pórtico, e o do motor fica
+desligado. Antes os dois entravam: na viga 20×50 do exemplo, 2,5 kN/m sobre
+10,4 — **24 % a mais de carga permanente**, somados numa distribuída só, sem
+nada na memória de cálculo dizendo que metade daquilo foi contada duas vezes.
+Desligar sem conferir seria trocar carga a mais por carga a menos, que é pior:
+se o pórtico não trouxer nem o peso da própria seção, sai aviso.
+
+**As ações laterais.** O motor combina apenas `g` e `q` — não há como dar
+vento a ele. E o vento não é detalhe: na viga do exemplo ele produz 63 kN·m,
+**mais que o peso permanente**, e não chegava à armadura.
+
+A ponte não finge que resolveu isso. Ela **confere**: a armadura detalhada é
+confrontada com a envoltória do pórtico ponto a ponto, e a viga é reprovada
+quando não cobre. A comparação é em **área de aço na face tracionada**, e não
+em momento, de propósito — momento é grandeza intermediária, dois momentos
+parecidos pedem armaduras diferentes se caírem em faces opostas, e um momento
+de sinal trocado (o vento revertendo o apoio) não tem razão numérica que o
+descreva. O As exigido sai da mesma função de flexão que o motor usa, com a
+mesma seção e o mesmo d, de modo que a diferença entre os dois números seja
+**só** a solicitação.
+
+No exemplo isso reprova a V1 no último apoio: o pórtico pede 5,38 cm² na face
+superior e o detalhamento tem 1,51 cm² — 3,6 vezes.
+
+Injetar momentos fictícios para forçar a passagem foi tentado e descartado: no
+apoio interno um momento nodal cria salto no diagrama, o sinal muda de uma
+extremidade para a outra, e uma memória de cálculo com carregamento inventado
+não é conferível por ninguém.
+
+## O projeto completo (F2)
+
+Um botão, três arquivos, e é o que fecha o programa:
+
+| | |
+|---|---|
+| `memória de cálculo.docx` | dez capítulos: metodologia, modelo, esforços, estabilidade global, reações, pilares, vigas, confronto com a envoltória, lajes e quantitativos |
+| `quadro de quantidades.xlsx` | resumo, quantidades por tipo de peça, aço por bitola e o veredito peça a peça |
+| `desenhos.dxf` | uma prancha com todas as peças detalhadas, em colunas por tipo, mais o quadro de quantidades desenhado |
+
+O que só existe neste nível — e é a razão de o programa existir — são os
+capítulos de **esforços do pórtico**, **estabilidade global**, **reações** e
+**confronto**. O passo a passo de cada peça continua nos relatórios dos
+motores de elemento: reescrevê-lo aqui seria duplicar código que pode
+divergir, e o que a memória do edifício traz de cada peça é a síntese
+verificável — solicitação, armadura adotada, detalhamento com bitolas,
+ancoragem, traspasse e esperas, e o veredito.
+
+A prancha é montada importando o desenho de cada peça inteiro, com as camadas
+que ele trouxe, e transladando-o para a sua vaga. As vagas saem da **extensão
+real** de cada desenho, medida depois de importado: desenho de viga de três
+vãos é bem mais largo que o de um vão, e um passo fixo ou os sobreporia ou
+deixaria meia prancha vazia.
+
+### Fôrmas
+
+O critério é o do vazamento — conta-se só a face que precisa conter o
+concreto — e por isso a área de fôrma não coincide com a área das peças:
+
+**Laje.** Fundo descontada a faixa que se apoia sobre a viga: essa faixa já é
+fôrma da viga, e contá-la nas duas peças mede a mesma chapa duas vezes. Mais o
+fechamento lateral **só nos bordos livres** — onde o bordo apoia numa viga, a
+lateral dela já sobe e fecha; onde é bordo comum com outra laje, o concreto é
+contínuo e não há o que fechar.
+
+**Viga.** Fundo integral, mais cada lateral com `h` menos a espessura da laje
+que encosta **naquele lado**. Viga entre dois painéis desconta dos dois lados;
+viga de bordo, de um só. O topo nunca leva: é por onde se concreta.
+
+**Pilar.** Perímetro moldante vezes a altura do lance.
+
+Os dois primeiros critérios vêm dos próprios motores (`lajes.core.formas` e
+`pilares.core.quantitativos`); o da viga é calculado aqui, e é o caso que
+justifica a conta ser deste nível — o motor de Vigas não conhece as lajes
+vizinhas, e sem elas não há como saber qual lateral está fechada.
+
+### DXF, e não DWG
+
+Cada viga e cada pavimento saem também em **DXF**, com as camadas separadas —
+`FORMA`, `EIXO`, `ARM_POSITIVA`, `ARM_NEGATIVA`, `ARM_DISTRIB`, `TEXTO`,
+`COTAS` — prontas para o CAD.
+
+**DWG não sai, e a razão é de formato, não de esforço.** O DWG é binário,
+proprietário e fechado da Autodesk; não há especificação pública para escrevê-lo.
+A biblioteca de CAD usada aqui (ezdxf) grava DXF, que é o formato de troca que a
+própria Autodesk publica e que AutoCAD, BricsCAD, QCAD, Revit e afins abrem sem
+conversão nenhuma. Quem precisar de DWG converte com o **ODA File Converter**,
+gratuito e instalado à parte — o `ezdxf` até sabe chamá-lo, mas depender de um
+executável externo para fechar o fluxo do programa não pareceu troca boa.
+
+Na prática o DXF costuma ser o que se quer: preserva camadas, cotas e textos, e
+é editável do outro lado.
+
+### Ter veredito e ser aprovado são coisas diferentes
+
+O motor de Pilares pode concluir a verificação inteira e **reprovar** o lance —
+o caso comum é nenhum arranjo de barras caber nas bitolas permitidas, e aí o
+arranjo volta vazio e o erro fica nos avisos. `passou` só diz que houve
+veredito; quem diz que o veredito foi bom é `aprovado`, que lê o `ok` dele.
+
+A distinção não é preciosismo: enquanto o relatório contava por `passou`, um
+lance reprovado aparecia entre os verificados sem que uma linha dissesse que
+ele não passou. Hoje o resumo separa "sem veredito" de "REPROVADAS" e traz o
+motivo nas palavras do motor. Foi a vista de Armadura que revelou isso — quatro
+dos seis pilares do térreo do exemplo saíam sem barra nenhuma, em silêncio.
+
+Fundações ainda não têm ponte — ver a tabela de escopo.
 
 ## Aferição contra o MASTAN2
 

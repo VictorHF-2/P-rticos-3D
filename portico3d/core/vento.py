@@ -30,27 +30,26 @@ NEWTON_POR_KN = 1000.0
 
 
 def carregar_nbr6123():
-    """Encontra e importa o motor de cálculo do programa NBR-6123.
+    """Devolve o motor de cálculo do NBR-6123 copiado em ``elementos/vento``.
 
-    A busca sobe pelos diretórios acima deste arquivo até achar a pasta de
-    programas que contém o NBR-6123. Falhando, o erro diz onde se procurou —
-    integração que quebra em silêncio é pior do que integração que não existe.
+    O ``nbr6123_core`` faz ``import nbr6123_data`` sem ponto, como módulo de
+    topo — é assim na origem, e a cópia não se edita. Quem resolve isso é este
+    carregador, e não a cópia: é o preço de manter a cópia idêntica, e é preço
+    pequeno perto de perder a conferência de integridade.
+
+    O jeito de resolver é **registrar o módulo em ``sys.modules`` sob o nome
+    de topo** antes de importar o ``core``, e não pôr a pasta no ``sys.path``.
+    A diferença aparece no executável empacotado: lá a pasta não existe em
+    disco — os módulos vivem dentro do arquivo —, um ``sys.path`` apontando
+    para ela não acha nada, e o programa quebrava com ``ModuleNotFoundError``
+    na primeira conta de vento. Registrado assim, funciona nos dois casos.
     """
-    tentativas = []
-    for pasta in Path(__file__).resolve().parents:
-        candidato = pasta / PASTA_NBR6123 / "nbr6123_core.py"
-        tentativas.append(candidato)
-        if candidato.exists():
-            destino = str(candidato.parent)
-            if destino not in sys.path:
-                sys.path.insert(0, destino)
-            import nbr6123_core
-            return nbr6123_core
+    from ..elementos.vento import nbr6123_data
 
-    procurado = "\n  ".join(str(t) for t in tentativas[:6])
-    raise ErroDeModelo(
-        "não encontrei o motor de cálculo do NBR-6123. Procurei em:\n  "
-        f"{procurado}")
+    sys.modules.setdefault("nbr6123_data", nbr6123_data)
+    from ..elementos.vento import nbr6123_core
+
+    return nbr6123_core
 
 
 @dataclass
