@@ -75,6 +75,7 @@ def combinar(resultados: dict[str, Resultado],
     # então combinar carregamentos é concatenar segmentos já escalados.
     segmentos: dict[str, list] = {nome: [] for nome in referencia.segmentos}
     reacoes_mola: dict[str, np.ndarray] = {}
+    pontuais: dict[str, list] = {}
 
     for caso, fator in combinacao.fatores.items():
         r = resultados[caso]
@@ -87,6 +88,9 @@ def combinar(resultados: dict[str, Resultado],
         for nome in esforcos:
             esforcos[nome] += fator * r.esforcos[nome]
             segmentos[nome].extend(escalar(r.segmentos[nome], fator))
+        for nome, lista in r.pontuais.items():
+            pontuais.setdefault(nome, []).extend(
+                (s, fator * f) for s, f in lista)
         for no, valor in r.reacoes_mola.items():
             reacoes_mola[no] = reacoes_mola.get(no, 0.0) + fator * valor
 
@@ -95,7 +99,7 @@ def combinar(resultados: dict[str, Resultado],
                      esforcos=esforcos, preparadas=referencia.preparadas,
                      segmentos=segmentos,
                      gdl_restritos=referencia.gdl_restritos,
-                     reacoes_mola=reacoes_mola)
+                     reacoes_mola=reacoes_mola, pontuais=pontuais)
 
 
 def caso_efetivo(modelo: Modelo, combinacao: Combinacao) -> CasoDeCarga:

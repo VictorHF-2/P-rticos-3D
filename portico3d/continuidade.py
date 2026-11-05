@@ -35,6 +35,29 @@ from .core.modelo import ErroDeModelo, Modelo
 
 TOL_ANGULO = 1.0e-6      # tolerância de colinearidade, em seno do ângulo
 TOL_VERTICAL = 1.0e-3
+TOL_POSICAO = 1.0e-6       # m, para dizer que um nó está dentro dos vãos
+
+
+@dataclass
+class ApoioEmViga:
+    """Um nó em que esta viga **se apoia em outra viga**, e não em pilar.
+
+    A viga de apoio entra como apoio na viga que se apoia, e a viga que se
+    apoia entra como carga concentrada na de apoio — são duas faces da mesma
+    relação, e ela mora aqui para que as duas sejam lidas do mesmo lugar.
+    """
+
+    indice_no: int            # índice, em ``VigaContinua.nos``, do nó
+    no: str
+    viga_de_apoio: str        # nome da cadeia que serve de apoio
+    posicao_na_de_apoio: float  # m, do primeiro nó da viga de apoio
+    #: Seção da viga de apoio, em cm: a largura é a do apoio que a viga
+    #: apoiada enxerga, e a altura decide se ela fica pendurada (18.3.6).
+    largura_cm: float = 20.0
+    altura_cm: float = 0.0
+    #: o nó é a ponta de um balanço da viga de apoio: o apoio desloca, e a
+    #: viga que repousa nele só é tratada assim por não ter pilar nenhum
+    na_ponta_de_balanco: bool = False
 
 
 @dataclass
@@ -49,6 +72,27 @@ class VigaContinua:
     #: Posição de cada nó ao longo da viga, em metros a partir do primeiro.
     posicoes: list[float] = field(default_factory=list)
     direcao: tuple[float, float, float] = (1.0, 0.0, 0.0)
+    #: Nós em que esta viga repousa noutra viga (ver :class:`ApoioEmViga`).
+    apoios_em_viga: list[ApoioEmViga] = field(default_factory=list)
+    #: Quem manda: 0 é a viga mais "principal" do edifício. Uma viga só se
+    #: apoia em outra de prioridade menor (número menor), e por isso a relação
+    #: de apoio nunca dá ciclo — V1 em V2 e V2 em V1 ao mesmo tempo.
+    prioridade: int = 0
+    #: ``(nó, outra viga)``: pontas livres que encontram outra viga sem que
+    #: ela possa servir de apoio — duas pontas em balanço que se tocam.
+    encontros_sem_apoio: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def suportes(self) -> list[int]:
+        """Todos os nós de apoio, de pilar **ou** de outra viga, em ordem."""
+        return sorted(set(self.apoios)
+                      | {a.indice_no for a in self.apoios_em_viga})
+
+    def apoio_em_viga(self, indice_no: int) -> ApoioEmViga | None:
+        for a in self.apoios_em_viga:
+            if a.indice_no == indice_no:
+                return a
+        return None
 
     @property
     def comprimento(self) -> float:
@@ -57,17 +101,18 @@ class VigaContinua:
     @property
     def vaos(self) -> list[float]:
         """Os vãos entre apoios consecutivos, em metros."""
-        return [self.posicoes[b] - self.posicoes[a]
-                for a, b in zip(self.apoios, self.apoios[1:])]
+        s = self.suportes
+        return [self.posicoes[b] - self.posicoes[a] for a, b in zip(s, s[1:])]
 
     @property
     def balanco_inicial(self) -> float:
-        return self.posicoes[self.apoios[0]] if self.apoios else 0.0
+        s = self.suportes
+        return self.posicoes[s[0]] if s else 0.0
 
     @property
     def balanco_final(self) -> float:
-        return (self.comprimento - self.posicoes[self.apoios[-1]]
-                if self.apoios else 0.0)
+        s = self.suportes
+        return self.comprimento - self.posicoes[s[-1]] if s else 0.0
 
     def __str__(self) -> str:
         vaos = " + ".join(f"{v:.2f}" for v in self.vaos) or "sem vão"
@@ -76,8 +121,11 @@ class VigaContinua:
             extras.append(f"balanço inicial {self.balanco_inicial:.2f} m")
         if self.balanco_final > 1e-9:
             extras.append(f"balanço final {self.balanco_final:.2f} m")
+        if self.apoios_em_viga:
+            extras.append("apoiada em " + ", ".join(
+                sorted({a.viga_de_apoio for a in self.apoios_em_viga})))
         return (f"{self.nome}: {len(self.barras)} barras, "
-                f"{len(self.apoios)} apoios, vãos {vaos} m"
+                f"{len(self.suportes)} apoios, vãos {vaos} m"
                 + ("  (" + ", ".join(extras) + ")" if extras else ""))
 
 
@@ -164,7 +212,184 @@ def vigas_continuas(modelo: Modelo) -> list[VigaContinua]:
         vigas.append(_montar(modelo, cadeia, pilares, len(vigas) + 1))
 
     vigas.sort(key=lambda v: (-len(v.barras), v.nome))
+    _resolver_apoios_em_viga(modelo, vigas, pilares)
     return vigas
+
+
+def _altura(modelo: Modelo, viga: VigaContinua) -> float:
+    secao = modelo.secoes.get(modelo.barras[viga.barras[0]].secao)
+    return float(secao.h) if secao is not None else 0.0
+
+
+def _resolver_apoios_em_viga(modelo: Modelo, vigas: list[VigaContinua],
+                             pilares: set[str]) -> None:
+    """Decide, onde duas vigas se encontram sem pilar, qual apoia qual.
+
+    Onde duas cadeias de direções diferentes dividem um nó em que **não**
+    chega pilar, uma pode repousar na outra: a de apoio entra como apoio na
+    que se apoia, e esta entra como carga concentrada naquela.
+
+    **Só serve de apoio a viga que está de fato segura naquele ponto**: o nó
+    tem de cair *dentro* dos vãos dela, entre o primeiro e o último apoio.
+    Fora disso — no balanço — o nó é a ponta de uma viga em balanço, que
+    deforma, e tratá-lo como apoio indeslocável faria a viga que chega ali se
+    comportar como se tivesse um apoio firme que não existe. Foi o que
+    aconteceu quando se retirava um pilar de canto: as duas vigas que o
+    tinham viravam balanços, mas uma "se apoiava" na ponta da outra e saía
+    dimensionada como viga apoiada qualquer. Sem apoio válido, as duas ficam
+    em balanço, e o encontro vira aviso (ver ``encontros_sem_apoio``).
+
+    Quando mais de uma viga pode servir de apoio no mesmo nó, vale a de maior
+    prioridade da viga inteira: mais apoios de pilar, depois a maior altura de
+    seção, depois a mais comprida, e o nome só para desempatar. A relação só
+    cresce — um par que já se relacionou não inverte —, e as vigas que dão
+    apoio a outras, elas mesmas apoiadas em vigas, entram aos poucos: a
+    resolução repete até nada mudar. Se ainda assim três vigas se apoiarem em
+    ciclo, o ciclo é desfeito, porque uma reação não pode ser conhecida antes
+    de si mesma.
+    """
+    if not vigas:
+        return
+    ordem = sorted(vigas, key=lambda v: (-len(v.apoios), -_altura(modelo, v),
+                                         -v.comprimento, v.nome))
+    for i, v in enumerate(ordem):
+        v.prioridade = i
+        v.apoios_em_viga = []
+        v.encontros_sem_apoio = []
+
+    por_no: dict[str, list[tuple[VigaContinua, int]]] = {}
+    for v in vigas:
+        for i, no in enumerate(v.nos):
+            if no not in pilares:
+                por_no.setdefault(no, []).append((v, i))
+
+    def dentro_dos_vaos(v: VigaContinua, i: int) -> bool:
+        s = v.suportes
+        if len(s) < 2:
+            return False
+        return (v.posicoes[s[0]] + TOL_POSICAO < v.posicoes[i]
+                < v.posicoes[s[-1]] - TOL_POSICAO)
+
+    relacionadas: set[frozenset] = set()
+    for _ in range(len(vigas) + 1):
+        mudou = False
+        for no, presentes in por_no.items():
+            if len(presentes) < 2:
+                continue
+            validas = [(v, i) for v, i in presentes if dentro_dos_vaos(v, i)]
+            if not validas:
+                continue
+            dominante, i_dom = min(validas, key=lambda p: p[0].prioridade)
+            secao = modelo.secoes.get(
+                modelo.barras[dominante.barras[0]].secao)
+            largura = (float(secao.b) * 100.0
+                       if secao and secao.b > 0.0 else 20.0)
+            altura = float(secao.h) * 100.0 if secao else 0.0
+            for v, i in presentes:
+                par = frozenset((v.nome, dominante.nome))
+                if (v is dominante or par in relacionadas
+                        or v.apoio_em_viga(i) is not None):
+                    continue
+                v.apoios_em_viga.append(ApoioEmViga(
+                    indice_no=i, no=no, viga_de_apoio=dominante.nome,
+                    posicao_na_de_apoio=dominante.posicoes[i_dom],
+                    largura_cm=largura, altura_cm=altura))
+                relacionadas.add(par)
+                mudou = True
+        if not mudou:
+            break
+
+    _apoiar_nas_pontas_de_balanco(modelo, por_no)
+    _desfazer_ciclos(vigas)
+    for v in vigas:
+        v.apoios_em_viga.sort(key=lambda a: a.indice_no)
+
+    # Onde a viga termina num nó que não é pilar nem apoio, e há outra viga
+    # ali, o encontro fica registrado: são duas pontas em balanço que se
+    # tocam, e quem projeta precisa saber.
+    for no, presentes in por_no.items():
+        if len(presentes) < 2:
+            continue
+        for v, i in presentes:
+            if v.apoio_em_viga(i) is None and i in (0, len(v.nos) - 1):
+                for outra, k in presentes:
+                    apoio = outra.apoio_em_viga(k)
+                    # a outra repousa na ponta deste balanço: não é encontro
+                    # sem apoio, é a viga de borda que ele carrega
+                    if outra is not v and not (
+                            apoio is not None
+                            and apoio.viga_de_apoio == v.nome):
+                        v.encontros_sem_apoio.append((no, outra.nome))
+
+
+def _apoiar_nas_pontas_de_balanco(
+        modelo: Modelo,
+        por_no: dict[str, list[tuple[VigaContinua, int]]]) -> None:
+    """A viga sem pilar nenhum repousa nas pontas dos balanços que a recebem.
+
+    É a viga de borda de uma sacada: V1 e V2 avançam em balanço além dos
+    pilares, e a V5 fecha as duas pontas. A V5 não tem outro apoio — sem este
+    passo ela ficava sem dimensionamento ("sem apoio em pilar nem em viga"),
+    e a reação dela não chegava como carga na ponta dos balanços.
+
+    A regra de ``_resolver_apoios_em_viga`` (ponta de balanço não é apoio)
+    continua valendo para quem tem pilar: no pilar de canto retirado, as duas
+    vigas têm os seus pilares e seguem em balanço. Aqui só entra a viga que
+    **não tem pilar algum**, e só quando ganha pelo menos dois apoios — senão
+    ela seria um balanço preso na ponta de outro balanço, que não se resolve
+    como viga contínua. O apoio desloca junto com a ponta: o modelo isolado
+    da viga o trata como indeslocável, e por isso a viga vai com aviso; pelos
+    esforços do pórtico, o deslocamento da ponta já está nas contas.
+    """
+    novos: dict[str, list[ApoioEmViga]] = {}
+    sem_pilar: dict[str, VigaContinua] = {}
+    for no, presentes in por_no.items():
+        if len(presentes) < 2:
+            continue
+        for v, i in presentes:
+            if v.apoios or v.apoio_em_viga(i) is not None:
+                continue
+            pontas = [(w, j) for w, j in presentes
+                      if w is not v and w.apoios and w.prioridade < v.prioridade
+                      and j in (0, len(w.nos) - 1)
+                      and w.apoio_em_viga(j) is None and j not in w.apoios]
+            if not pontas:
+                continue
+            w, j = min(pontas, key=lambda p: p[0].prioridade)
+            secao = modelo.secoes.get(modelo.barras[w.barras[0]].secao)
+            novos.setdefault(v.nome, []).append(ApoioEmViga(
+                indice_no=i, no=no, viga_de_apoio=w.nome,
+                posicao_na_de_apoio=w.posicoes[j],
+                largura_cm=(float(secao.b) * 100.0
+                            if secao and secao.b > 0.0 else 20.0),
+                altura_cm=float(secao.h) * 100.0 if secao else 0.0,
+                na_ponta_de_balanco=True))
+            sem_pilar[v.nome] = v
+    for nome, apoios in novos.items():
+        v = sem_pilar[nome]
+        if len(v.suportes) + len(apoios) >= 2:
+            v.apoios_em_viga.extend(apoios)
+
+
+def _desfazer_ciclos(vigas: list[VigaContinua]) -> None:
+    """Corta as relações de apoio que formam ciclo (A em B, B em C, C em A)."""
+    pendentes = {v.nome: {a.viga_de_apoio for a in v.apoios_em_viga}
+                 for v in vigas}
+    resolvidas: set[str] = set()
+    while True:
+        avancou = False
+        for nome, deps in pendentes.items():
+            if nome not in resolvidas and deps <= resolvidas | (
+                    deps - set(pendentes)):
+                resolvidas.add(nome)
+                avancou = True
+        if not avancou:
+            break
+    em_ciclo = set(pendentes) - resolvidas
+    for v in vigas:
+        if v.nome in em_ciclo:
+            v.apoios_em_viga = [a for a in v.apoios_em_viga
+                                if a.viga_de_apoio not in em_ciclo]
 
 
 def _montar(modelo: Modelo, cadeia: list[str], pilares: set[str],

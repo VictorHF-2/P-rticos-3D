@@ -28,18 +28,23 @@ quantos centímetros quadrados de armadura positiva chegam ao apoio.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 
 from . import ancoragem as anc
+from . import atribuicao as atr
 from . import avisos as av
 from . import cisalhamento as cis
+from . import cantos as cnt
 from . import compatibilizacao as compat
+from . import puncao as pun
 from . import detalhamento as det
 from . import els as els_mod
 from . import emenda as em
 from . import esforcos as esf_mod
 from . import flexao as fx
 from . import formas as fm
+from . import mef_pavimento as mef
 from . import materiais as mt
 from . import reacoes as rc
 from .esforcos import BORDOS_DA_DIRECAO, Esforcos
@@ -64,6 +69,8 @@ class ResultadoLaje:
     escolhas: dict[str, det.Escolha] = field(default_factory=dict)
     formas: fm.FormasLaje | None = None
     ancoragens: list[anc.ResultadoAncoragem] = field(default_factory=list)
+    #: (R11) punção sob as cargas concentradas (19.5)
+    puncoes: list[pun.ResultadoPuncao] = field(default_factory=list)
     fissuracoes: list[els_mod.ResultadoFissuracao] = field(
         default_factory=list)
     predimensionamento: els_mod.Predimensionamento | None = None
@@ -142,12 +149,29 @@ class ResultadoPavimento:
     cobrimentos: list[VerificacaoCobrimento] = field(default_factory=list)
     traspasses: list[em.ResultadoTraspasse] = field(default_factory=list)
     avisos: list[av.Aviso] = field(default_factory=list)
+    #: Lajes treliçadas, alveolares e nervuradas atribuídas na planta (R09).
+    #: ``lajes`` continua só com as maciças -- é o que a compatibilização, a
+    #: armação e o desenho de barras esperam.
+    especiais: list[atr.ResultadoEspecial] = field(default_factory=list)
+    #: Análise por elementos finitos de placa e Wood-Armer (R10), quando o
+    #: método dos esforços é ``"mef"``; ``None`` com as linhas de ruptura.
+    mef: "mef.ResultadoMEF | None" = None
+    #: Armadura superior de canto das linhas de ruptura (R11, ``cantos.py``)
+    #: -- vazia com o ``mef``, que tem os cantos dele.
+    cantos: list[cnt.CantoCharneira] = field(default_factory=list)
 
     # -- consulta -----------------------------------------------------------
     def resultado(self, nome: str) -> ResultadoLaje | None:
         for r in self.lajes:
             if r.nome == nome:
                 return r
+        return None
+
+    def especial_da_laje(self, nome: str) -> atr.ResultadoEspecial | None:
+        """O sistema (faixa, painel) que calculou a laje da planta."""
+        for e in self.especiais:
+            if nome in e.lajes:
+                return e
         return None
 
     @property
@@ -167,17 +191,25 @@ class ResultadoPavimento:
         saida = list(self.avisos)
         for r in self.lajes:
             saida.extend(r.avisos)
+        for e in self.especiais:
+            saida.extend(e.avisos)
         return saida
 
     @property
     def area_total(self) -> float:
+        """Área das lajes maciças pelos vãos efetivos, m²."""
         return sum(r.laje.area for r in self.lajes)
+
+    @property
+    def area_especiais(self) -> float:
+        """Área em planta das lajes especiais (vãos livres), m²."""
+        return sum(e.area for e in self.especiais)
 
     def contorno(self) -> tuple[float, float, float, float]:
         """Retângulo que contém o pavimento, em metros."""
-        if not self.lajes:
+        if not self.pavimento.lajes:
             return (0.0, 0.0, 1.0, 1.0)
-        cantos = [r.laje.retangulo for r in self.lajes]
+        cantos = [x.retangulo for x in self.pavimento.lajes]
         return (min(c[0] for c in cantos), min(c[1] for c in cantos),
                 max(c[2] for c in cantos), max(c[3] for c in cantos))
 
@@ -189,7 +221,7 @@ class ResultadoPavimento:
 def _negativa_convergente(md: float, alturas: tuple[float, ...], amb,
                           concreto, aco, cfg, rotulo: str,
                           phi_imposta: float | None = None,
-                          maximo: int = 4
+                          maximo: int = 4, limite_xd: float | None = None
                           ) -> tuple[fx.ResultadoFlexao, float,
                                     det.Escolha | None, bool]:
     """Dimensiona uma negativa iterando bitola × cobrimento até fechar.
@@ -217,7 +249,7 @@ def _negativa_convergente(md: float, alturas: tuple[float, ...], amb,
         c_sup = amb.cobrimento_superior(phi)
         d = min(fx.altura_util(h, c_sup, "superior") for h in alturas)
         f = fx.dimensionar_secao(md, h_governa, d, c_sup, concreto, aco,
-                                 "negativa", rotulo)
+                                 "negativa", rotulo, limite_xd)
         if f.erro or f.As <= 0.0:
             return f, d, None, True
         candidata = det.escolher(f.As, h_governa, "superior", cfg, True,
@@ -269,6 +301,10 @@ def _dimensionar_flexao(rl: ResultadoLaje, pav: Pavimento,
     c_inf = amb.cobrimento_nominal
     em_cruz = esf.classificacao.em_cruz
     cobrimentos: list[VerificacaoCobrimento] = []
+    #: momentos vindos da análise elástica: o limite de x/d é o de quem
+    #: redistribui delta (ou não redistribui), e não o rígido-plástico
+    el = (concreto.x_sobre_d_limite_redistribuido(esf.delta_mef)
+          if esf.metodo == "mef" else None)
 
     # -- armaduras positivas -------------------------------------------------
     # a face inferior usa o cobrimento nominal da Tabela 7.2, que não depende
@@ -280,7 +316,7 @@ def _dimensionar_flexao(rl: ResultadoLaje, pav: Pavimento,
                                direcao_inferior=(direcao == "a"))
             rl.flexoes.append(fx.dimensionar_secao(
                 md, laje.h, d, c_inf, concreto, aco, "positiva em cruz",
-                f"vão {direcao}"))
+                f"vão {direcao}", el))
     else:
         direcao = esf.classificacao.direcao
         d = fx.altura_util(laje.h, c_inf, "inferior", True)
@@ -317,7 +353,8 @@ def _dimensionar_flexao(rl: ResultadoLaje, pav: Pavimento,
             c_sup = amb.cobrimento_superior(cfg.bitola_minima_negativa)
             d = borda.d_adotado           # a menor das duas alturas úteis
             rl.flexoes.append(fx.dimensionar_secao(
-                md, laje.h, d, c_sup, concreto, aco, "negativa", rotulo))
+                md, laje.h, d, c_sup, concreto, aco, "negativa", rotulo,
+                el))
         else:
             # engaste em elemento rígido: esta É a armadura detalhada, e o
             # cobrimento tem de fechar com a bitola que sai da escolha
@@ -337,7 +374,8 @@ def _dimensionar_flexao(rl: ResultadoLaje, pav: Pavimento,
                     rl.avisos.append(av.Aviso(texto, av.CONSTRUTIVO,
                                               laje.nome))
             f, _, escolha_final, convergiu = _negativa_convergente(
-                md, (laje.h,), amb, concreto, aco, cfg, rotulo, phi_imp)
+                md, (laje.h,), amb, concreto, aco, cfg, rotulo, phi_imp,
+                limite_xd=el)
             rl.flexoes.append(f)
             if not convergiu:
                 rl.avisos.append(av.Aviso(
@@ -629,6 +667,17 @@ def _detalhar(rl: ResultadoLaje, pav: Pavimento,
 # Armadura única das bordas comuns
 # ---------------------------------------------------------------------------
 
+def _limite_da_borda(pav: Pavimento, ea: Esforcos, eb: Esforcos
+                     ) -> float | None:
+    """x/d da armadura única de uma borda comum: o da análise elástica só
+    quando os dois lados vêm dela; senão o rígido-plástico, que é o mais
+    severo."""
+    if ea.metodo == "mef" and eb.metodo == "mef":
+        return pav.concreto.x_sobre_d_limite_redistribuido(
+            min(ea.delta_mef, eb.delta_mef))
+    return None
+
+
 def _detalhar_continuidades(res: ResultadoPavimento, pav: Pavimento,
                             comp: compat.Compatibilizacao,
                             contador: list[int]) -> None:
@@ -666,7 +715,8 @@ def _detalhar_continuidades(res: ResultadoPavimento, pav: Pavimento,
                 res.avisos.append(av.Aviso(texto, av.CONSTRUTIVO))
         f, d_final, escolha, convergiu = _negativa_convergente(
             md, (la.h, lb.h), pav.ambiente, pav.concreto,
-            pav.aco, cfg, f"borda comum {borda.rotulo}", phi_imp)
+            pav.aco, cfg, f"borda comum {borda.rotulo}", phi_imp,
+            limite_xd=_limite_da_borda(pav, rla.esforcos, rlb.esforcos))
         borda.d_adotado = d_final
         if escolha is None:
             escolha = det.escolher(f.As, min(la.h, lb.h), "superior", cfg,
@@ -813,42 +863,59 @@ def _verificar_cortante(rl: ResultadoLaje, pav: Pavimento) -> None:
 # ---------------------------------------------------------------------------
 
 def _consolidar_apoios(res: ResultadoPavimento, pav: Pavimento) -> None:
-    """Junta as reações num segmento por borda, somando os dois lados."""
-    vistos: set[frozenset] = set()
+    """Junta as reações num segmento por borda, somando os dois lados.
 
+    Entram as maciças e as lajes especiais (R09). Duas maciças dividem a
+    viga pela lista de continuidades; quando uma das lajes é especial a
+    vizinha vem da posição na planta (``atribuicao.vizinhas_com_especial``).
+    Os bordos de uma laje especial paralelos ao vão não carregam nada e não
+    geram segmento.
+    """
+    vistos: set[frozenset] = set()
+    fontes: list[tuple] = []
     for rl in res.lajes:
-        if rl.reacoes is None:
-            continue
-        for r in rl.reacoes.bordos:
+        if rl.reacoes is not None:
+            fontes.append((rl.laje, rl.reacoes))
+    for e in res.especiais:
+        for nome, rr in e.reacoes.items():
+            laje = pav.laje(nome)
+            if laje is not None:
+                fontes.append((laje, rr))
+    por_nome = {laje.nome: rr for laje, rr in fontes}
+    mistas = atr.vizinhas_com_especial(pav)
+
+    for laje, reacoes in fontes:
+        for r in reacoes.bordos:
             if r.vinculo == "livre":
                 continue
-            chave = frozenset({(rl.nome, r.bordo)})
-            vizinha = pav.vizinha_de(rl.nome, r.bordo)
-            if vizinha is not None:
-                chave = frozenset({(rl.nome, r.bordo),
-                                   (vizinha[0].nome, vizinha[1])})
+            if laje.especial and r.v_k <= 1e-12 and r.v_d <= 1e-12:
+                continue
+            chave = frozenset({(laje.nome, r.bordo)})
+            viz = pav.vizinha_de(laje.nome, r.bordo)
+            outro = (viz[0].nome, viz[1]) if viz is not None \
+                else mistas.get((laje.nome, r.bordo))
+            if outro is not None:
+                chave = frozenset({(laje.nome, r.bordo), outro})
             if chave in vistos:
                 continue
             vistos.add(chave)
-            x0, y0, x1, y1 = rl.laje.segmento_do_bordo(r.bordo)
+            x0, y0, x1, y1 = laje.segmento_do_bordo(r.bordo)
             seg = SegmentoApoio(
-                rotulo=f"{rl.nome} bordo {r.bordo}", x0=x0, y0=y0, x1=x1,
-                y1=y1, comprimento=r.comprimento, lajes=[rl.nome],
+                rotulo=f"{laje.nome} bordo {r.bordo}", x0=x0, y0=y0, x1=x1,
+                y1=y1, comprimento=r.comprimento, lajes=[laje.nome],
                 v_g=r.v_g, v_q=r.v_q, v_k=r.v_k, v_d=r.v_d,
-                continuidade=vizinha is not None)
-            if vizinha is not None:
-                outra = res.resultado(vizinha[0].nome)
-                if outra is not None and outra.reacoes is not None:
-                    ro = outra.reacoes.do_bordo(vizinha[1])
-                    if ro is not None:
-                        seg.rotulo = (f"{rl.nome} bordo {r.bordo} + "
-                                      f"{vizinha[0].nome} bordo "
-                                      f"{vizinha[1]}")
-                        seg.lajes.append(vizinha[0].nome)
-                        seg.v_g += ro.v_g
-                        seg.v_q += ro.v_q
-                        seg.v_k += ro.v_k
-                        seg.v_d += ro.v_d
+                continuidade=outro is not None)
+            if outro is not None:
+                rr_o = por_nome.get(outro[0])
+                ro = rr_o.do_bordo(outro[1]) if rr_o is not None else None
+                if ro is not None:
+                    seg.rotulo = (f"{laje.nome} bordo {r.bordo} + "
+                                  f"{outro[0]} bordo {outro[1]}")
+                    seg.lajes.append(outro[0])
+                    seg.v_g += ro.v_g
+                    seg.v_q += ro.v_q
+                    seg.v_k += ro.v_k
+                    seg.v_d += ro.v_d
             res.apoios.append(seg)
     res.apoios.sort(key=lambda s: s.rotulo)
 
@@ -944,6 +1011,37 @@ def _quantitativo(res: ResultadoPavimento, pav: Pavimento) -> None:
                                if area > 0 else 0.0),
         **fm.total(formas),
     }
+    # -- lajes especiais: o que a planta atribuiu a treliçada, alveolar e
+    # nervurada soma ao pavimento sem tocar nos números da maciça
+    linhas = []
+    for e in res.especiais:
+        linhas.append({
+            "nome": e.nome, "tipo": e.rotulo_tipo, "tipo_chave": e.tipo,
+            "perfil": e.perfil,
+            "area": e.area, "aco_kg": e.aco_kg,
+            "concreto_m3": e.concreto_m3, "premoldado_m3": e.premoldado_m3,
+            "n_paineis": e.n_paineis, "atende": e.atende})
+    massa_esp = sum(x["aco_kg"] for x in linhas)
+    area_esp = sum(x["area"] for x in linhas)
+    massa_canto = 0.0
+    if res.mef is not None:
+        massa_canto = sum(c.massa for lm in res.mef.lajes.values()
+                          for c in lm.cantos if c.exige and not c.erro)
+    massa_canto_ch = sum(c.massa for c in res.cantos if not c.erro)
+    q = res.quantitativo
+    q["massa_canto_mef"] = massa_canto
+    q["massa_canto_charneiras"] = massa_canto_ch
+    massa_canto += massa_canto_ch
+    q["especiais"] = linhas
+    q["massa_especiais"] = massa_esp
+    q["area_especiais"] = area_esp
+    q["concreto_especiais"] = sum(x["concreto_m3"] for x in linhas)
+    q["premoldado_especiais"] = sum(x["premoldado_m3"] for x in linhas)
+    q["massa_geral"] = massa + massa_esp + massa_canto
+    q["area_geral"] = area + area_esp
+    q["taxa_geral_por_m2"] = ((massa + massa_esp + massa_canto)
+                              / (area + area_esp)
+                              if area + area_esp > 0 else 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -957,25 +1055,59 @@ def dimensionar(pav: Pavimento) -> ResultadoPavimento:
 
     for problema in pav.conferir():
         res.avisos.append(av.classificar(problema))
+    atr.sincronizar_alturas(pav)
+    macicas = pav.lajes_macicas
 
     # -- 2. pré-dimensionamento da espessura --------------------------------
     predim: dict[str, els_mod.Predimensionamento] = {}
     if cfg.predimensionar_espessura:
-        for laje in pav.lajes:
+        for laje in macicas:
             predim[laje.nome] = els_mod.predimensionar(laje, pav.concreto, cfg)
 
     # -- 3. momentos das lajes isoladas -------------------------------------
-    esforcos = {laje.nome: esf_mod.calcular(laje, cfg) for laje in pav.lajes}
+    esforcos = {laje.nome: esf_mod.calcular(laje, cfg) for laje in macicas}
+
+    # -- 3b. alternativa: elementos finitos de placa e Wood-Armer (R10) -----
+    cfg_compat = cfg
+    if cfg.metodo_esforcos == "mef" and macicas:
+        try:
+            res.mef = mef.aplicar(pav, esforcos, cfg)
+        except Exception as erro:                        # noqa: BLE001
+            res.mef = None
+            res.avisos.append(av.Aviso(
+                f"A análise por elementos finitos não pôde ser concluída "
+                f"({erro}); ficaram as linhas de ruptura.", av.CONSTRUTIVO))
+        else:
+            mef.dimensionar_cantos(res.mef, pav)
+            for texto in res.mef.avisos:
+                res.avisos.append(av.classificar(texto))
+            for lm in res.mef.lajes.values():
+                for c in lm.cantos:
+                    if c.erro:
+                        res.avisos.append(av.classificar(
+                            f"{c.rotulo}: a armadura superior de canto não "
+                            f"fecha -- {c.erro}", lm.nome))
+            if cfg.compatibilizacao == "iterativa":
+                # a malha única já dá o mesmo momento dos dois lados; o ajuste
+                # iterativo dos graus de engastamento refaria as linhas de
+                # ruptura por cima do resultado
+                cfg_compat = dataclasses.replace(
+                    cfg, compatibilizacao="maior")
+                res.avisos.append(av.Aviso(
+                    "Com a análise por elementos finitos a compatibilização "
+                    "iterativa não se aplica: a malha única já iguala o "
+                    "momento dos dois lados da viga; adotado o maior.",
+                    av.CONSTRUTIVO))
 
     # -- 4. compatibilização ------------------------------------------------
-    comp, esforcos = compat.compatibilizar(pav, esforcos, cfg)
+    comp, esforcos = compat.compatibilizar(pav, esforcos, cfg_compat)
     res.compatibilizacao = comp
     for texto in comp.avisos:
         res.avisos.append(av.classificar(texto))
 
     # -- 5 a 7 --------------------------------------------------------------
     contador = [0]
-    for laje in pav.lajes:
+    for laje in macicas:
         rl = ResultadoLaje(laje=laje, esforcos=esforcos[laje.nome])
         rl.predimensionamento = predim.get(laje.nome)
         if rl.predimensionamento is not None:
@@ -1012,6 +1144,19 @@ def dimensionar(pav: Pavimento) -> ResultadoPavimento:
 
         _detalhar(rl, pav, comp, contador)
         _verificar_cortante(rl, pav)
+        rl.puncoes = pun.verificar_laje(rl, pav)
+        for pu in rl.puncoes:
+            if not pu.atende:
+                rl.avisos.append(av.classificar(
+                    f"{pu.rotulo}: punção (19.5) -- τSd = "
+                    f"{pu.tau_sd1:.2f} MPa em C' contra τRd1 = "
+                    f"{pu.tau_rd1:.2f} MPa; τSd = {pu.tau_sd0:.2f} MPa em C "
+                    f"contra τRd2 = {pu.tau_rd2:.2f} MPa -- "
+                    f"{pu.observacao}.", laje.nome))
+            elif not pu.verificada:
+                rl.avisos.append(av.Aviso(
+                    f"{pu.rotulo}: punção -- {pu.observacao}.",
+                    av.CONSTRUTIVO, laje.nome))
         rl.formas = fm.calcular(laje)
 
         for p in rl.posicoes:
@@ -1028,6 +1173,29 @@ def dimensionar(pav: Pavimento) -> ResultadoPavimento:
                 res.avisos.append(av.classificar(problema))
 
     _conferir_traspasse(res, pav)
+
+    # -- 8b. armadura superior de canto das linhas de ruptura (R11) ---------
+    if cfg.armadura_canto and res.mef is None:
+        res.cantos = cnt.dimensionar(res, pav)
+        for c in res.cantos:
+            if c.erro:
+                res.avisos.append(av.classificar(
+                    f"{c.rotulo}: a armadura superior de canto não fecha "
+                    f"-- {c.erro}", c.laje))
+    elif not cfg.armadura_canto and res.mef is None:
+        sem = [c.rotulo for rl in res.lajes if rl.esforcos is not None
+               for c in cnt.cantos_da_laje(rl.laje, rl.esforcos)]
+        if sem:
+            res.avisos.append(av.Aviso(
+                f"Armadura de canto desligada: {len(sem)} canto(s) de "
+                f"bordos apoiados ficam sem armadura superior. Sem ela o "
+                f"canto levanta e as linhas de ruptura superestimam a "
+                f"resistência em cerca de "
+                f"{(cnt.fator_bifurcacao() - 1) * 100:.0f} % (Souza & "
+                f"Cunha, §5.9).", av.CONSTRUTIVO))
+
+    # -- lajes especiais (treliçada, alveolar, nervurada) -------------------
+    res.especiais = atr.calcular_especiais(pav)
 
     # -- 9 e 10 -------------------------------------------------------------
     _consolidar_apoios(res, pav)

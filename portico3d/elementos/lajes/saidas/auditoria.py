@@ -98,9 +98,12 @@ def roteiro(res) -> list[Verificacao]:
         for f in rl.flexoes:
             if f.md <= 0.0:
                 continue
+            regime = ("em análise elástica (com a redistribuição adotada)"
+                      if rl.esforcos.metodo == "mef"
+                      else "no regime rígido-plástico")
             linhas.append(Verificacao(
-                "14.6.4.3", f"Ductilidade x/d no regime rígido-plástico — "
-                            f"{f.rotulo}", rl.nome,
+                "14.6.4.3", f"Ductilidade x/d {regime} — {f.rotulo}",
+                rl.nome,
                 f"x/d = {_n(f.x_sobre_d, 3)}",
                 f"<= {_n(f.x_sobre_d_limite, 2)}", f.ductil))
 
@@ -237,7 +240,7 @@ def metodologia(res) -> list[tuple[str, str]]:
                 "maior": "compatibilizados pelo maior dos dois momentos",
                 "iterativa": "equilibrados por ajuste iterativo dos graus "
                              "de engastamento"}
-    return [
+    linhas = [
         ("Classificação das lajes",
          "Relação entre os lados e vinculação dos bordos (§1.2): b/a > 2, ou "
          "apoio em apenas dois bordos paralelos, ou balanço, produzem laje "
@@ -298,3 +301,26 @@ def metodologia(res) -> list[tuple[str, str]]:
          "maior dos vãos menores para cada lado do eixo, e de contorno um "
          "quinto do vão menor (§3.3)."),
     ]
+    if getattr(res, "mef", None) is not None:
+        linhas.append((
+            "Esforços do ELU pelos elementos finitos (R10)",
+            "Lajes em cruz: malha única de placa de Reissner-Mindlin (MITC4), "
+            "regime elástico, apoio rígido, bordas comuns contínuas; "
+            "armadura de cada direção pelos momentos equivalentes de "
+            "Wood-Armer M*x = Mx + K|Mxy|, M*y = My + |Mxy|/K, com a "
+            "armadura superior de canto. Negativo do bordo pelo equilíbrio "
+            "dos nós; x/d até o limite da redistribuição adotada (14.6.4.3). "
+            "Lajes em uma direção: método das faixas. ELS pelas tabelas "
+            "elásticas."))
+    if getattr(res, "especiais", None):
+        linhas.append((
+            "Lajes treliçadas, alveolares e nervuradas",
+            "Atribuídas na planta (coluna Tipo): vão, apoios e cargas vêm da "
+            "laje, e a seção, a treliça, a protensão e os critérios, do "
+            "perfil. Lajes treliçadas ou nervuradas unidirecionais de mesmo "
+            "perfil, alinhadas e da mesma largura, formam uma faixa contínua "
+            "(três momentos, alternância de sobrecarga); entre sistemas "
+            "diferentes, ou entre um sistema e uma maciça, não há engaste e "
+            "o bordo fica apoiado. Cada sistema tem capítulo próprio, com "
+            "o roteiro de verificações do motor que o calculou."))
+    return linhas

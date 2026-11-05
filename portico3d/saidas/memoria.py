@@ -145,10 +145,26 @@ def _metodologia(doc, projeto) -> None:
             "distribuídas viram forças de engastamento perfeito por "
             "quadratura das funções de forma, e não por fórmula fechada, de "
             "modo que carga parcial e trapezoidal entrem exatas.")
-    _p(doc, "As lajes são painéis: a carga de cada painel é repartida às "
-            "vigas de contorno pelas charneiras plásticas, com a inclinação "
-            "definida pelo vínculo de cada bordo. O peso próprio das barras é "
-            "gerado a partir da seção e do peso específico do material.")
+    calculo = projeto.modelo.calculo
+    if calculo.grelha:
+        _p(doc, "As lajes entram no pórtico como grelha de barras (analogia "
+                "de grelha), com malha de cerca de "
+                f"{calculo.malha_grelha:g} m, ligadas às vigas de contorno: "
+                "a carga de cada painel chega às vigas pela rigidez relativa "
+                "de laje e viga. As faixas têm I = b·e³/12 e J = b·e³/6 e "
+                "ficam no plano dos eixos das vigas. O peso próprio das barras "
+                "é gerado a partir da seção e do peso específico do material.")
+    else:
+        _p(doc, "As lajes são painéis: a carga de cada painel é repartida às "
+                "vigas de contorno pelas charneiras plásticas, com a "
+                "inclinação definida pelo vínculo de cada bordo. O peso "
+                "próprio das barras é gerado a partir da seção e do peso "
+                "específico do material.")
+    if calculo.diafragma:
+        _p(doc, "Cada pavimento com laje é tratado como diafragma rígido no "
+                "próprio plano: os nós dele transladam em X e Y e giram em Z "
+                "juntos, e as ações laterais se repartem entre os pórticos "
+                "pela rigidez de cada um.")
 
     doc.add_heading("1.1  Combinações", level=2)
     _p(doc, "As combinações últimas normais seguem a NBR 6118, com uma ação "
@@ -164,12 +180,28 @@ def _metodologia(doc, projeto) -> None:
             "correspondente — Pilares, Vigas e Lajes —, cujo código é copiado "
             "para dentro deste programa e conferido byte a byte contra a "
             "origem. Nenhuma verificação normativa é reimplementada aqui.")
-    _p(doc, "As vigas recebem do pórtico a rigidez à rotação dos pilares nos "
-            "apoios (mola, e não rótula) e o peso próprio já computado. Como "
-            "o motor de vigas combina apenas ações permanentes e variáveis "
-            "verticais, o efeito das ações laterais é verificado à parte: a "
-            "armadura detalhada é confrontada com a envoltória do pórtico "
-            "ponto a ponto, em área de aço. É o capítulo 8.")
+    if calculo.fonte_vigas == "motor":
+        _p(doc, "As vigas recebem do pórtico a rigidez à rotação dos pilares "
+                "nos apoios (mola, e não rótula) e o peso próprio já "
+                "computado. Como o motor de vigas combina apenas ações "
+                "permanentes e variáveis verticais, o efeito das ações "
+                "laterais é verificado à parte: a armadura detalhada é "
+                "confrontada com a envoltória do pórtico ponto a ponto, em "
+                "área de aço. É o capítulo 8.")
+    else:
+        _p(doc, "As vigas são armadas no estado-limite último com "
+                + ("a envoltória das combinações últimas do pórtico "
+                   "espacial, que substitui a análise de viga contínua do "
+                   "motor de vigas"
+                   if calculo.fonte_vigas == "portico" else
+                   "o pior, seção a seção, entre a envoltória do pórtico e a "
+                   "análise de viga contínua do motor de vigas")
+                + ": vento, desaprumo e a rigidez real do edifício entram na "
+                "armadura. Estados-limite de serviço, reações e suspensão "
+                "seguem da viga contínua sob g e q, com a rigidez à rotação "
+                "dos pilares nos apoios. A armadura detalhada ainda é "
+                "confrontada com a envoltória ponto a ponto, em área de aço "
+                "— capítulo 8.")
 
 
 def _modelo(doc, projeto) -> None:
@@ -231,6 +263,20 @@ def _esforcos(doc, projeto) -> None:
 
 def _estabilidade(doc, projeto) -> None:
     doc.add_heading("4  Estabilidade global", level=1)
+    tratamento = getattr(projeto, "segunda_ordem", [])
+    if tratamento:
+        _p(doc, "Os esforços de dimensionamento já trazem a 2ª ordem global "
+                "(15.7.1). O γz de cada combinação última é calculado com a "
+                "rigidez secante do 15.7.3 (0,8 EI nos pilares, 0,4 EI nas "
+                "vigas, 0,3 EI nas lajes em grelha). Até 1,10 vale a 1ª "
+                "ordem; até 1,30, com ao menos quatro andares, as ações "
+                "horizontais da combinação são majoradas por 0,95·γz "
+                "(15.7.2); acima disso, ou com menos de quatro andares, a "
+                "combinação é resolvida por P-Δ com a rigidez secante.")
+        _tabela(doc, ["Combinação", "γz", "tratamento", "motivo"],
+                [[t.combinacao,
+                  "—" if t.gama_z is None else _n(t.gama_z, 3),
+                  t.tratamento, t.motivo] for t in tratamento])
     if not projeto.estabilidade:
         _p(doc, "Sem ação lateral no modelo, não há γz a medir.",
            italico=True)
@@ -319,6 +365,31 @@ def _pilares(doc, projeto) -> None:
                 [[b, (por_barra[b][0].motivos or ["sem motivo declarado"])[0]]
                  for b in reprovados])
 
+    transicoes = [(p, t) for p in getattr(projeto, "prumadas", [])
+                  for t in p.transicoes]
+    if transicoes:
+        doc.add_heading("6.2  Continuidade entre lances", level=2)
+        _p(doc, "Em cada pavimento as barras do lance de baixo sobem a espera "
+                "l0c (9.5.2.3) e se emendam por traspasse com as do lance de "
+                "cima. Na região da emenda as duas armaduras convivem: a taxa "
+                "máxima de 8 % conta a sobreposição (17.3.5.3.2), e o "
+                "espaçamento livre mínimo vale também ali (18.4.2.2).")
+        _tabela(doc, ["Prumada", "cota (m)", "emenda", "l0c (cm)",
+                      "taxa (%)", "livre (cm)", "situação"],
+                [[p.nome, _n(t.cota, 2), f"{t.abaixo} → {t.acima}",
+                  _n(t.l0c, 0), _n(100.0 * t.taxa_emenda, 2),
+                  _n(t.espaco_livre, 1),
+                  "atende" if t.ok and not t.avisos else
+                  ("atende — " if t.ok else "") + "; ".join(t.avisos)]
+                 for p, t in transicoes])
+
+
+def _rotulo_secao(secao) -> str:
+    rotulo = f"{secao.bw:.0f}×{secao.h:.0f}"
+    if secao.tipo == "T":
+        rotulo = f"T {rotulo}, bf {secao.bf:.0f}, hf {secao.hf:.0f}"
+    return rotulo
+
 
 def _vigas(doc, projeto) -> None:
     doc.add_heading("7  Vigas", level=1)
@@ -329,8 +400,8 @@ def _vigas(doc, projeto) -> None:
     _tabela(doc, ["Viga", "vãos (m)", "seção", "aço (kg)", "taxa (kg/m³)",
                   "veredito"],
             [[v.nome, " + ".join(f"{x:.2f}" for x in v.vaos),
-              (f"{v.viga.tramos[0].secao.bw:.0f}×"
-               f"{v.viga.tramos[0].secao.h:.0f}" if v.passou else "-"),
+              (_rotulo_secao(v.viga.tramos[0].secao) if v.passou
+               else "-"),
               _n(v.resultado.quantitativo.get("massa_total"), 1)
               if v.passou else "-",
               _n(v.resultado.quantitativo.get("taxa"), 1) if v.passou else "-",
@@ -359,6 +430,25 @@ def _vigas(doc, projeto) -> None:
             ])
         _tabela(doc, ["pos.", "tipo", "face", "bitola", "C (cm)",
                       "trecho (m)", "s (cm)", "traspasse (cm)"], linhas)
+
+    nos = getattr(projeto, "nos", [])
+    if nos:
+        doc.add_heading("7.2  Nós viga–pilar", level=2)
+        _p(doc, "O nó de pórtico é região D (Figura 22.1, a2), e a NBR "
+                "6118 não dá para ele verificação fechada (21.4). O que se "
+                "confere aqui é o que dá para conferir sem modelo de bielas: "
+                "a ancoragem da armadura positiva da viga dentro do pilar de "
+                "extremidade (18.3.2.4), com a largura do pilar medida na "
+                "direção da viga; a largura da viga contra a do pilar; e a "
+                "marcação dos nós de canto, onde o laço da armadura negativa "
+                "tem de ser detalhado. O estribo do pilar atravessa o nó "
+                "(18.4.3).")
+        _tabela(doc, ["Nó", "cota (m)", "tipo", "vigas", "situação"],
+                [[n.no, _n(n.cota, 2), n.tipo,
+                  ", ".join(f"{e.viga} ({e.direcao})" for e in n.vigas),
+                  "; ".join(n.avisos) if n.avisos else "atende"]
+                 for n in nos if n.avisos or not n.ok][:200]
+                or [["—", "—", "—", "—", "todos os nós atendem"]])
 
 
 def _confronto(doc, projeto) -> None:
@@ -399,8 +489,28 @@ def _lajes(doc, projeto) -> None:
     for v in projeto.lajes:
         doc.add_heading(f"9.{projeto.lajes.index(v) + 1}  Cota "
                         f"{v.cota:g} m", level=2)
+        if v.trelicadas:
+            _p(doc, "Lajes treliçadas, por faixa de nervura contínua — "
+                    "dimensionadas pelo módulo de laje treliçada do programa "
+                    "de Lajes (seção T da nervura, 14.6.2.2; continuidade e "
+                    "negativas pela equação dos três momentos).")
+            _tabela(doc, ["Faixa", "vãos (m)", "seção", "aço (kg)",
+                          "veredito"],
+                    [[f.nome,
+                      " + ".join(f"{vv.L / 100.0:.2f}" for vv in f.laje.vaos)
+                      if f.laje is not None else "-",
+                      (f"{f.laje.trelica}, h {f.laje.h:.0f} cm, capa "
+                       f"{f.laje.capa:.0f} cm" if f.laje is not None
+                       else "-"),
+                      _n((f.resultado.quantitativo or {}).get("aco_kg"), 1)
+                      if f.passou else "-",
+                      ("atende" if f.atende else "NÃO ATENDE") if f.passou
+                      else f"não dimensionada: {f.erro}"]
+                     for f in v.trelicadas])
         if not v.passou:
             _p(doc, f"Não dimensionado: {v.erro}", italico=True)
+            continue
+        if v.resultado is None:
             continue
         _tabela(doc, ["Laje", "vãos (m)", "h (cm)", "As,a (cm²/m)",
                       "As,b (cm²/m)"],

@@ -27,6 +27,9 @@ from dataclasses import asdict, dataclass, field
 
 from .materiais import Aco, Ambiente, Concreto
 from .tabelas import APOIADO, ENGASTADO, LIVRE
+from .alveolar_modelo import LajeAlveolar
+from .nervurada_modelo import LajeNervuradaBi
+from .trelicada_modelo import LajeTrelicada
 
 # ---------------------------------------------------------------------------
 # Vínculos de bordo
@@ -44,9 +47,33 @@ GRAU_ENGASTAMENTO_PADRAO = 1.5
 GRAU_ENGASTAMENTO_MINIMO = 0.7
 GRAU_ENGASTAMENTO_MAXIMO = 2.0
 
+#: Altura padrão da viga de bordo no modelo 3D, cm -- só estética (ver o
+#: campo ``h_viga`` de :class:`Bordo`), não entra em nenhum cálculo.
+H_VIGA_PADRAO = 40.0
+
 #: Destino da laje, que fixa a espessura mínima do item 13.2.4.1.
 DESTINOS = ("piso", "cobertura", "balanco", "veiculo <= 30 kN",
             "veiculo > 30 kN")
+
+#: Tipo de laje que a planta pode atribuir a cada retângulo. ``macica`` é a
+#: laje de placa dos capítulos 1 a 3 (charneiras e tabelas); os demais são os
+#: sistemas de nervura e painel -- nesses a planta dá a geometria (vãos,
+#: apoios, cargas) e o **perfil** dá a seção, a treliça, a protensão etc.
+TIPOS_LAJE = ("macica", "trelicada", "alveolar", "nervurada_uni",
+              "nervurada_bi")
+
+ROTULO_TIPO = {"macica": "Maciça", "trelicada": "Treliçada",
+               "alveolar": "Alveolar", "nervurada_uni": "Nervurada uni",
+               "nervurada_bi": "Nervurada bi"}
+
+#: Atributo do :class:`Pavimento` que guarda os perfis de cada tipo.
+LISTA_DO_TIPO = {"trelicada": "trelicadas", "alveolar": "alveolares",
+                 "nervurada_uni": "nervuradas_uni",
+                 "nervurada_bi": "nervuradas_bi"}
+
+#: Tipos em que as nervuras (ou os painéis) vencem **um** vão: a laje tem
+#: direção de armação, e só os dois bordos das pontas do vão recebem carga.
+TIPOS_UNIDIRECIONAIS = ("trelicada", "alveolar", "nervurada_uni")
 
 #: Face da planta que cada bordo ocupa, por orientação da laje.
 #:
@@ -74,12 +101,18 @@ class Bordo:
     Numa borda comum entre duas lajes é a mesma viga vista dos dois lados, e
     :meth:`Pavimento.aplicar_continuidades` sincroniza os dois valores pelo
     maior -- editar um dos lados não deixa os dois desencontrados.
+
+    ``h_viga`` é a altura da viga, cm, só para desenhar o modelo 3D
+    (``saidas/vista3d.py``) -- nenhum cálculo usa esse valor, é puramente
+    estético. Sincronizada pelo maior junto com ``t`` na mesma borda comum,
+    pelo mesmo motivo.
     """
 
     vinculo: str = "apoiado"
     grau: float = GRAU_ENGASTAMENTO_PADRAO
     vizinha: str = ""
     t: float = 20.0
+    h_viga: float = H_VIGA_PADRAO
 
     def __post_init__(self) -> None:
         if self.vinculo not in TIPOS_BORDO:
@@ -145,6 +178,45 @@ class CargaLinearBorda:
 
 
 @dataclass
+class CargaConcentrada:
+    """Carga concentrada (ou de pequena área) sobre a laje maciça (R11).
+
+    ``x`` e ``y`` são a posição do **centro** da carga, em metros, medida a
+    partir do canto inferior esquerdo da laje na planta (o mesmo canto de
+    ``Laje.x``/``Laje.y``); ``None`` põe a carga no centro da laje, a posição
+    mais desfavorável para o momento positivo. ``dx`` e ``dy`` são as
+    dimensões da área carregada nas direções X e Y da planta, cm (a base de
+    um equipamento, o pé de um pilarete, a roda de um veículo). ``g`` e
+    ``q`` são as parcelas permanente e variável, kN.
+
+    Como entra no cálculo (Souza & Cunha, §1.5.1 e Cap. 5; NBR 6118:2026
+    14.7.3 e 19.5):
+
+    * laje em cruz, linhas de ruptura: o maior entre a carga espalhada na
+      área com o fator 1,2 do efeito localizado (eq. 1.11) e o leque de
+      charneiras em volta da carga, m = P(1 - 2c/3r)/2π, somado ao momento
+      da carga uniforme;
+    * laje em uma direção: uma faixa de largura colaborante bw (Tabela
+      A.1.5, as mesmas expressões do §2.1 para paredes), com a carga na
+      posição mais desfavorável do vão;
+    * elementos finitos: carga distribuída na área (dx + h) x (dy + h);
+    * punção (19.5) nos contornos C e C', com a armadura inferior adotada.
+    """
+
+    x: float | None = None             # m, centro da carga na laje
+    y: float | None = None
+    dx: float = 20.0                   # cm, dimensão em X
+    dy: float = 20.0                   # cm, dimensão em Y
+    g: float = 0.0                     # kN, permanente
+    q: float = 0.0                     # kN, variável
+    descricao: str = ""
+
+    @property
+    def total(self) -> float:
+        return self.g + self.q
+
+
+@dataclass
 class Laje:
     """Uma laje maciça retangular do pavimento."""
 
@@ -169,17 +241,38 @@ class Laje:
     variavel: float = 1.5              # kN/m²
     paredes: list[Parede] = field(default_factory=list)
     borda_livre: CargaLinearBorda | None = None
+    #: cargas concentradas (R11) -- ver ``CargaConcentrada``
+    cargas_concentradas: list[CargaConcentrada] = field(
+        default_factory=list)
     descricao: str = ""
+    # -- tipo de laje (R09) -------------------------------------------------
+    #: ``macica`` (padrão) ou um dos sistemas de ``TIPOS_LAJE``. Nos demais
+    #: tipos ``perfil`` é o **nome** de um item da lista correspondente do
+    #: pavimento (treliçadas, alveolares, nervuradas_uni, nervuradas_bi) e
+    #: ``direcao`` -- ``"a"`` ou ``"b"`` -- é o vão que a nervura (ou o
+    #: painel) vence. Projetos gravados antes da R09 não trazem os três
+    #: campos e carregam como maciças.
+    tipo: str = "macica"
+    perfil: str = ""
+    direcao: str = "a"
 
     def __post_init__(self) -> None:
         if self.destino not in DESTINOS:
             raise ValueError(f"Destino desconhecido: {self.destino!r}")
+        if self.tipo not in TIPOS_LAJE:
+            raise ValueError(f"Tipo de laje desconhecido: {self.tipo!r}")
+        if self.direcao not in ("a", "b"):
+            raise ValueError(f"Direção de armação desconhecida: "
+                             f"{self.direcao!r}")
         if len(self.bordos) != 4:
             raise ValueError("A laje tem exatamente quatro bordos.")
         self.bordos = [b if isinstance(b, Bordo) else Bordo(**b)
                        for b in self.bordos]
         self.paredes = [p if isinstance(p, Parede) else Parede(**p)
                         for p in self.paredes]
+        self.cargas_concentradas = [
+            c if isinstance(c, CargaConcentrada) else CargaConcentrada(**c)
+            for c in self.cargas_concentradas]
         if isinstance(self.borda_livre, dict):
             self.borda_livre = CargaLinearBorda(**self.borda_livre)
         if self.a > self.b:
@@ -188,6 +281,15 @@ class Laje:
             self.a, self.b = self.b, self.a
             self.bordos = [self.bordos[1], self.bordos[2],
                            self.bordos[3], self.bordos[0]]
+
+    @property
+    def especial(self) -> bool:
+        """A laje não é maciça: é treliçada, alveolar ou nervurada."""
+        return self.tipo != "macica"
+
+    @property
+    def rotulo_tipo(self) -> str:
+        return ROTULO_TIPO[self.tipo]
 
     # -- geometria ----------------------------------------------------------
     @property
@@ -221,8 +323,11 @@ class Laje:
         ali não existe.
         """
         l0 = self.a if direcao == "a" else self.b
-        # a direção a vaza entre os bordos 1 e 3; a direção b, entre 2 e 4
-        indices = (0, 2) if direcao == "a" else (1, 3)
+        # os bordos 1 e 3 medem ``a`` e distam ``b`` um do outro: quem vence
+        # o vão ``a`` apoia-se nos bordos 2 e 4 (os de comprimento ``b``), e
+        # o vão ``b`` nos bordos 1 e 3 -- é a mesma convenção de
+        # ``esforcos.BORDOS_DA_DIRECAO``
+        indices = (1, 3) if direcao == "a" else (0, 2)
         soma = 0.0
         for k in indices:
             bordo = self.bordos[k]
@@ -296,6 +401,26 @@ class Laje:
             arestas = {1: (x0, y0, x1, y0), 3: (x0, y1, x1, y1),
                        2: (x0, y0, x0, y1), 4: (x1, y0, x1, y1)}
         return arestas[bordo]
+
+    def centro_da_carga(self, c: "CargaConcentrada"
+                        ) -> tuple[float, float]:
+        """Centro da carga na planta (X, Y), m -- o centro da laje quando a
+        posição não foi dada."""
+        x0, y0, x1, y1 = self.retangulo
+        return (x0 + (c.x if c.x is not None else (x1 - x0) / 2.0),
+                y0 + (c.y if c.y is not None else (y1 - y0) / 2.0))
+
+    def carga_local(self, c: "CargaConcentrada"
+                    ) -> tuple[float, float, float, float]:
+        """``(u, v, du, dv)``: centro da carga nas coordenadas da laje (m) --
+        ``u`` ao longo de ``b``, a partir do bordo 1; ``v`` ao longo de
+        ``a``, a partir do bordo 2 -- e as dimensões da área carregada ao
+        longo de ``u`` e de ``v`` (cm)."""
+        x0, y0, _x1, _y1 = self.retangulo
+        X, Y = self.centro_da_carga(c)
+        if self.orientacao == "X":     # u -> X, v -> Y
+            return X - x0, Y - y0, c.dx, c.dy
+        return Y - y0, X - x0, c.dy, c.dx
 
     def direcao_global(self, direcao: str) -> str:
         """Eixo global em que a direção ``a`` ou ``b`` da laje corre."""
@@ -372,12 +497,23 @@ class Continuidade:
     os numera. É desta ligação que sai a compatibilização do item 14.7.6.2:
     as duas lajes são calculadas isoladas e depois recebem **uma** armadura
     negativa, dimensionada para o maior dos dois momentos.
+
+    ``parcial_a``/``parcial_b`` (R11) marcam o lado em que a vizinha cobre
+    menos de 2/3 do bordo -- a continuidade parcial de Souza & Cunha
+    (§3.7.2, Fig. 3.31): só vale engaste no bordo que tem contato em pelo
+    menos 2/3 do seu comprimento. O lado parcial fica **apoiado** (com a
+    vizinha anotada), o outro engastado; a negativa da borda é a do lado
+    engastado, ancorada por cima da viga na laje maior. Os dois lados
+    parciais não chegam a formar borda comum
+    (:meth:`Pavimento.detectar_continuidades` descarta o par).
     """
 
     laje_a: str = ""
     bordo_a: int = 1
     laje_b: str = ""
     bordo_b: int = 1
+    parcial_a: bool = False
+    parcial_b: bool = False
 
     def __post_init__(self) -> None:
         for n in (self.bordo_a, self.bordo_b):
@@ -386,6 +522,19 @@ class Continuidade:
 
     def par(self) -> tuple[tuple[str, int], tuple[str, int]]:
         return (self.laje_a, self.bordo_a), (self.laje_b, self.bordo_b)
+
+    def parcial(self, laje: str, bordo: int) -> bool:
+        """O lado ``(laje, bordo)`` é o de contato parcial (fica apoiado)."""
+        if (self.laje_a, self.bordo_a) == (laje, bordo):
+            return self.parcial_a
+        if (self.laje_b, self.bordo_b) == (laje, bordo):
+            return self.parcial_b
+        return False
+
+    @property
+    def unilateral(self) -> bool:
+        """Só um dos lados engasta (o outro é de contato parcial)."""
+        return self.parcial_a != self.parcial_b
 
     def outro(self, laje: str, bordo: int) -> tuple[str, int] | None:
         """O lado oposto da borda, ou None se o par não é este."""
@@ -407,29 +556,64 @@ def _continuidades_geometricas(la: "Laje", lb: "Laje", folga: float,
     achadas: list[Continuidade] = []
     ax0, ay0, ax1, ay1 = la.retangulo
     bx0, by0, bx1, by1 = lb.retangulo
+
+    def parciais(sobrepos: float, comp_a: float, comp_b: float
+                 ) -> dict[str, bool]:
+        # §3.7.2 de Souza & Cunha: engaste só com contato >= 2/3 do bordo
+        return {"parcial_a": sobrepos < FRACAO_CONTINUIDADE * comp_a - 1e-6,
+                "parcial_b": sobrepos < FRACAO_CONTINUIDADE * comp_b - 1e-6}
+
     # -- vizinhança horizontal: uma à direita da outra ----------------------
     sobrepos_y = min(ay1, by1) - max(ay0, by0)
     if sobrepos_y > minimo:
+        flags = parciais(sobrepos_y, ay1 - ay0, by1 - by0)
         if abs(bx0 - ax1) <= folga:
             achadas.append(Continuidade(
                 la.nome, la.bordo_da_face("direita"),
-                lb.nome, lb.bordo_da_face("esquerda")))
+                lb.nome, lb.bordo_da_face("esquerda"), **flags))
         elif abs(ax0 - bx1) <= folga:
             achadas.append(Continuidade(
                 la.nome, la.bordo_da_face("esquerda"),
-                lb.nome, lb.bordo_da_face("direita")))
+                lb.nome, lb.bordo_da_face("direita"), **flags))
     # -- vizinhança vertical: uma acima da outra -----------------------------
     sobrepos_x = min(ax1, bx1) - max(ax0, bx0)
     if sobrepos_x > minimo:
+        flags = parciais(sobrepos_x, ax1 - ax0, bx1 - bx0)
         if abs(by0 - ay1) <= folga:
             achadas.append(Continuidade(
                 la.nome, la.bordo_da_face("cima"),
-                lb.nome, lb.bordo_da_face("baixo")))
+                lb.nome, lb.bordo_da_face("baixo"), **flags))
         elif abs(ay0 - by1) <= folga:
             achadas.append(Continuidade(
                 la.nome, la.bordo_da_face("baixo"),
-                lb.nome, lb.bordo_da_face("cima")))
+                lb.nome, lb.bordo_da_face("cima"), **flags))
     return achadas
+
+
+#: Fração mínima do bordo em contato com a vizinha para valer engaste
+#: (Souza & Cunha, §3.7.2: x >= 2L/3).
+FRACAO_CONTINUIDADE = 2.0 / 3.0
+#: Vão (menor, livre) da laje rebaixada até o qual um rebaixo r > h deixa a
+#: borda apoiada (Souza & Cunha, §1.3.3, Fig. 1.15), cm.
+VAO_LIMITE_REBAIXO = 300.0
+
+
+def rebaixo_entre(la: "Laje", lb: "Laje") -> tuple[float, "Laje"]:
+    """Desnível ``r`` (cm) entre as faces superiores das lajes de concreto e
+    a laje rebaixada. O programa não tem cota por laje: o rebaixo é medido
+    pelo enchimento -- quem tem mais enchimento está mais baixa, e o piso
+    acabado das duas fica no mesmo nível."""
+    r = abs(la.enchimento - lb.enchimento)
+    rebaixada = la if la.enchimento >= lb.enchimento else lb
+    return r, rebaixada
+
+
+def rebaixo_apoia(la: "Laje", lb: "Laje") -> bool:
+    """A regra da Fig. 1.15 de Souza & Cunha (lajes sobre viga): o bordo
+    comum é engaste se r <= h, ou se r > h e o vão da rebaixada passa de
+    300 cm; é apoio simples se r > h e o vão da rebaixada é de até 300 cm."""
+    r, reb = rebaixo_entre(la, lb)
+    return r > reb.h + 1e-9 and reb.a * 100.0 <= VAO_LIMITE_REBAIXO + 1e-9
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +693,31 @@ class Config:
     #: quem liga decide abrir mão dessa reserva de segurança em troca de
     #: economia de aço.
     arredondar_momento_apoio: bool = False
+    #: Como se obtêm os momentos de cálculo (ELU) da laje armada em cruz:
+    #: ``"charneiras"`` (padrão: linhas de ruptura, regime rígido-plástico) ou
+    #: ``"mef"`` (elementos finitos de placa, regime elástico, e Wood-Armer).
+    metodo_esforcos: str = "charneiras"
+    #: Lado máximo do elemento da malha do ``mef``, m.
+    mef_elemento: float = 0.125
+    #: K de Wood-Armer: parcela do volvente na direção x (1 = mínimo de aço).
+    mef_k: float = 1.0
+    #: Descontar do volvente a parcela que o concreto resiste (Mxyc, NB-1).
+    mef_mxyc: bool = False
+    #: Redistribuição dos momentos negativos da análise elástica (14.6.4.3):
+    #: 1 não redistribui; 0,75 é o mínimo que a norma admite em laje contínua.
+    mef_delta: float = 1.0
+    #: Lado da zona de canto, em fração do menor vão da laje.
+    mef_zona_canto: float = 0.2
+    #: (R11) Armadura superior de canto nas lajes em cruz das linhas de
+    #: ruptura, nos cantos de dois bordos apoiados: m' = m numa zona de
+    #: max(0,414·√(6m/p) ; 0,2·lmenor) -- Souza & Cunha §5.9 e NB-1/78
+    #: (``core/cantos.py``). Sem ela o canto levanta e as charneiras
+    #: superestimam a resistência em ~13 %.
+    armadura_canto: bool = True
+    #: (R11) Alternância da sobrecarga ("xadrez") na análise por elementos
+    #: finitos: os positivos saem da envoltória entre a carga cheia e os
+    #: dois xadrezes; negativos e cantos, da carga cheia.
+    mef_alternancia: bool = False
     #: Comprimento comercial da barra de aço, cm (item 9.5.2, emenda por
     #: traspasse). Uma posição mais longa que isso precisa de emenda; o
     #: padrão é 12 m, a vara mais comum em CA-50.
@@ -531,10 +740,30 @@ class Pavimento:
     aco: Aco = field(default_factory=Aco)
     ambiente: Ambiente = field(default_factory=Ambiente)
     config: Config = field(default_factory=Config)
+    #: Faixas de laje treliçada (nervura contínua), calculadas à parte das
+    #: lajes maciças -- ver ``trelicada.py``.
+    trelicadas: list[LajeTrelicada] = field(default_factory=list)
+    #: Painéis de laje alveolar protendida -- ver ``alveolar.py``.
+    alveolares: list[LajeAlveolar] = field(default_factory=list)
+    #: Faixas de laje nervurada unidirecional (moldada no local) -- são
+    #: ``LajeTrelicada`` com ``sistema = "nervurada"``, calculadas pelo mesmo
+    #: motor -- e painéis de nervurada bidirecional (``nervurada.py``).
+    nervuradas_uni: list[LajeTrelicada] = field(default_factory=list)
+    nervuradas_bi: list[LajeNervuradaBi] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.lajes = [x if isinstance(x, Laje) else Laje(**x)
                       for x in self.lajes]
+        self.trelicadas = [x if isinstance(x, LajeTrelicada)
+                           else LajeTrelicada(**x) for x in self.trelicadas]
+        self.alveolares = [x if isinstance(x, LajeAlveolar)
+                           else LajeAlveolar(**x) for x in self.alveolares]
+        self.nervuradas_uni = [x if isinstance(x, LajeTrelicada)
+                               else LajeTrelicada(**x)
+                               for x in self.nervuradas_uni]
+        self.nervuradas_bi = [x if isinstance(x, LajeNervuradaBi)
+                              else LajeNervuradaBi(**x)
+                              for x in self.nervuradas_bi]
         self.continuidades = [x if isinstance(x, Continuidade)
                               else Continuidade(**x)
                               for x in self.continuidades]
@@ -551,6 +780,43 @@ class Pavimento:
                 return x
         return None
 
+    @property
+    def lajes_macicas(self) -> list[Laje]:
+        """As lajes de placa -- as que o cálculo por charneiras e tabelas
+        trata e que entram na compatibilização dos negativos."""
+        return [x for x in self.lajes if not x.especial]
+
+    @property
+    def lajes_especiais(self) -> list[Laje]:
+        """As lajes treliçadas, alveolares e nervuradas atribuídas na
+        planta."""
+        return [x for x in self.lajes if x.especial]
+
+    def perfil_da(self, laje: Laje):
+        """O item da lista de perfis que a laje usa, ou ``None``.
+
+        Perfil em branco vale como o primeiro da lista -- é o que o
+        usuário espera ao trocar o tipo na tabela sem escolher um nome.
+        """
+        if not laje.especial:
+            return None
+        itens = getattr(self, LISTA_DO_TIPO[laje.tipo])
+        for it in itens:
+            if it.nome == laje.perfil:
+                return it
+        if not laje.perfil and itens:
+            return itens[0]
+        return None
+
+    def perfis_em_uso(self) -> dict[tuple[str, str], list[str]]:
+        """``(tipo, nome do perfil) -> lajes da planta que o usam``."""
+        uso: dict[tuple[str, str], list[str]] = {}
+        for laje in self.lajes_especiais:
+            p = self.perfil_da(laje)
+            if p is not None:
+                uso.setdefault((laje.tipo, p.nome), []).append(laje.nome)
+        return uso
+
     def vizinha_de(self, nome: str, bordo: int) -> tuple[Laje, int] | None:
         """A laje e o bordo do outro lado da borda comum, se houver."""
         for c in self.continuidades:
@@ -563,7 +829,8 @@ class Pavimento:
 
     def detectar_continuidades(self, folga: float = 0.40,
                                minimo: float = 0.30,
-                               tolerancia_desnivel: float = 2.0
+                               tolerancia_desnivel: float = 2.0,
+                               regra_rebaixo: bool = True
                                ) -> list[Continuidade]:
         """Descobre as bordas comuns pela posição das lajes na planta.
 
@@ -577,9 +844,17 @@ class Pavimento:
         sobreposição mínima para valer como borda comum, e serve para não
         transformar dois cantos que se tocam em continuidade.
 
-        A sobreposição não precisa ser total: laje pequena encostando no meio
-        da borda de uma grande é continuidade dos dois lados, e é assim que a
-        maioria dos pavimentos se arranja.
+        A sobreposição não precisa ser total, mas desde a R11 só engasta o
+        lado que tem contato em pelo menos 2/3 do bordo (Souza & Cunha,
+        §3.7.2): laje pequena encostando no meio da borda de uma grande
+        engasta o seu bordo, e o da grande fica apoiado
+        (``Continuidade.parcial_*``). Se nenhum dos dois lados chega a 2/3, o
+        par é descartado.
+
+        Também desde a R11 vale a regra das lajes rebaixadas sobre viga
+        (Fig. 1.15 do mesmo livro), com o rebaixo medido pelo enchimento
+        (:func:`rebaixo_entre`): r > h com vão da rebaixada de até 300 cm
+        deixa a borda apoiada (``regra_rebaixo=False`` desliga).
 
         ``tolerancia_desnivel`` (cm) é o quanto as espessuras das duas lajes
         podem diferir para a borda ainda valer como engaste. Duas lajes de
@@ -594,13 +869,50 @@ class Pavimento:
         Não altera o pavimento -- devolve a lista para quem chamou decidir.
         """
         achadas: list[Continuidade] = []
-        for i, la in enumerate(self.lajes):
-            for lb in self.lajes[i + 1:]:
+        # só as maciças: uma laje de nervura ou painel não fecha engaste com
+        # a vizinha -- a continuidade entre faixas treliçadas é da própria
+        # faixa (``atribuicao.py``), e com uma maciça o bordo fica apoiado
+        macicas = self.lajes_macicas
+        for i, la in enumerate(macicas):
+            for lb in macicas[i + 1:]:
                 if abs(la.h - lb.h) > tolerancia_desnivel:
                     continue
-                achadas.extend(_continuidades_geometricas(la, lb, folga,
-                                                          minimo))
+                if regra_rebaixo and rebaixo_apoia(la, lb):
+                    continue
+                achadas.extend(c for c in _continuidades_geometricas(
+                    la, lb, folga, minimo)
+                    if not (c.parcial_a and c.parcial_b))
         return achadas
+
+    def continuidades_rejeitadas(self, folga: float = 0.40,
+                                 minimo: float = 0.30,
+                                 tolerancia_desnivel: float = 2.0
+                                 ) -> list[tuple[str, str, str]]:
+        """Todos os pares que encostam na planta e não viraram borda comum,
+        com o motivo em texto: desnível de espessura, rebaixo (Fig. 1.15) ou
+        contato parcial dos dois lados (< 2/3, §3.7.2). Devolve
+        ``(laje_a, laje_b, motivo)``. Para a tela e a memória."""
+        saida: list[tuple[str, str, str]] = []
+        macicas = self.lajes_macicas
+        for i, la in enumerate(macicas):
+            for lb in macicas[i + 1:]:
+                geo = _continuidades_geometricas(la, lb, folga, minimo)
+                if not geo:
+                    continue
+                desnivel = abs(la.h - lb.h)
+                if desnivel > tolerancia_desnivel:
+                    saida.append((la.nome, lb.nome,
+                                  f"Δh = {desnivel:.0f} cm"))
+                elif rebaixo_apoia(la, lb):
+                    r, reb = rebaixo_entre(la, lb)
+                    saida.append((la.nome, lb.nome,
+                                  f"rebaixo r = {r:.0f} cm > h = "
+                                  f"{reb.h:g} cm com vão de "
+                                  f"{reb.a * 100:.0f} cm ≤ 300 cm"))
+                elif all(c.parcial_a and c.parcial_b for c in geo):
+                    saida.append((la.nome, lb.nome,
+                                  "contato < 2/3 dos dois bordos"))
+        return saida
 
     def continuidades_rejeitadas_por_desnivel(
             self, folga: float = 0.40, minimo: float = 0.30,
@@ -613,8 +925,9 @@ class Pavimento:
         que claramente encosta não virou borda comum.
         """
         saida: list[tuple[str, str, float]] = []
-        for i, la in enumerate(self.lajes):
-            for lb in self.lajes[i + 1:]:
+        macicas = self.lajes_macicas
+        for i, la in enumerate(macicas):
+            for lb in macicas[i + 1:]:
                 desnivel = abs(la.h - lb.h)
                 if desnivel <= tolerancia_desnivel:
                     continue
@@ -651,11 +964,14 @@ class Pavimento:
                     continue
                 laje_outro = self.laje(outro[0])
                 b = laje.bordos[bordo - 1]
-                b.vinculo = "engastado"
+                # o lado de contato parcial (< 2/3 do bordo) fica apoiado
+                b.vinculo = "apoiado" if c.parcial(nome, bordo) \
+                    else "engastado"
                 b.vizinha = outro[0]
                 if laje_outro is not None:
                     b_outro = laje_outro.bordos[outro[1] - 1]
                     b.t = max(b.t, b_outro.t)
+                    b.h_viga = max(b.h_viga, b_outro.h_viga)
         return novas
 
     def conferir(self) -> list[str]:
@@ -675,12 +991,44 @@ class Pavimento:
                     problemas.append(f"A continuidade cita a laje {nome!r}, "
                                      f"que não existe.")
                     continue
+                if c.parcial(nome, bordo):
+                    continue
                 if laje.bordos[bordo - 1].vinculo != "engastado":
                     problemas.append(
                         f"{nome}, bordo {bordo}: a borda é comum com outra "
                         f"laje, mas o vínculo está "
                         f"{laje.bordos[bordo - 1].vinculo!r} em vez de "
                         f"engastado.")
+        # lajes de nervura e painel: perfil e vinculação coerentes
+        for laje in self.lajes_especiais:
+            if self.perfil_da(laje) is None:
+                itens = getattr(self, LISTA_DO_TIPO[laje.tipo])
+                problemas.append(
+                    f"{laje.nome}: o perfil {laje.perfil!r} da laje "
+                    f"{laje.rotulo_tipo.lower()} não existe"
+                    + ("." if itens else
+                       f" -- cadastre um na aba de laje "
+                       f"{laje.rotulo_tipo.lower()}."))
+            if laje.tipo in TIPOS_UNIDIRECIONAIS:
+                fim = (2, 4) if laje.direcao == "a" else (1, 3)
+                for k in fim:
+                    if laje.bordos[k - 1].vinculo == "livre":
+                        problemas.append(
+                            f"{laje.nome}: o bordo {k} é uma ponta do vão "
+                            f"{laje.direcao} e está livre -- a laje "
+                            f"{laje.rotulo_tipo.lower()} precisa de apoio "
+                            f"nos dois (balanço puro só na maciça).")
+            elif any(b.vinculo == "livre" for b in laje.bordos):
+                problemas.append(
+                    f"{laje.nome}: laje {laje.rotulo_tipo.lower()} com "
+                    f"bordo livre -- os quatro bordos precisam de apoio.")
+            if laje.tipo == "nervurada_bi" and any(
+                    b.vinculo == "engastado" and b.vizinha
+                    for b in laje.bordos):
+                problemas.append(
+                    f"{laje.nome}: engaste por continuidade com outra laje "
+                    f"não vale na nervurada bidirecional -- deixe o bordo "
+                    f"apoiado ou engastado sem vizinha.")
         # bordo engastado apontando para vizinha inexistente
         for laje in self.lajes:
             for k, bordo in enumerate(laje.bordos, start=1):

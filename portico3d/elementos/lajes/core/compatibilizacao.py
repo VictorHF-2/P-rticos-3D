@@ -63,6 +63,10 @@ class BordaComum:
     extensao: float = 0.0           # cm, para cada lado do eixo
     criterio: str = ""
     desequilibrio: float = 0.0      # kN·m/m, |m_a - m_b| ao fim
+    #: (R11) só um lado engasta -- o outro tem contato < 2/3 do bordo e
+    #: ficou apoiado (Souza & Cunha §3.7.2); a negativa é a do lado
+    #: engastado e não há o que compatibilizar
+    unilateral: bool = False
 
     @property
     def rotulo(self) -> str:
@@ -174,13 +178,13 @@ def compatibilizar(pav: Pavimento, esforcos: dict[str, Esforcos],
     # -- laço iterativo sobre os graus de engastamento ----------------------
     if criterio == "iterativa":
         graus_originais = {laje.nome: [b.grau for b in laje.bordos]
-                           for laje in pav.lajes}
+                           for laje in pav.lajes_macicas}
         for passagem in range(cfg.iteracoes_compatibilizacao):
             comp.iteracoes = passagem + 1
             maior_desvio = 0.0
             for c in pav.continuidades:
                 la, lb = pav.laje(c.laje_a), pav.laje(c.laje_b)
-                if la is None or lb is None:
+                if la is None or lb is None or c.unilateral:
                     continue
                 ma = _momento_negativo(esforcos[la.nome], c.bordo_a)
                 mb = _momento_negativo(esforcos[lb.nome], c.bordo_b)
@@ -197,7 +201,7 @@ def compatibilizar(pav: Pavimento, esforcos: dict[str, Esforcos],
                     novo = min(max(alvo / base, GRAU_ENGASTAMENTO_MINIMO),
                                GRAU_ENGASTAMENTO_MAXIMO)
                     laje.bordos[bordo - 1].grau = novo
-            for laje in pav.lajes:
+            for laje in pav.lajes_macicas:
                 esforcos[laje.nome] = esf_mod.calcular(laje, cfg)
             if maior_desvio <= cfg.tolerancia_compatibilizacao:
                 break
@@ -211,7 +215,7 @@ def compatibilizar(pav: Pavimento, esforcos: dict[str, Esforcos],
                 f"{GRAU_ENGASTAMENTO_MAXIMO:g} (§3.2) antes de equilibrar as "
                 f"bordas. A armadura de continuidade saiu pelo maior dos dois "
                 f"momentos, que é o caminho seguro.")
-        for laje in pav.lajes:
+        for laje in pav.lajes_macicas:
             for k, grau in enumerate(graus_originais[laje.nome]):
                 if abs(laje.bordos[k].grau - grau) > 1e-6 and \
                         laje.bordos[k].vinculo == "engastado":
@@ -234,7 +238,8 @@ def compatibilizar(pav: Pavimento, esforcos: dict[str, Esforcos],
             i_b=lb.bordos[c.bordo_b - 1].i, h_a=la.h, h_b=lb.h,
             comprimento=_comprimento_da_borda(pav, c),
             extensao=_extensao(pav, c), criterio=criterio,
-            desequilibrio=abs(ma - mb))
+            desequilibrio=0.0 if c.unilateral else abs(ma - mb),
+            unilateral=c.unilateral)
         borda.d_adotado = min(_altura_util_negativa(pav, la.nome),
                               _altura_util_negativa(pav, lb.nome))
         borda.m_adotado = max(ma, mb)
@@ -248,4 +253,32 @@ def compatibilizar(pav: Pavimento, esforcos: dict[str, Esforcos],
                     f"{ma:.2f} e {mb:.2f} kN·m/m; adotado o maior "
                     f"({maior:.2f}), uma diferença de "
                     f"{(1 - menor / maior) * 100:.0f} % (14.7.6.2).")
+
+    # -- predominância das cargas permanentes (R11) -------------------------
+    # O 14.7.6.2 só autoriza calcular as vizinhas isoladas "quando houver
+    # predominância de cargas permanentes". Com q > g a alternância da
+    # sobrecarga (xadrez) pode aumentar o positivo do vão além do das lajes
+    # isoladas -- Souza & Cunha (§3.4, eq. 3.21) a exigem com q/g > 1,5.
+    alternada = cfg.metodo_esforcos == "mef" and cfg.mef_alternancia
+    if not alternada:
+        nomes = sorted({nome for c in pav.continuidades
+                        for nome, _ in c.par()})
+        altas = []
+        for nome in nomes:
+            laje = pav.laje(nome)
+            if laje is None or laje.especial:
+                continue
+            g = laje.g_superficial + laje.g_paredes_distribuida()
+            if g > 0.0 and laje.variavel > g:
+                altas.append(f"{nome} (q/g = {laje.variavel / g:.2f})")
+        if altas:
+            comp.avisos.append(
+                "Sem predominância de cargas permanentes em lajes "
+                "contínuas: " + ", ".join(altas) + ". O item 14.7.6.2 só "
+                "autoriza calcular as vizinhas isoladas quando as "
+                "permanentes predominam; com q > g a sobrecarga em xadrez "
+                "pode aumentar o positivo do vão (Souza & Cunha, eq. 3.21, "
+                "pedem a alternância com q/g > 1,5). Use os elementos "
+                "finitos com a alternância da sobrecarga ligada para a "
+                "envoltória.")
     return comp, esforcos

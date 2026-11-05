@@ -111,6 +111,9 @@ class SecaoTransversal:
     nome: str
     contorno: Polilinha
     estribo: Polilinha
+    #: o laço que abraça a mesa, nas seções T e T invertida. ``None`` na
+    #: retangular, que não tem mesa a abraçar
+    estribo_mesa: Polilinha | None = None
     barras: list[Circulo] = field(default_factory=list)
     textos: list[Texto] = field(default_factory=list)
     largura: float = 0.0
@@ -293,6 +296,32 @@ def retangulo_arredondado(largura: float, altura: float, raio: float,
 #: os tipos de armadura transversal vêm do detalhamento: duas listas
 #: iguais em dois módulos divergem na primeira peça nova
 TIPOS_ESTRIBO = TIPOS_TRANSVERSAIS
+
+
+def cantos_da_mesa(secao: Secao, cob: float,
+                   phi_mm: float) -> list[tuple[float, float]]:
+    """Os quatro cantos do laço que abraça a mesa, cm na seção.
+
+    Coordenadas no referencial da seção transversal: ``(lateral, altura)``,
+    com origem no canto inferior esquerdo da **alma**, o mesmo de
+    :func:`_contorno_secao` -- por isso as pontas da mesa saem com lateral
+    negativa.
+
+    É a fonte única de onde ficam os porta-estribos da mesa. A seção, a
+    elevação e a vista 3D leem daqui: são quatro pontos que dependem só da
+    geometria da peça, e derivá-los em três lugares seria convidá-los a
+    divergir.
+    """
+    if secao.tipo == "retangular" or secao.bf <= secao.bw + 1e-9:
+        return []
+    aba = (secao.bf - secao.bw) / 2.0
+    recuo = cob + phi_mm / 20.0
+    y_esq, y_dir = -aba + recuo, secao.bw + aba - recuo
+    if secao.tipo == "T":                      # mesa em cima
+        z_ext, z_int = secao.h - recuo, secao.h - secao.hf + recuo
+    else:                                      # T invertida: mesa embaixo
+        z_ext, z_int = recuo, secao.hf - recuo
+    return [(y_esq, z_ext), (y_dir, z_ext), (y_esq, z_int), (y_dir, z_int)]
 
 
 def camada_barra(face: str, tipo: str = "") -> str:
@@ -493,9 +522,17 @@ def montar_elevacao(res: ResultadoViga, mostrar_estribos: bool = True,
             d = trechos[i].secao.descricao()
             if d not in secoes:
                 secoes.append(d)
-        el.textos.append(Texto(" / ".join(secoes),
-                               (x0 + larg + 4.0, -20.0), altura=7.0,
-                               camada="TEXTO", ancora="left"))
+        # no último pilar o texto vai para a esquerda dele: à direita ele
+        # invadiria a tabela de aço, que começa 80 cm depois do fim da viga
+        # (a descrição de uma seção T tem mais de 120 cm de texto)
+        if k == len(viga.apoios) - 1:
+            el.textos.append(Texto(" / ".join(secoes),
+                                   (x0 - 4.0, -20.0), altura=7.0,
+                                   camada="TEXTO", ancora="right"))
+        else:
+            el.textos.append(Texto(" / ".join(secoes),
+                                   (x0 + larg + 4.0, -20.0), altura=7.0,
+                                   camada="TEXTO", ancora="left"))
         el.eixos.append((xs[k], f"P{k + 1}"))
 
     # armaduras longitudinais, com os rótulos escalonados fora da viga
@@ -544,7 +581,7 @@ def montar_elevacao(res: ResultadoViga, mostrar_estribos: bool = True,
         sinal = 1.0 if p.face == "inferior" else -1.0
         pontos = barra_com_dobras(
             x0, x1, y, p.dobra_ini, p.dobra_fim, sinal,
-            viga.aco.raio_dobramento_eixo(p.phi), p.phi,
+            p.raio_da_dobra(viga.aco), p.phi,
             p.tipo_gancho or gk.normalizar(cfg.tipo_gancho))
         el.barras.append(Polilinha(pontos, camada=camada_barra(p.face)))
 
@@ -552,6 +589,23 @@ def montar_elevacao(res: ResultadoViga, mostrar_estribos: bool = True,
         # outro: alternar posições fixas não bastava em viga com muitas barras
         rotular(f"N{p.numero}  {p.texto_quantidade}Ø{p.phi:g}  "
                 f"C={p.comprimento:.0f}", p.face, x0, x1, y)
+
+    # porta-estribos dos cantos da mesa: em elevação as quatro barras se
+    # projetam sobre duas linhas (as duas cotas da mesa), porque as pontas
+    # esquerda e direita caem uma sobre a outra
+    for p in res.posicoes:
+        if p.tipo != "porta_mesa":
+            continue
+        i_trecho = al.trecho_da(viga, p)
+        cantos = cantos_da_mesa(trechos[i_trecho].secao, cob, p.phi)
+        if not cantos:
+            continue
+        x0, x1 = p.x_ini * 100.0, p.x_fim * 100.0
+        for y in sorted({round(bases[i_trecho] + cz, 3) for _cy, cz in cantos}):
+            el.barras.append(Polilinha([(x0, y), (x1, y)],
+                                       camada=camada_barra("superior")))
+        rotular(f"N{p.numero}  {p.n}Ø{p.phi:g}  C={p.comprimento:.0f}",
+                "superior", x0, x1, bases[i_trecho] + cantos[0][1])
 
     # grampos de ancoragem e de costura: em elevação o U está no plano
     # horizontal e as duas pernas se projetam sobre a mesma linha, na altura
@@ -804,14 +858,21 @@ def _forma_barra(p: Posicao, secao: Secao, cob: float,
         vao = max(p.comprimento - gr_PERNAS * perna, 2.0)
         return grampo_em_u(perna, vao, raio_est, p.espelhado), False
     if p.tipo in TIPOS_ESTRIBO:
-        b = secao.bw - 2.0 * cob
-        h = secao.h - 2.0 * cob
+        # o estribo da mesa é o laço que abraça a mesa, não a alma: a peça
+        # mede bf x hf. Herdar o retângulo da alma daria uma peça da forma
+        # errada e do comprimento errado no quadro de ferros
+        if p.papel == "mesa":
+            b = secao.bf - 2.0 * cob
+            h = secao.hf - 2.0 * cob
+        else:
+            b = secao.bw - 2.0 * cob
+            h = secao.h - 2.0 * cob
         gancho = 0.0 if not gancho_estribo else max(5.0 * p.phi / 10.0, 5.0)
         return retangulo_arredondado(b, h, raio_est, gancho), True
 
     comp = (p.x_fim - p.x_ini) * 100.0
     sinal = 1.0 if p.face == "inferior" else -1.0
-    raio = aco.raio_dobramento_eixo(p.phi) if aco is not None else 0.0
+    raio = p.raio_da_dobra(aco) if aco is not None else 0.0
     return barra_com_dobras(0.0, comp, 0.0, p.dobra_ini, p.dobra_fim, sinal,
                             raio, p.phi if aco is not None else 0.0,
                             tipo), False
@@ -846,7 +907,7 @@ def montar_explodida(res: ResultadoViga) -> list[BarraExplodida]:
         raios: list[tuple[tuple[float, float], tuple[float, float],
                           float]] = []
         if p.tipo not in TIPOS_ESTRIBO:
-            r_dobra = viga.aco.raio_dobramento_eixo(p.phi)
+            r_dobra = p.raio_da_dobra(viga.aco)
             comp = (p.x_fim - p.x_ini) * 100.0
             sinal = 1.0 if p.face == "inferior" else -1.0
             raios = [(c, m, r_dobra) for c, m in centros_das_dobras(
@@ -1014,6 +1075,20 @@ def montar_secao(res: ResultadoViga, x_m: float, nome: str = ""
     est = Polilinha([(cob, cob), (b - cob, cob), (b - cob, h - cob),
                      (cob, h - cob)], camada="ESTRIBO", fechada=True)
 
+    # o laço da mesa, quando o detalhamento o previu para esta abscissa: a
+    # peça que abraça a mesa, ao lado do estribo que abraça a alma
+    est_mesa = None
+    tem_laco = any(p.tipo == "estribo" and p.papel == "mesa"
+                   and p.x_ini - 1e-9 <= x_m <= p.x_fim + 1e-9
+                   for p in res.posicoes)
+    if tem_laco and secao.tipo != "retangular" and secao.bf > secao.bw:
+        aba = (secao.bf - secao.bw) / 2.0
+        z0, z1 = ((h - secao.hf, h) if secao.tipo == "T" else (0.0, secao.hf))
+        est_mesa = Polilinha(
+            [(-aba + cob, z0 + cob), (b + aba - cob, z0 + cob),
+             (b + aba - cob, z1 - cob), (-aba + cob, z1 - cob)],
+            camada="ESTRIBO", fechada=True)
+
     barras: list[Circulo] = []
     textos: list[Texto] = []
     # os rótulos têm altura em pontos e a seção, em centímetros: numa seção
@@ -1119,6 +1194,27 @@ def montar_secao(res: ResultadoViga, x_m: float, nome: str = ""
             f"{total}{bitola} nas camadas {itens[0][0]}ª a {itens[-1][0]}ª",
             (b + 6.0, y_medio), altura=4.5, ancora="left"))
 
+    # porta-estribos dos cantos do laço da mesa: quatro barras nas pontas da
+    # mesa, onde nenhuma armadura calculada passa
+    rotulos_mesa = 0
+    for p in res.posicoes:
+        if p.tipo != "porta_mesa" or not (p.x_ini <= x_m <= p.x_fim):
+            continue
+        i_barra = al.trecho_da(viga, p)
+        dy = bases_l[i_barra] - bases_l[i_secao]
+        dz = bases_v[i_barra] - bases_v[i_secao]
+        for cy, cz in cantos_da_mesa(viga.trechos[i_barra].secao, cob, p.phi):
+            barras.append(Circulo((dy + cy, dz + cz), p.phi / 20.0,
+                                  camada="BARRA"))
+        # numa seção com mais de uma posição de canto (a junção de dois
+        # trechos) os rótulos se empilham: escritos no mesmo ponto, um
+        # cobria o outro
+        textos.append(Texto(
+            f"{p.n}Ø{p.phi:g} (N{p.numero}) nos cantos da mesa",
+            (b + 4.0, secao.h + 6.0 + passo_rotulo * rotulos_mesa),
+            altura=4.5, ancora="left"))
+        rotulos_mesa += 1
+
     # armadura de pele. Num apoio as posições dos dois tramos se sobrepõem;
     # rotular a mesma armadura duas vezes só enche a seção de texto
     rotulos_pele: list[str] = []
@@ -1152,6 +1248,7 @@ def montar_secao(res: ResultadoViga, x_m: float, nome: str = ""
     textos.append(Texto(f"{secao.descricao()}", (b / 2.0, y_descricao),
                         altura=5.5, ancora="center"))
     return SecaoTransversal(x=x_m * 100.0, nome=nome or f"Seção x={x_m:.2f} m",
-                            contorno=contorno, estribo=est, barras=barras,
+                            contorno=contorno, estribo=est,
+                            estribo_mesa=est_mesa, barras=barras,
                             textos=textos, largura=secao.bf or secao.bw,
                             altura=h)

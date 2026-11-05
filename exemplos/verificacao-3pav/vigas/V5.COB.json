@@ -1,0 +1,287 @@
+{
+  "nome": "V5.COB",
+  "tramos": [
+    {
+      "L": 5.0,
+      "secao": {
+        "bw": 20.0,
+        "h": 50.0,
+        "tipo": "T",
+        "bf": 95.0,
+        "hf": 12.0
+      },
+      "nome": "",
+      "mudancas": [],
+      "alinhamento": ""
+    },
+    {
+      "L": 4.0,
+      "secao": {
+        "bw": 20.0,
+        "h": 50.0,
+        "tipo": "T",
+        "bf": 80.0,
+        "hf": 12.0
+      },
+      "nome": "",
+      "mudancas": [],
+      "alinhamento": ""
+    }
+  ],
+  "apoios": [
+    {
+      "tipo": "mola",
+      "largura": 20.0,
+      "k_mola": 11928.180141223624,
+      "nome": "",
+      "altura_pilar_abaixo": 275.0
+    },
+    {
+      "tipo": "mola",
+      "largura": 25.0,
+      "k_mola": 27956.672205992858,
+      "nome": "",
+      "altura_pilar_abaixo": 275.0
+    },
+    {
+      "tipo": "mola",
+      "largura": 20.0,
+      "k_mola": 11928.180141223624,
+      "nome": "",
+      "altura_pilar_abaixo": 275.0
+    }
+  ],
+  "distribuidas": [
+    {
+      "q1": 2.5,
+      "q2": 2.5,
+      "x_ini": 0.0,
+      "x_fim": 9.0,
+      "acao": "g",
+      "descricao": "peso próprio"
+    },
+    {
+      "q1": 0.0,
+      "q2": 9.0,
+      "x_ini": 0.0,
+      "x_fim": 2.0,
+      "acao": "g",
+      "descricao": "L1"
+    },
+    {
+      "q1": 9.0,
+      "q2": 9.0,
+      "x_ini": 2.0,
+      "x_fim": 3.0,
+      "acao": "g",
+      "descricao": "L1"
+    },
+    {
+      "q1": 9.0,
+      "q2": 0.0,
+      "x_ini": 3.0,
+      "x_fim": 5.0,
+      "acao": "g",
+      "descricao": "L1"
+    },
+    {
+      "q1": 0.0,
+      "q2": 4.0,
+      "x_ini": 0.0,
+      "x_fim": 2.0,
+      "acao": "q",
+      "descricao": "L1"
+    },
+    {
+      "q1": 4.0,
+      "q2": 4.0,
+      "x_ini": 2.0,
+      "x_fim": 3.0,
+      "acao": "q",
+      "descricao": "L1"
+    },
+    {
+      "q1": 4.0,
+      "q2": 0.0,
+      "x_ini": 3.0,
+      "x_fim": 5.0,
+      "acao": "q",
+      "descricao": "L1"
+    },
+    {
+      "q1": 0.0,
+      "q2": 11.25,
+      "x_ini": 0.0,
+      "x_fim": 2.5,
+      "acao": "g",
+      "descricao": "L2"
+    },
+    {
+      "q1": 11.25,
+      "q2": 0.0,
+      "x_ini": 2.5,
+      "x_fim": 5.0,
+      "acao": "g",
+      "descricao": "L2"
+    },
+    {
+      "q1": 0.0,
+      "q2": 5.0,
+      "x_ini": 0.0,
+      "x_fim": 2.5,
+      "acao": "q",
+      "descricao": "L2"
+    },
+    {
+      "q1": 5.0,
+      "q2": 0.0,
+      "x_ini": 2.5,
+      "x_fim": 5.0,
+      "acao": "q",
+      "descricao": "L2"
+    },
+    {
+      "q1": 0.0,
+      "q2": 9.0,
+      "x_ini": 5.0,
+      "x_fim": 7.0,
+      "acao": "g",
+      "descricao": "L4"
+    },
+    {
+      "q1": 9.0,
+      "q2": 0.0,
+      "x_ini": 7.0,
+      "x_fim": 9.0,
+      "acao": "g",
+      "descricao": "L4"
+    },
+    {
+      "q1": 0.0,
+      "q2": 4.0,
+      "x_ini": 5.0,
+      "x_fim": 7.0,
+      "acao": "q",
+      "descricao": "L4"
+    },
+    {
+      "q1": 4.0,
+      "q2": 0.0,
+      "x_ini": 7.0,
+      "x_fim": 9.0,
+      "acao": "q",
+      "descricao": "L4"
+    },
+    {
+      "q1": 0.0,
+      "q2": 9.0,
+      "x_ini": 5.0,
+      "x_fim": 7.0,
+      "acao": "g",
+      "descricao": "L5"
+    },
+    {
+      "q1": 9.0,
+      "q2": 0.0,
+      "x_ini": 7.0,
+      "x_fim": 9.0,
+      "acao": "g",
+      "descricao": "L5"
+    },
+    {
+      "q1": 0.0,
+      "q2": 4.0,
+      "x_ini": 5.0,
+      "x_fim": 7.0,
+      "acao": "q",
+      "descricao": "L5"
+    },
+    {
+      "q1": 4.0,
+      "q2": 0.0,
+      "x_ini": 7.0,
+      "x_fim": 9.0,
+      "acao": "q",
+      "descricao": "L5"
+    }
+  ],
+  "concentradas": [],
+  "momentos": [],
+  "torcores": [],
+  "concreto": {
+    "fck": 30.0,
+    "gamma_c": 1.4,
+    "agregado": "granito",
+    "peso_especifico": 25.0
+  },
+  "aco": {
+    "categoria": "CA-50",
+    "gamma_s": 1.15,
+    "Es": 210000.0
+  },
+  "aco_estribo": {
+    "categoria": "CA-60",
+    "gamma_s": 1.15,
+    "Es": 210000.0
+  },
+  "ambiente": {
+    "caa": "II",
+    "cobrimento": null,
+    "controle_rigoroso": false
+  },
+  "config": {
+    "gamma_g": 1.4,
+    "gamma_g_fav": 1.0,
+    "gamma_q": 1.4,
+    "psi0": 0.5,
+    "psi1": 0.4,
+    "psi2": 0.3,
+    "alternancia": true,
+    "peso_proprio": false,
+    "redistribuicao": 1.0,
+    "arredondar_momento_apoio": true,
+    "engastamento_minimo_extremidade": 0.0,
+    "modelo_cisalhamento": 1,
+    "theta": 45.0,
+    "alpha_estribo": 90.0,
+    "reducao_apoio": true,
+    "considerar_torcao": true,
+    "torcao_equilibrio": true,
+    "verificar_els": true,
+    "verificar_fadiga": false,
+    "psi1_fadiga": 0.0,
+    "tempo_meses": 70.0,
+    "t0_meses": 1.0,
+    "limite_flecha_visual": 250.0,
+    "limite_flecha_alvenaria": 500.0,
+    "parede_apoiada": "alvenaria",
+    "verificar_vibracao": false,
+    "limite_flecha_vibracao": 350.0,
+    "verificar_piso_plano": false,
+    "limite_piso_total": 350.0,
+    "limite_piso_apos": 600.0,
+    "phi_estribo": 5.0,
+    "n_ramos": 2,
+    "phi_longitudinal": 0.0,
+    "bitolas_flexao": {},
+    "bitolas_estribo": {},
+    "bitolas_pele": {},
+    "uniformizar_estribos": true,
+    "usar_grampos": true,
+    "phi_grampo": 6.3,
+    "phi_max_longitudinal": 25.0,
+    "phi_min_longitudinal": 8.0,
+    "d_agregado": 1.9,
+    "pernas_amarracao_estribo": 10.0,
+    "gancho_estribo": true,
+    "ancoragem_gancho": true,
+    "tipo_gancho": "Ângulo reto",
+    "ganchos_flexao": {},
+    "reduzir_ancoragem_com_gancho": false,
+    "largura_reduzida_excepcional": false
+  },
+  "projeto": "",
+  "observacoes": "",
+  "_formato": "viga-nbr6118",
+  "_versao": 1
+}

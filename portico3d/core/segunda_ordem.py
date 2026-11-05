@@ -21,13 +21,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import scipy.sparse as sp
 from scipy.linalg import eigh
 
 from .combinacoes import Combinacao, caso_efetivo
-from .elemento import BarraPreparada, rigidez_geometrica
+from .elemento import (BarraPreparada, rigidez_geometrica,
+                       rigidez_geometrica_refinada)
 from .modelo import CasoDeCarga, ErroDeModelo, Modelo
-from .montagem import (_resolver_sistema, cargas_locais, matriz_global,
-                       particionar, preparar_barras, vetor_cargas,
+from .montagem import (Montador, base_de_calculo, cargas_locais, esparsa,
+                       matriz_global, preparar_barras, reacoes_das_molas,
+                       resolver_deslocamentos, usa_grelha, vetor_cargas,
                        vetor_recalques)
 from .resultados import Resultado
 
@@ -44,24 +47,37 @@ def esforco_normal(esforcos: np.ndarray) -> float:
     return float((esforcos[6] - esforcos[0]) / 2.0)
 
 
+def _kg_da_barra(p: BarraPreparada, N: float) -> np.ndarray:
+    """A rigidez geométrica local de uma barra, na versão que vale para ela.
+
+    A refinada exige continuidade nos dois planos de flexão: com uma
+    liberação, o giro que falta na extremidade não é o de uma barra contínua
+    subdividida, e a condensação passaria a representar outra peça. Com
+    liberação, a de sempre; sem, a que converge melhor.
+    """
+    kg = (rigidez_geometrica_refinada(p.Lf, N, p.material, p.secao)
+          if not p.liberados
+          else rigidez_geometrica(p.Lf, N, p.secao))
+    # As liberações valem para a rigidez geométrica pelo mesmo motivo que
+    # valem para a elástica: o grau de liberdade solto não transmite
+    # esforço, venha ele de onde vier.
+    if p.liberados:
+        kg[p.liberados, :] = 0.0
+        kg[:, p.liberados] = 0.0
+    return kg
+
+
 def matriz_geometrica_global(modelo: Modelo,
                              preparadas: dict[str, BarraPreparada],
                              normais: dict[str, float]) -> np.ndarray:
-    Kg = np.zeros((modelo.n_gdl, modelo.n_gdl))
+    montador = Montador(modelo.n_gdl, esparsa(modelo))
     for nome, p in preparadas.items():
         N = normais.get(nome, 0.0)
         if N == 0.0:
             continue
-        kg = rigidez_geometrica(p.Lf, N, p.secao)
-        # As liberações valem para a rigidez geométrica pelo mesmo motivo que
-        # valem para a elástica: o grau de liberdade solto não transmite
-        # esforço, venha ele de onde vier.
-        if p.liberados:
-            kg[p.liberados, :] = 0.0
-            kg[:, p.liberados] = 0.0
-        g = np.array(p.gdl)
-        Kg[np.ix_(g, g)] += p.TH.T @ kg @ p.TH
-    return Kg
+        kg = _kg_da_barra(p, N)
+        montador.somar(p.gdl, p.TH.T @ kg @ p.TH)
+    return montador.matriz()
 
 
 def _montar(modelo: Modelo, caso: CasoDeCarga):
@@ -69,15 +85,41 @@ def _montar(modelo: Modelo, caso: CasoDeCarga):
     segmentos = cargas_locais(caso, preparadas)
     Ke = matriz_global(modelo, preparadas)
     P = vetor_cargas(modelo, caso, preparadas, segmentos)
-    livres, restritos = particionar(modelo)
+    base = base_de_calculo(modelo)
     prescritos = vetor_recalques(modelo, caso)
-    return preparadas, segmentos, Ke, P, livres, restritos, prescritos
+    return preparadas, segmentos, Ke, P, base, prescritos
 
 
-def _esforcos_das_barras(preparadas, segmentos, D) -> dict[str, np.ndarray]:
-    return {nome: p.k_local @ (p.TH @ D[np.array(p.gdl)])
-            + p.engastamento(segmentos[nome])
-            for nome, p in preparadas.items()}
+def _esforcos_das_barras(preparadas, segmentos, D,
+                         normais: dict[str, float] | None = None
+                         ) -> dict[str, np.ndarray]:
+    """Esforços nas extremidades de cada barra, a partir do deslocamento.
+
+    ``normais`` é o que faz a diferença na segunda ordem. Sem ele (o caso da
+    análise linear, e da passada de primeira ordem que estima os normais para
+    a flambagem), o esforço vem só da rigidez elástica — não há geometria
+    ainda a somar. **Com** ele, soma-se também a rigidez geométrica da barra:
+    ``(Ke + Kg)·D``, e não ``Ke·D`` sozinho.
+
+    A omissão do ``Kg`` aqui era o que fazia o momento recuperado de um P-Δ
+    com uma barra por pilar errar a solução fechada em 6,6 % — o
+    deslocamento já saía correto (a montagem ``Ke+Kg`` estava certa), mas a
+    conversão de volta para esforço jogava fora a metade geométrica que a
+    tinha corrigido. Somando-a, o mesmo caso de referência cai para 0,13 %,
+    sem precisar de malha nenhuma — e a rigidez geométrica **refinada**
+    ainda reduz esse resíduo mais um pouco, porque entra tanto na montagem
+    quanto, agora, na recuperação.
+    """
+    saida = {}
+    for nome, p in preparadas.items():
+        d_local = p.TH @ D[np.array(p.gdl)]
+        k = p.k_local
+        if normais is not None:
+            N = normais.get(nome, 0.0)
+            if N != 0.0:
+                k = k + _kg_da_barra(p, N)
+        saida[nome] = k @ d_local + p.engastamento(segmentos[nome])
+    return saida
 
 
 def resolver_p_delta(modelo: Modelo, caso: CasoDeCarga | str,
@@ -97,8 +139,13 @@ def resolver_p_delta(modelo: Modelo, caso: CasoDeCarga | str,
             raise ErroDeModelo(f"caso de carga '{caso}' não existe")
         caso = modelo.casos[caso]
 
-    preparadas, segmentos, Ke, P, livres, restritos, prescritos = _montar(
-        modelo, caso)
+    if usa_grelha(modelo):
+        from .grelha import resolver_com_grelha
+        return resolver_com_grelha(
+            modelo, caso, lambda m, c: resolver_p_delta(
+                m, c, max_iteracoes, tolerancia))
+
+    preparadas, segmentos, Ke, P, base, prescritos = _montar(modelo, caso)
 
     D = prescritos.copy()
     normais = {nome: 0.0 for nome in modelo.barras}
@@ -107,9 +154,8 @@ def resolver_p_delta(modelo: Modelo, caso: CasoDeCarga | str,
     for iteracoes in range(1, max_iteracoes + 1):
         Kg = matriz_geometrica_global(modelo, preparadas, normais)
         try:
-            D_novo = prescritos.copy()
-            D_novo[livres] = _resolver_sistema(modelo, Ke + Kg, P, livres,
-                                               prescritos)
+            D_novo = resolver_deslocamentos(modelo, Ke + Kg, P, base,
+                                            prescritos)
         except ErroDeModelo as erro:
             raise ErroDeModelo(
                 "a segunda ordem não tem solução para este carregamento: a "
@@ -121,7 +167,11 @@ def resolver_p_delta(modelo: Modelo, caso: CasoDeCarga | str,
         escala = float(np.max(np.abs(D_novo)))
         variacao = float(np.max(np.abs(D_novo - D)))
         D = D_novo
-        esforcos = _esforcos_das_barras(preparadas, segmentos, D)
+        # Os normais que entram aqui são os que montaram o ``Kg`` desta
+        # mesma iteração: a recuperação usa o estado de esforço normal
+        # consistente com a rigidez que gerou este ``D``, e não o que só vai
+        # ser conhecido depois de recuperar os esforços.
+        esforcos = _esforcos_das_barras(preparadas, segmentos, D, normais)
         normais = {nome: esforco_normal(q) for nome, q in esforcos.items()}
 
         if escala == 0.0 or variacao <= tolerancia * escala:
@@ -133,17 +183,12 @@ def resolver_p_delta(modelo: Modelo, caso: CasoDeCarga | str,
 
     Kg = matriz_geometrica_global(modelo, preparadas, normais)
     reacoes = (Ke + Kg) @ D - P
-    livre_por_gdl = np.zeros(modelo.n_gdl, dtype=bool)
-    livre_por_gdl[livres] = True
-    reacoes_mola = {
-        mola.no: -mola.vetor * D[modelo.gdl(mola.no)]
-        * livre_por_gdl[modelo.gdl(mola.no)]
-        for mola in modelo.molas.values()}
+    reacoes_mola = reacoes_das_molas(modelo, base, D)
 
     return Resultado(modelo=modelo, caso=caso.nome, deslocamentos=D,
                      reacoes=reacoes, esforcos=esforcos,
                      preparadas=preparadas, segmentos=segmentos,
-                     gdl_restritos=restritos, reacoes_mola=reacoes_mola,
+                     gdl_restritos=base.restritos, reacoes_mola=reacoes_mola,
                      iteracoes=iteracoes, segunda_ordem=True)
 
 
@@ -210,10 +255,13 @@ def flambagem(modelo: Modelo, caso: CasoDeCarga | str,
             raise ErroDeModelo(f"caso de carga '{caso}' não existe")
         caso = modelo.casos[caso]
 
-    preparadas, segmentos, Ke, P, livres, _, prescritos = _montar(modelo, caso)
+    if usa_grelha(modelo):
+        from .grelha import flambagem_com_grelha
+        return flambagem_com_grelha(modelo, caso, n_modos)
 
-    D = prescritos.copy()
-    D[livres] = _resolver_sistema(modelo, Ke, P, livres, prescritos)
+    preparadas, segmentos, Ke, P, base, prescritos = _montar(modelo, caso)
+
+    D = resolver_deslocamentos(modelo, Ke, P, base, prescritos)
     esforcos = _esforcos_das_barras(preparadas, segmentos, D)
     normais = {nome: esforco_normal(q) for nome, q in esforcos.items()}
 
@@ -223,10 +271,13 @@ def flambagem(modelo: Modelo, caso: CasoDeCarga | str,
             "há flambagem a calcular")
 
     Kg = matriz_geometrica_global(modelo, preparadas, normais)
-    A = -Kg[np.ix_(livres, livres)]
-    B = Ke[np.ix_(livres, livres)]
+    A = -base.reduzir(Kg)
+    B = base.reduzir(Ke)
 
-    mu, vetores = eigh(A, B)
+    if sp.issparse(B):
+        mu, vetores = _autovalores_esparsos(A, B, n_modos)
+    else:
+        mu, vetores = eigh(A, B)
 
     positivos = [i for i in range(len(mu)) if mu[i] > 1e-12 * max(abs(mu[-1]),
                                                                  1e-300)]
@@ -242,8 +293,24 @@ def flambagem(modelo: Modelo, caso: CasoDeCarga | str,
     modos = []
     for i in ordenados:
         fatores.append(1.0 / float(mu[i]))
-        modo = np.zeros(modelo.n_gdl)
-        modo[livres] = vetores[:, i]
-        modos.append(modo)
+        modos.append(base.expandir(vetores[:, i]))
 
     return Flambagem(caso.nome, fatores, modos, modelo)
+
+
+def _autovalores_esparsos(A, B, n_modos: int):
+    """Os maiores ``μ`` de ``A·φ = μ·B·φ`` com ``B`` positiva definida.
+
+    Só os ``n_modos`` de interesse, por Lanczos: na matriz esparsa de uma
+    grelha, achar todos os autovalores seria o custo da matriz densa de novo.
+    """
+    from scipy.sparse.linalg import LinearOperator, eigsh, splu
+
+    m = B.shape[0]
+    k = max(1, min(n_modos + 2, m - 1))
+    lu = splu(B.tocsc())
+    inversa = LinearOperator((m, m), matvec=lu.solve, dtype=float)
+    mu, vetores = eigsh(A.tocsr(), k=k, M=B.tocsr(), Minv=inversa,
+                        which="LA")
+    ordem = np.argsort(mu)
+    return mu[ordem], vetores[:, ordem]

@@ -1,0 +1,621 @@
+{
+  "nome": "COB (isolado)",
+  "projeto": "",
+  "lajes": [
+    {
+      "nome": "L1.COB",
+      "a": 3.8249999999999997,
+      "b": 4.800000000000001,
+      "h": 12.0,
+      "destino": "piso",
+      "x": 0.075,
+      "y": 0.1,
+      "orientacao": "Y",
+      "bordos": [
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 15.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L4.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L2.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        }
+      ],
+      "revestimento": 0.0,
+      "reboco": 0.0,
+      "enchimento": 0.0,
+      "permanente_extra": 1.5,
+      "variavel": 2.0,
+      "paredes": [],
+      "borda_livre": null,
+      "cargas_concentradas": [],
+      "descricao": "",
+      "tipo": "macica",
+      "perfil": "",
+      "direcao": "a"
+    },
+    {
+      "nome": "L2.COB",
+      "a": 4.800000000000001,
+      "b": 4.800000000000001,
+      "h": 12.0,
+      "destino": "piso",
+      "x": 4.1,
+      "y": 0.1,
+      "orientacao": "X",
+      "bordos": [
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L1.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L3.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L5.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        }
+      ],
+      "revestimento": 0.0,
+      "reboco": 0.0,
+      "enchimento": 0.0,
+      "permanente_extra": 1.5,
+      "variavel": 2.0,
+      "paredes": [],
+      "borda_livre": null,
+      "cargas_concentradas": [],
+      "descricao": "",
+      "tipo": "macica",
+      "perfil": "",
+      "direcao": "a"
+    },
+    {
+      "nome": "L3.COB",
+      "a": 3.325000000000001,
+      "b": 4.800000000000001,
+      "h": 12.0,
+      "destino": "piso",
+      "x": 9.1,
+      "y": 0.1,
+      "orientacao": "Y",
+      "bordos": [
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L2.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L6.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L7.COB",
+          "t": 15.0,
+          "h_viga": 40.0
+        }
+      ],
+      "revestimento": 0.0,
+      "reboco": 0.0,
+      "enchimento": 0.0,
+      "permanente_extra": 1.5,
+      "variavel": 2.0,
+      "paredes": [],
+      "borda_livre": null,
+      "cargas_concentradas": [],
+      "descricao": "",
+      "tipo": "macica",
+      "perfil": "",
+      "direcao": "a"
+    },
+    {
+      "nome": "L4.COB",
+      "a": 3.8000000000000007,
+      "b": 3.8249999999999997,
+      "h": 12.0,
+      "destino": "piso",
+      "x": 0.075,
+      "y": 5.1,
+      "orientacao": "X",
+      "bordos": [
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 15.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L1.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L5.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L8.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        }
+      ],
+      "revestimento": 0.0,
+      "reboco": 0.0,
+      "enchimento": 0.0,
+      "permanente_extra": 1.5,
+      "variavel": 2.0,
+      "paredes": [],
+      "borda_livre": null,
+      "cargas_concentradas": [],
+      "descricao": "",
+      "tipo": "macica",
+      "perfil": "",
+      "direcao": "a"
+    },
+    {
+      "nome": "L5.COB",
+      "a": 3.8000000000000007,
+      "b": 4.800000000000001,
+      "h": 12.0,
+      "destino": "piso",
+      "x": 4.1,
+      "y": 5.1,
+      "orientacao": "X",
+      "bordos": [
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L4.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L2.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L6.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L9.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        }
+      ],
+      "revestimento": 0.0,
+      "reboco": 0.0,
+      "enchimento": 0.0,
+      "permanente_extra": 1.5,
+      "variavel": 2.0,
+      "paredes": [],
+      "borda_livre": null,
+      "cargas_concentradas": [],
+      "descricao": "",
+      "tipo": "macica",
+      "perfil": "",
+      "direcao": "a"
+    },
+    {
+      "nome": "L6.COB",
+      "a": 3.325000000000001,
+      "b": 3.8000000000000007,
+      "h": 12.0,
+      "destino": "piso",
+      "x": 9.1,
+      "y": 5.1,
+      "orientacao": "Y",
+      "bordos": [
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L3.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L5.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 15.0,
+          "h_viga": 40.0
+        }
+      ],
+      "revestimento": 0.0,
+      "reboco": 0.0,
+      "enchimento": 0.0,
+      "permanente_extra": 1.5,
+      "variavel": 2.0,
+      "paredes": [],
+      "borda_livre": null,
+      "cargas_concentradas": [],
+      "descricao": "",
+      "tipo": "macica",
+      "perfil": "",
+      "direcao": "a"
+    },
+    {
+      "nome": "L7.COB",
+      "a": 1.3500000000000014,
+      "b": 4.800000000000001,
+      "h": 12.0,
+      "destino": "piso",
+      "x": 12.575,
+      "y": 0.1,
+      "orientacao": "Y",
+      "bordos": [
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L3.COB",
+          "t": 15.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "apoiado",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 15.0,
+          "h_viga": 40.0
+        }
+      ],
+      "revestimento": 0.0,
+      "reboco": 0.0,
+      "enchimento": 0.0,
+      "permanente_extra": 1.5,
+      "variavel": 2.5,
+      "paredes": [],
+      "borda_livre": null,
+      "cargas_concentradas": [],
+      "descricao": "",
+      "tipo": "macica",
+      "perfil": "",
+      "direcao": "a"
+    },
+    {
+      "nome": "L8.COB",
+      "a": 1.0999999999999996,
+      "b": 3.8249999999999997,
+      "h": 12.0,
+      "destino": "balanco",
+      "x": 0.075,
+      "y": 9.1,
+      "orientacao": "X",
+      "bordos": [
+        {
+          "vinculo": "livre",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 15.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L4.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L9.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "livre",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 20.0,
+          "h_viga": 40.0
+        }
+      ],
+      "revestimento": 0.0,
+      "reboco": 0.0,
+      "enchimento": 0.0,
+      "permanente_extra": 1.5,
+      "variavel": 2.5,
+      "paredes": [],
+      "borda_livre": null,
+      "cargas_concentradas": [],
+      "descricao": "",
+      "tipo": "macica",
+      "perfil": "",
+      "direcao": "a"
+    },
+    {
+      "nome": "L9.COB",
+      "a": 1.0999999999999996,
+      "b": 4.800000000000001,
+      "h": 12.0,
+      "destino": "balanco",
+      "x": 4.1,
+      "y": 9.1,
+      "orientacao": "X",
+      "bordos": [
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L8.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "engastado",
+          "grau": 1.5,
+          "vizinha": "L5.COB",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "livre",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 20.0,
+          "h_viga": 40.0
+        },
+        {
+          "vinculo": "livre",
+          "grau": 1.5,
+          "vizinha": "",
+          "t": 20.0,
+          "h_viga": 40.0
+        }
+      ],
+      "revestimento": 0.0,
+      "reboco": 0.0,
+      "enchimento": 0.0,
+      "permanente_extra": 1.5,
+      "variavel": 2.5,
+      "paredes": [],
+      "borda_livre": null,
+      "cargas_concentradas": [],
+      "descricao": "",
+      "tipo": "macica",
+      "perfil": "",
+      "direcao": "a"
+    }
+  ],
+  "continuidades": [
+    {
+      "laje_a": "L1.COB",
+      "bordo_a": 4,
+      "laje_b": "L2.COB",
+      "bordo_b": 1,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L1.COB",
+      "bordo_a": 3,
+      "laje_b": "L4.COB",
+      "bordo_b": 2,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L2.COB",
+      "bordo_a": 3,
+      "laje_b": "L3.COB",
+      "bordo_b": 2,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L2.COB",
+      "bordo_a": 4,
+      "laje_b": "L5.COB",
+      "bordo_b": 2,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L3.COB",
+      "bordo_a": 3,
+      "laje_b": "L6.COB",
+      "bordo_b": 1,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L3.COB",
+      "bordo_a": 4,
+      "laje_b": "L7.COB",
+      "bordo_b": 2,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L4.COB",
+      "bordo_a": 3,
+      "laje_b": "L5.COB",
+      "bordo_b": 1,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L4.COB",
+      "bordo_a": 4,
+      "laje_b": "L8.COB",
+      "bordo_b": 2,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L5.COB",
+      "bordo_a": 3,
+      "laje_b": "L6.COB",
+      "bordo_b": 2,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L5.COB",
+      "bordo_a": 4,
+      "laje_b": "L9.COB",
+      "bordo_b": 2,
+      "parcial_a": false,
+      "parcial_b": false
+    },
+    {
+      "laje_a": "L8.COB",
+      "bordo_a": 3,
+      "laje_b": "L9.COB",
+      "bordo_b": 1,
+      "parcial_a": false,
+      "parcial_b": false
+    }
+  ],
+  "concreto": {
+    "fck": 30.0,
+    "gamma_c": 1.4,
+    "agregado": "granito",
+    "peso_especifico": 25.0
+  },
+  "aco": {
+    "categoria": "CA-50",
+    "gamma_s": 1.15,
+    "Es": 210000.0
+  },
+  "ambiente": {
+    "caa": "II",
+    "cobrimento": null,
+    "face_superior_revestida": true,
+    "controle_rigoroso": false
+  },
+  "config": {
+    "gamma_g": 1.4,
+    "gamma_q": 1.4,
+    "psi_0": 0.5,
+    "psi_1": 0.4,
+    "psi_2": 0.3,
+    "fator_fluencia": 2.32,
+    "divisor_flecha": 250,
+    "divisor_flecha_balanco": 125,
+    "compatibilizacao": "maior",
+    "iteracoes_compatibilizacao": 40,
+    "tolerancia_compatibilizacao": 0.005,
+    "razao_minima_borda_vao": 1.5,
+    "verificar_cisalhamento": true,
+    "espacamento_maximo_principal": 20.0,
+    "espacamento_maximo_distribuicao": 33.0,
+    "espacamento_minimo": 7.5,
+    "bitola_minima_positiva": 4.2,
+    "bitola_minima_negativa": 5.0,
+    "bitola_desejada_minima": 0.0,
+    "bitola_desejada_maxima": 0.0,
+    "bitolas_disponiveis": [],
+    "bitolas_impostas": {},
+    "predimensionar_espessura": false,
+    "espessura_maxima": 30.0,
+    "arredondar_momento_apoio": false,
+    "metodo_esforcos": "charneiras",
+    "mef_elemento": 0.125,
+    "mef_k": 1.0,
+    "mef_mxyc": false,
+    "mef_delta": 1.0,
+    "mef_zona_canto": 0.2,
+    "armadura_canto": true,
+    "mef_alternancia": false,
+    "comprimento_comercial_barra": 1200.0
+  },
+  "trelicadas": [],
+  "alveolares": [],
+  "nervuradas_uni": [],
+  "nervuradas_bi": []
+}

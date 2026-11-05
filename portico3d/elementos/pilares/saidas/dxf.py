@@ -16,6 +16,7 @@ from ezdxf.enums import TextEntityAlignment
 from ..core import geometria as geo
 from ..core.dimensionar import ResultadoPilar
 from ..core.materiais import massa_linear
+from ..core.formato import num
 
 #: Cor ACI do amarelo, usada em textos e cotas.
 AMARELO = 2
@@ -56,6 +57,10 @@ def _preparar(doc) -> None:
             tipo = "CONTINUOUS"
         doc.layers.add(name=nome, color=cor, linetype=tipo,
                        lineweight=espessura)
+    # Fonte TrueType: o txt.shx do estilo Standard não tem "ø" nem "²", e o
+    # AutoCAD mostra "?" no lugar.
+    if "PILARES" not in doc.styles:
+        doc.styles.add("PILARES", font="arial.ttf")
     if "PILARES" not in doc.dimstyles:
         estilo = doc.dimstyles.add("PILARES")
         estilo.dxf.dimtxt = 2.5
@@ -67,13 +72,15 @@ def _preparar(doc) -> None:
         estilo.dxf.dimclrd = AMARELO
         estilo.dxf.dimclre = AMARELO
         estilo.dxf.dimclrt = AMARELO
+        estilo.dxf.dimtxsty = "PILARES"
 
 
 def _texto(msp, texto: str, x: float, y: float, altura: float = ALTURA_TEXTO,
            camada: str = "TEXTO", ancora: str = "left",
            rotacao: float = 0.0) -> None:
     ent = msp.add_text(texto, height=altura,
-                       dxfattribs={"layer": camada, "rotation": rotacao})
+                       dxfattribs={"layer": camada, "rotation": rotacao,
+                                   "style": "PILARES"})
     ent.set_placement((x, y),
                       align=_ALINHAMENTO.get(ancora,
                                              TextEntityAlignment.LEFT))
@@ -125,10 +132,20 @@ def _secao(msp, res: ResultadoPilar, dx: float, dy: float) -> None:
             pts = [(x + dx, y + dy) for x, y in linha]
             pts.append(pts[0])
             msp.add_lwpolyline(pts, dxfattribs={"layer": "ESTRIBO"})
+        if arr is not None and arr.n_internas > 0:
+            from ..core.arranjo import linha_do_furo
+            tipo, furo = linha_do_furo(secao, recuo)
+            if tipo == "circulo":
+                msp.add_circle((dx, dy), furo / 2.0,
+                               dxfattribs={"layer": "ESTRIBO"})
+            else:
+                pts = [(x + dx, y + dy) for x, y in furo]
+                pts.append(pts[0])
+                msp.add_lwpolyline(pts, dxfattribs={"layer": "ESTRIBO"})
 
     if arr is not None:
         for b in arr.barras:
-            msp.add_circle((b.x + dx, b.y + dy), arr.phi / 20.0,
+            msp.add_circle((b.x + dx, b.y + dy), b.phi / 20.0,
                            dxfattribs={"layer": "ARMADURA"})
         _grampos_dxf(msp, res, dx, dy)
 
@@ -141,17 +158,17 @@ def _secao(msp, res: ResultadoPilar, dx: float, dy: float) -> None:
     msp.add_line((dx, y0 - 4 + dy), (dx, y1 + 4 + dy),
                  dxfattribs={"layer": "EIXO"})
 
-    _texto(msp, f"{p.nome} — SEÇÃO {secao.descricao()}", dx, y1 + dy + 8.0,
+    _texto(msp, f"{p.nome} - SEÇÃO {secao.descricao()}", dx, y1 + dy + 8.0,
            ALTURA_TITULO, ancora="center")
     rotulos = []
     if arr is not None:
-        rotulos.append(f"N1 — {arr.n_barras} ø{arr.phi:g} c/ face")
+        rotulos.append(f"N1 - {arr.descricao_bitolas()}")
     if est is not None:
-        rotulos.append(f"N2 — estribo ø{est.phi:g} c/{est.s:g}")
+        rotulos.append(f"N2 - estribo ø{num(est.phi)} c/{num(est.s)}")
         if est.n_suplementares:
-            rotulos.append(f"N3 — {est.n_suplementares} grampo(s) "
-                           f"ø{est.phi:g} c/{est.s:g}")
-    rotulos.append(f"cobrimento {_cobrimento(res):g} cm "
+            rotulos.append(f"N3 - {est.n_suplementares} grampo(s) "
+                           f"ø{num(est.phi)} c/{num(est.s)}")
+    rotulos.append(f"cobrimento {num(_cobrimento(res))} cm "
                    f"(CAA {p.ambiente.caa})")
     for i, t in enumerate(rotulos):
         _texto(msp, t, x0 + dx, y0 + dy - 16.0 - i * 4.0)
@@ -159,24 +176,19 @@ def _secao(msp, res: ResultadoPilar, dx: float, dy: float) -> None:
 
 def _grampos_dxf(msp, res: ResultadoPilar, dx: float, dy: float) -> None:
     est, arr = res.estribos, res.arranjo
-    if est is None or arr is None or not est.n_suplementares:
+    if est is None or arr is None or not (est.n_suplementares
+                                           or est.grampos_internos):
         return
     secao = res.pilar.secao
     if secao.tipo != "retangular":
+        from ..core.estribos import posicoes_grampos
+        for (x0, y0), (x1, y1) in posicoes_grampos(res.pilar, arr, est):
+            msp.add_line((x0 + dx, y0 + dy), (x1 + dx, y1 + dy),
+                         dxfattribs={"layer": "GRAMPO"})
         return
-    lx = secao.hx / 2.0 - arr.recuo
-    ly = secao.hy / 2.0 - arr.recuo
-    interiores_x = sorted({round(b.x, 4) for b in arr.barras
-                           if abs(abs(b.y) - ly) < 1e-3
-                           and abs(abs(b.x) - lx) > 1e-3})
-    interiores_y = sorted({round(b.y, 4) for b in arr.barras
-                           if abs(abs(b.x) - lx) < 1e-3
-                           and abs(abs(b.y) - ly) > 1e-3})
-    for x in interiores_x[:est.suplementares_x]:
-        msp.add_line((x + dx, -ly + dy), (x + dx, ly + dy),
-                     dxfattribs={"layer": "GRAMPO"})
-    for y in interiores_y[:est.suplementares_y]:
-        msp.add_line((-lx + dx, y + dy), (lx + dx, y + dy),
+    from ..core.estribos import grampos_retangular
+    for (x0, y0), (x1, y1) in grampos_retangular(secao, arr, est.phi):
+        msp.add_line((x0 + dx, y0 + dy), (x1 + dx, y1 + dy),
                      dxfattribs={"layer": "GRAMPO"})
 
 
@@ -206,13 +218,13 @@ def _elevacao(msp, res: ResultadoPilar, dx: float, dy: float) -> None:
             y = min(i * est.s, L)
             msp.add_line((dx + c, dy + y), (dx + b - c, dy + y),
                          dxfattribs={"layer": "ESTRIBO"})
-        _texto(msp, f"{est.niveis} N2 ø{est.phi:g} c/{est.s:g}",
+        _texto(msp, f"{est.niveis} N2 ø{num(est.phi)} c/{num(est.s)}",
                dx + b + 6.0, dy + L / 2.0)
     if anc is not None:
-        _texto(msp, f"espera l0c = {anc.l0c:.0f}", dx + b + 6.0,
+        _texto(msp, f"espera {anc.simbolo} = {num(anc.l0c, 0)}", dx + b + 6.0,
                dy + L + anc.l0c / 2.0)
     _cota(msp, (dx, dy), (dx, dy + L), -10.0, vertical=True)
-    _texto(msp, f"{p.nome} — ELEVAÇÃO DO LANCE", dx + b / 2.0,
+    _texto(msp, f"{p.nome} - ELEVAÇÃO DO LANCE", dx + b / 2.0,
            dy + L + (anc.l0c if anc else 0.0) + 10.0, ALTURA_TITULO,
            ancora="center")
 
@@ -229,23 +241,24 @@ def _tabela(msp, res: ResultadoPilar, dx: float, dy: float) -> None:
     comprimento = p.lance.altura + (anc.l0c if anc else 0.0)
     linhas = [["POS", "BITOLA", "QUANT", "COMPR (cm)", "TOTAL (cm)",
                "MASSA (kg)"]]
-    linhas.append(["N1", f"ø{arr.phi:g}", str(arr.n_barras),
-                   f"{comprimento:.0f}",
-                   f"{arr.n_barras * comprimento:.0f}",
-                   f"{arr.massa(comprimento):.1f}"])
+    for k, (f, q) in enumerate(arr.por_bitola().items()):
+        linhas.append([f"N1{chr(ord('a') + k)}" if len(arr.por_bitola()) > 1
+                       else "N1", f"ø{num(f)}", str(q), f"{num(comprimento, 0)}",
+                       f"{num(q * comprimento, 0)}",
+                       f"{num(massa_linear(f) * q * comprimento / 100.0, 1)}"])
     if est is not None:
         total = est.niveis * est.comprimento
-        linhas.append(["N2", f"ø{est.phi:g}", str(est.niveis),
-                       f"{est.comprimento:.0f}", f"{total:.0f}",
-                       f"{massa_linear(est.phi) * total / 100.0:.1f}"])
+        linhas.append(["N2", f"ø{num(est.phi)}", str(est.niveis),
+                       f"{num(est.comprimento, 0)}", f"{num(total, 0)}",
+                       f"{num(massa_linear(est.phi) * total / 100.0, 1)}"])
         if est.n_suplementares:
             q = est.niveis * est.n_suplementares
             tot = q * est.comprimento_suplementar
-            linhas.append(["N3", f"ø{est.phi:g}", str(q),
-                           f"{est.comprimento_suplementar:.0f}",
-                           f"{tot:.0f}",
-                           f"{massa_linear(est.phi) * tot / 100.0:.1f}"])
-    linhas.append(["", "", "", "", "TOTAL", f"{res.massa_total:.1f}"])
+            linhas.append(["N3", f"ø{num(est.phi)}", str(q),
+                           f"{num(est.comprimento_suplementar, 0)}",
+                           f"{num(tot, 0)}",
+                           f"{num(massa_linear(est.phi) * tot / 100.0, 1)}"])
+    linhas.append(["", "", "", "", "TOTAL", f"{num(res.massa_total, 1)}"])
 
     larguras = [8.0, 12.0, 12.0, 18.0, 18.0, 18.0]
     altura = 6.0
@@ -307,19 +320,19 @@ def _quadro_projeto(msp, res_projeto, dx: float, dy: float) -> None:
                "AÇO (kg)"]]
     for q in Q.itens:
         linhas.append([q.nome, q.secao, q.concreto,
-                       f"{q.volume_concreto:.3f}", f"{q.area_formas:.2f}",
-                       f"{q.massa_aco:.1f}"])
+                       f"{num(q.volume_concreto, 3)}", f"{num(q.area_formas, 2)}",
+                       f"{num(q.massa_aco, 1)}"])
     linhas.append(["TOTAL", f"{len(Q.itens)} lance(s)", "",
-                   f"{Q.volume_concreto:.3f}", f"{Q.area_formas:.2f}",
-                   f"{Q.massa_aco:.1f}"])
+                   f"{num(Q.volume_concreto, 3)}", f"{num(Q.area_formas, 2)}",
+                   f"{num(Q.massa_aco, 1)}"])
     for phi, massa in Q.aco_por_bitola.items():
-        linhas.append(["", f"aço ø{phi:g} mm", "", "", "",
-                       f"{massa:.1f}"])
+        linhas.append(["", f"aço ø{num(phi)} mm", "", "", "",
+                       f"{num(massa, 1)}"])
 
     larguras = [14.0, 46.0, 14.0, 18.0, 22.0, 18.0]
     altura = 6.0
     largura = sum(larguras)
-    _texto(msp, f"QUADRO DE QUANTIDADES — {res_projeto.projeto.nome}",
+    _texto(msp, f"QUADRO DE QUANTIDADES - {res_projeto.projeto.nome}",
            dx + largura / 2.0, dy + altura + 4.0, ALTURA_TITULO,
            ancora="center")
     for i, linha in enumerate(linhas):

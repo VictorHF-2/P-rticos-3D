@@ -51,6 +51,12 @@ class Projeto:
     vigas: list = field(default_factory=list)
     lajes: list = field(default_factory=list)
     estabilidade: list = field(default_factory=list)
+    #: Como a 2ª ordem global entrou em cada combinação ELU (15.7).
+    segunda_ordem: list = field(default_factory=list)
+    #: A continuidade dos pilares entre lances e os nós viga–pilar
+    #: (``compatibilizacao``).
+    prumadas: list = field(default_factory=list)
+    nos: list = field(default_factory=list)
     avisos: list = field(default_factory=list)
 
     # -- vereditos ---------------------------------------------------------
@@ -65,8 +71,7 @@ class Projeto:
 
     @property
     def pavimentos_aprovados(self) -> list:
-        return [v for v in self.lajes
-                if v.passou and not list(v.resultado.erros)]
+        return [v for v in self.lajes if v.aprovado]
 
     @property
     def fecha(self) -> bool:
@@ -108,8 +113,8 @@ def calcular(modelo: Modelo, fck: float | None = None,
     dependem dela — os pilares para os esforços do lance, as vigas para o
     confronto com o que o motor delas calculou, e as lajes só indiretamente.
     """
-    from .core.combinacoes import resolver_combinacoes
     from .core.envoltoria import envoltoria
+    from .core.segunda_ordem_global import resultados_para_dimensionamento
     from .core.estabilidade import gama_z
     from .core.nbr6118 import acoes_do_modelo, combinacoes_elu, validar_acoes
     from .dimensionamento import (verificar_lajes, verificar_pilares,
@@ -121,7 +126,10 @@ def calcular(modelo: Modelo, fck: float | None = None,
         acoes = acoes_do_modelo(modelo)
         validar_acoes(modelo, acoes)
         projeto.combinacoes = combinacoes_elu(acoes)
-        projeto.resultados = resolver_combinacoes(modelo, projeto.combinacoes)
+        # Já com a 2ª ordem global (0,95·γz ou P-Δ, 15.7): é o que os
+        # pilares e as vigas recebem.
+        projeto.resultados, projeto.segunda_ordem = \
+            resultados_para_dimensionamento(modelo, projeto.combinacoes)
         projeto.envoltorias = envoltoria(modelo, projeto.resultados)
     except ErroDeModelo as erro:
         projeto.avisos.append(
@@ -162,6 +170,13 @@ def calcular(modelo: Modelo, fck: float | None = None,
         projeto.lajes = verificar_lajes(modelo, pasta_desenhos, fck)
     except ErroDeModelo as erro:
         projeto.avisos.append(f"lajes: {erro}")
+
+    from .compatibilizacao import nos_viga_pilar, prumadas
+    try:
+        projeto.prumadas = prumadas(modelo, projeto.pilares)
+        projeto.nos = nos_viga_pilar(modelo, projeto.vigas)
+    except (ErroDeModelo, KeyError, ValueError) as erro:
+        projeto.avisos.append(f"compatibilização: {erro}")
 
     for v in projeto.vigas:
         projeto.avisos.extend(v.avisos)

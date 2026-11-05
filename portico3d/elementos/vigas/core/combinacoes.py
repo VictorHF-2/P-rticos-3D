@@ -176,16 +176,39 @@ def redistribuir(sol: Solicitacao, viga: Viga, delta: float) -> Solicitacao:
             dM[k] = Mk * (delta - 1.0)     # variação (positiva) do momento
     if not dM.any():
         return sol
+    # cortante que cada tramo ganha; a reação de um apoio é o que sobra entre o
+    # cortante à direita dele e o cortante à esquerda. Sem atualizá-las, a
+    # tabela de reações e o arredondamento do diagrama sobre o apoio (14.6.3,
+    # que usa a reação) liam os valores de antes da redistribuição
+    # a grade tem **dois** pontos na abscissa de cada apoio interno (o cortante
+    # à esquerda e à direita dele). O momento é contínuo: recebe o ajuste uma
+    # vez, por interpolação. O cortante é de cada lado: o ponto da esquerda é
+    # do tramo da esquerda, o da direita é do da direita. Somar por máscara de
+    # abscissa dava o ajuste duas vezes ao momento do eixo e anulava o do
+    # cortante nesses pontos
+    M += np.interp(sol.x, xs, dM)
+    dV = np.zeros(len(viga.tramos))
+    esquerda_de = {}                       # índice do ponto à esquerda do apoio
+    direita_de = {}                        # índice do ponto à direita do apoio
+    for k, xk in enumerate(xs):
+        ids = np.flatnonzero(np.isclose(sol.x, xk, atol=1e-9))
+        if ids.size:
+            esquerda_de[k], direita_de[k] = int(ids[0]), int(ids[-1])
     for i in range(len(viga.tramos)):
-        a, b = xs[i], xs[i + 1]
-        L = b - a
-        mask = (sol.x >= a - 1e-9) & (sol.x <= b + 1e-9)
-        t = (sol.x[mask] - a) / L
-        M[mask] += dM[i] * (1.0 - t) + dM[i + 1] * t
-        V[mask] += (dM[i + 1] - dM[i]) / L
+        L = xs[i + 1] - xs[i]
+        dV[i] = (dM[i + 1] - dM[i]) / L
+        if i in direita_de and (i + 1) in esquerda_de:
+            V[direita_de[i]:esquerda_de[i + 1] + 1] += dV[i]
+    reacoes = np.array(sol.reacoes, dtype=float)
+    for k in range(len(viga.apoios)):
+        direita = dV[k] if k < len(viga.tramos) else 0.0
+        esquerda = dV[k - 1] if k > 0 else 0.0
+        reacoes[k] += direita - esquerda
+    momentos_apoio = np.array(sol.momentos_apoio, dtype=float)
+    momentos_apoio += dM
     return Solicitacao(nome=sol.nome + " [redistribuído]", x=sol.x, V=V, M=M,
-                       flecha=sol.flecha, reacoes=sol.reacoes,
-                       momentos_apoio=sol.momentos_apoio)
+                       flecha=sol.flecha, reacoes=reacoes,
+                       momentos_apoio=momentos_apoio)
 
 
 def calcular(estrutura: Estrutura, combs: list[Combinacao] | None = None,
@@ -258,11 +281,51 @@ class MomentoProjeto:
     trecho: int = -1
 
 
-def momentos_de_projeto(viga: Viga, env: Envoltoria) -> list[MomentoProjeto]:
+def momento_arredondado(viga: Viga, sols: list[Solicitacao],
+                        k: int) -> tuple[float, float, float]:
+    """Momento negativo do apoio ``k`` com o diagrama arredondado (14.6.3).
+
+    O item 14.6.3 e a Figura 14.6 permitem arredondar o pico do diagrama de
+    momentos sobre o apoio: ``ΔM = R·t/8``, com ``R`` a reação do apoio e ``t``
+    a largura dele (a parábola que substitui o pico). Aplica-se **combinação por
+    combinação** -- a reação que reduz o pico é a da mesma combinação que o
+    produziu, e não a maior de todas -- e o momento de projeto é o mais
+    negativo entre os arredondados. Reação negativa (apoio que levanta) não
+    reduz nada.
+
+    Devolve ``(M de projeto, ΔM aplicado, reação da combinação que governa)``.
+    Não é a "redução à face": a face daria ``R·t/4``, o dobro, e a norma não a
+    prevê (o 14.6.2.1 trata de trechos rígidos).
+    """
+    xs = viga.x_apoios
+    t = viga.apoios[k].largura / 100.0                       # m
+    meia = t / 2.0
+    melhor = None
+    for s in sols:
+        mask = (s.x >= xs[k] - meia - 1e-9) & (s.x <= xs[k] + meia + 1e-9)
+        pico = float(s.M[mask].min()) if mask.any() else float(
+            np.interp(xs[k], s.x, s.M))
+        if pico >= 0.0:
+            continue
+        R = max(float(s.reacoes[k]), 0.0)
+        # o arredondamento não vira momento positivo: se ΔM passa do pico, o
+        # apoio fica sem momento negativo e sem armadura de topo
+        M = min(pico + R * t / 8.0, 0.0)
+        if melhor is None or M < melhor[0]:
+            melhor = (M, M - pico, R)
+    # nenhuma combinação com momento negativo: nada a dimensionar
+    return melhor if melhor is not None else (0.0, 0.0, 0.0)
+
+
+def momentos_de_projeto(viga: Viga, env: Envoltoria,
+                        sols: list[Solicitacao] | None = None
+                        ) -> list[MomentoProjeto]:
     """Momentos de dimensionamento em cada vão e em cada apoio.
 
-    Nos apoios internos aplica-se, quando pedido, a redução do momento à face
-    do pilar (14.6.2.1) e a redistribuição do item 14.6.4.3.
+    Nos apoios internos aplica-se, quando pedido e quando se conhecem as
+    solicitações de cada combinação (``sols``), o arredondamento do diagrama do
+    item 14.6.3 (:func:`momento_arredondado`) e, antes dele, a redistribuição do
+    item 14.6.4.3, que já vem embutida nas solicitações.
     """
     cfg = viga.config
     xs = viga.x_apoios
@@ -288,16 +351,16 @@ def momentos_de_projeto(viga: Viga, env: Envoltoria) -> list[MomentoProjeto]:
         M_eixo, _ = env.extremo_no_intervalo(xa, xb, "M_min")
         M = M_eixo
         obs = []
-        if cfg.momento_face_apoio and ap.largura > 0:
-            faces = [env.em(xa)[1], env.em(xb)[1]]
-            if k == 0:
-                faces = [env.em(xb)[1]]
-            elif k == len(viga.apoios) - 1:
-                faces = [env.em(xa)[1]]
-            M_face = min(faces)
-            if M_face > M:
-                M = M_face
-                obs.append("momento na face do apoio (14.6.2.1)")
+        # só nos apoios internos: num apoio de extremidade o diagrama não
+        # continua do outro lado, e não há pico a arredondar
+        if (cfg.arredondar_momento_apoio and ap.largura > 0
+                and sols and 0 < k < len(viga.apoios) - 1):
+            M_arr, dM, R = momento_arredondado(viga, sols, k)
+            if dM > 1e-9:
+                M = max(M_arr, M_eixo)
+                obs.append(f"diagrama arredondado sobre o apoio (14.6.3): "
+                           f"ΔM = R·t/8 = {R:.1f}·{ap.largura / 100.0:.2f}/8 "
+                           f"= {dM:.2f} kN·m")
         if cfg.redistribuicao < 1.0 and 0 < k < len(viga.apoios) - 1:
             obs.append(f"envoltória já redistribuída (delta = "
                        f"{cfg.redistribuicao:g})")

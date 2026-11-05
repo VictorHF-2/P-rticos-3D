@@ -332,7 +332,7 @@ def _sigma_c_vetorial(c: Concreto, eps) -> "np.ndarray":
     Compressão positiva; tração devolve zero, porque o concreto tracionado
     não entra no ELU de flexão composta.
     """
-    fcd = c.alfa_c * c.fcd_kNcm2
+    fcd = c.fator_pico * c.fcd_kNcm2
     # ``maximum``/``minimum`` em vez de ``clip``: metade do custo de
     # despacho, e esta função roda dezenas de milhares de vezes por
     # lance (ver a nota em green._r).
@@ -345,6 +345,32 @@ def _sigma_s_vetorial(aco: Aco, eps) -> "np.ndarray":
     """Aço elastoplástico perfeito, vetorizado; compressão positiva."""
     return np.sign(eps) * np.minimum(np.abs(eps) * aco.Es_kNcm2 / 1000.0,
                                      aco.fyd_kNcm2)
+
+
+# ---------------------------------------------------------------------------
+# Casca pública das duas leis constitutivas, para quem -- como a vista 3D de
+# fibras (:mod:`pilares.core.fibras`) -- precisa da tensão num ponto ou numa
+# barra sem reabrir a convenção de sinal (compressão positiva, tração do
+# concreto em zero) nem depender de um nome com underscore de outro módulo.
+# ---------------------------------------------------------------------------
+
+def tensao_concreto(concreto: Concreto, eps_mil):
+    """Tensão do concreto, kN/cm², para a deformação ``eps_mil`` (‰).
+
+    Compressão positiva; tração devolve zero (item 8.2.10.1 -- o concreto
+    tracionado não entra no ELU de flexão composta). Aceita escalar ou
+    vetor ``numpy``.
+    """
+    return _sigma_c_vetorial(concreto, eps_mil)
+
+
+def tensao_aco(aco: Aco, eps_mil: float) -> float:
+    """Tensão do aço, kN/cm², para a deformação ``eps_mil`` (‰), escalar.
+
+    Compressão positiva -- um aço tracionado devolve tensão negativa,
+    diferente do concreto, porque é o aço quem resiste à tração.
+    """
+    return _sigma_s(aco, eps_mil)
 
 
 def resultantes(secao: SecaoDiscreta, theta: float, x: float) -> Estado:
@@ -453,6 +479,14 @@ def resolver_x(secao: SecaoDiscreta, theta: float, N_alvo: float
     e_hi = resultantes(secao, theta, hi)
     if N_alvo < e_lo.N - 1e-6 or N_alvo > e_hi.N + 1e-6:
         return None
+    # Domínio 1: entre a tração uniforme (x = 0) e a linha neutra na borda
+    # (x = 0+) há uma família inteira de planos -- retas girando em torno do
+    # polo A -- que o parâmetro x não descreve. Sem ela, um N_alvo nessa faixa
+    # convergia para x -> 0+ e devolvia um estado que não o equilibra, com
+    # MRd superestimado (até 2,5 vezes, numa 30x50 sob tração alta).
+    e_0mais = resultantes(secao, theta, 1e-9 * max(1.0, x_max))
+    if N_alvo < e_0mais.N - 1e-6:
+        return _resolver_dominio_1(secao, theta, N_alvo)
     for _ in range(200):
         meio = (lo + hi) / 2.0
         est = resultantes(secao, theta, meio)
@@ -464,7 +498,43 @@ def resolver_x(secao: SecaoDiscreta, theta: float, N_alvo: float
             hi = meio
         if hi - lo < 1e-10 * max(1.0, x_max):
             break
-    return resultantes(secao, theta, (lo + hi) / 2.0)
+    est = resultantes(secao, theta, (lo + hi) / 2.0)
+    # a bisseção terminou sem fechar o equilíbrio: não há estado, e dizer
+    # que há daria um MRd de um plano que não equilibra N_alvo
+    if abs(est.N - N_alvo) > max(1e-3, abs(N_alvo) * 1e-5):
+        return None
+    return est
+
+
+def _resolver_dominio_1(secao: SecaoDiscreta, theta: float, N_alvo: float
+                        ) -> Estado | None:
+    """Plano do domínio 1 que equilibra ``N_alvo``: barra mais tracionada a
+    10 ‰ (polo A) e a curvatura ``k`` entre 0 (tração uniforme) e
+    ``10/d`` (deformação nula na borda mais comprimida)."""
+    u_min, u_max = secao.extremos(theta)
+    ub = secao.u_barras(theta)
+    u_traz = min(ub) if ub else u_min
+    d = u_max - u_traz
+    if d <= 0:
+        return None
+
+    def estado(k: float) -> Estado:
+        return resultantes_de_plano(secao, theta, Plano(
+            eps_ref=-EPS_S_MAXIMA, k=k, u_ref=u_traz, dominio="1", x=0.0))
+    lo, hi = 0.0, EPS_S_MAXIMA / d
+    for _ in range(200):
+        meio = (lo + hi) / 2.0
+        est = estado(meio)
+        if abs(est.N - N_alvo) <= max(1e-8, abs(N_alvo) * 1e-10):
+            return est
+        if est.N < N_alvo:
+            lo = meio
+        else:
+            hi = meio
+        if hi - lo < 1e-14:
+            break
+    est = estado((lo + hi) / 2.0)
+    return est if abs(est.N - N_alvo) <= max(1e-3, abs(N_alvo) * 1e-5) else None
 
 
 #: Faixa de varredura de ``eps_topo``, ‰, para :func:`resolver_estado`. Bem
@@ -703,7 +773,7 @@ def normal_resistente_maxima(secao: SecaoDiscreta) -> float:
     """``N_Rd`` de compressão centrada, kN.
 
     Sai do plano de deformação uniforme em ``eps_c2`` -- o polo C levado ao
-    limite --, que é onde o concreto atinge ``alfa_c fcd`` e o aço a tensão
+    limite --, que é onde o concreto atinge ``0,85·eta_c·fcd`` e o aço a tensão
     correspondente a ``eps_c2``. Serve de teto do diagrama de interação e da
     verificação de esmagamento.
     """

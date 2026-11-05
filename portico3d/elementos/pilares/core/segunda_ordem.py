@@ -22,8 +22,11 @@ import math
 from dataclasses import dataclass, field
 
 from . import avisos as av
+from . import momento_curvatura as mc
 from .esbeltez import Esbeltez
-from .modelo import PONTOS_VARREDURA_MINIMO, Pilar
+from .modelo import (PONTOS_VARREDURA_MINIMO, THETA1_LOCAL,
+                     THETA1_MAXIMO_LOCAL, Pilar)
+from .formato import num
 
 
 # ---------------------------------------------------------------------------
@@ -44,12 +47,14 @@ class SegundaOrdem:
     metodo: str = "-"                # qual governou
     e_cc: float = 0.0                # cm, excentricidade de fluência
     kappa: float = 0.0               # rigidez adimensional do 15.8.3.3.3
+    EI_sec: float = 0.0              # kN·cm², (EI)sec da Figura 15.1 (15.8.3.3.4)
+    geral: object = None             # metodo_geral.ResultadoGeral (15.8.3.2)
     avisos: list[str] = field(default_factory=list)
 
 
 def forca_normal_adimensional(Nd: float, area: float, fcd_kNcm2: float
                               ) -> float:
-    """``nu = Nd / (Ac fcd)``, adimensional."""
+    """``ν = Nd / (Ac fcd)``, adimensional."""
     denom = area * fcd_kNcm2
     return Nd / denom if denom > 0 else 0.0
 
@@ -96,7 +101,8 @@ def e2_por_rigidez(le: float, h: float, e1: float) -> tuple[float, float]:
 
     É a forma que a planilha de referência usa, e é a implementada aqui: a
     normal sai da conta e o resultado deixa de depender de quantos algarismos
-    ela tem. Devolve ``(e_total, kappa)``.
+    ela tem. Devolve ``(e_total, kappa/nu)`` -- o ``nu`` é aplicado por
+    quem chama, que o conhece.
     """
     if h <= 0:
         return 0.0, 0.0
@@ -110,68 +116,228 @@ def e2_por_rigidez(le: float, h: float, e1: float) -> tuple[float, float]:
     return e_total, kappa
 
 
+def e2_por_diagrama(Nd: float, le: float, EI_sec: float, e1: float
+                    ) -> float:
+    """Excentricidade de 2ª ordem pelo pilar-padrão acoplado a diagramas M,
+    N, 1/r (item 15.8.3.3.4), cm.
+
+    O pilar-padrão (deformada senoidal) dá a flecha ``le²/10 . 1/r`` da
+    curvatura da seção crítica; com a curvatura lida na reta AB da Figura
+    15.1, ``1/r = M_tot/(EI)sec``, o momento total fica
+
+        ``M_tot = alfa_b M1d,A + Nd le²/10 . M_tot/(EI)sec``
+        ``M_tot = alfa_b M1d,A / (1 - Nd le²/(10 (EI)sec))``.
+
+    Na seção retangular isso é a mesma amplificação do 15.8.3.3.3 com
+    ``kappa = (EI)sec/(Ac h² fcd)`` (``lambda² nu/(120 kappa)``, a forma do
+    PCalc, P3); nas demais seções aquela forma traz o ``Ic = Ac h²/12`` do
+    retângulo embutido e a geral, aqui, não. Devolve ``inf`` se
+    ``Nd le²/10 >= (EI)sec`` -- a carga crítica da reta AB foi atingida.
+    """
+    if EI_sec <= 0.0:
+        return float("inf")
+    den = 1.0 - Nd * le * le / (10.0 * EI_sec)
+    if den <= 0.0:
+        return float("inf")
+    return e1 / den - e1
+
+
 def excentricidade_fluencia(pilar: Pilar, direcao: str, e1: float,
                             Ic: float) -> tuple[float, list[str]]:
     """Excentricidade adicional de fluência, cm (item 15.8.4).
 
     ``e_cc = (M_Sg/N_Sg + e_a) [exp(phi N_Sg/(N_e - N_Sg)) - 1]``, com
-    ``N_e = 10 E_ci I_c / le²``. A excentricidade acidental ``e_a`` entra
-    zerada: neste programa a imperfeição geométrica local está coberta pelo
-    momento mínimo do item 11.3.3.4.3, que é comparado com o de primeira
-    ordem em vez de somado a ele, e somá-la aqui seria contá-la duas vezes.
+    ``N_e = 10 E_ci I_c / le²``.
+
+    ``e_a`` é a excentricidade das imperfeições locais da Figura 11.2 -- aqui
+    a falta de retilineidade do lance, ``theta1 . Hi / 2`` com
+    ``theta1 = 1/(100 sqrt(H))`` entre 1/300 e 1/200 (item 11.3.3.4.1). Ela **entra** na fórmula: o momento mínimo do item
+    11.3.3.4.3 substitui a imperfeição no momento de 1ª ordem, mas a
+    ``e_a`` do 15.8.4 está dentro do fator de amplificação da fluência e o
+    mínimo não a alcança. (Até a R04 ela entrava zerada.)
+
+    ``M_Sg/N_Sg``: com ``Msg_sobre_Md`` informado, ``e1 . (Msg/Md)/(Nsg/Nd)``;
+    deixado em zero, o ``e1`` de cálculo -- a mesma parcela para momento e
+    normal, que é o lado seguro quando o momento tem parcela variável maior.
     """
     avisos: list[str] = []
     cfg = pilar.config
     le = pilar.le(direcao)
-    Nsg = abs(pilar.Nd) * cfg.Nsg_sobre_Nd
+    # N_Sg é da combinação quase permanente: sem gamma_n (que só majora os
+    # esforços finais de cálculo)
+    Nsg = abs(pilar.Nd) / pilar.gamma_n * cfg.Nsg_sobre_Nd
     Ne = 10.0 * (pilar.concreto.Eci / 10.0) * Ic / (le * le)   # kN
     if Ne <= Nsg:
         avisos.append(av.erro(
-            f"Fluência em {direcao}: a carga de flambagem N_e = {Ne:.0f} kN "
-            f"não supera a normal quase permanente N_Sg = {Nsg:.0f} kN. A "
+            f"Fluência em {direcao}: a carga de flambagem N_e = {num(Ne, 0)} kN "
+            f"não supera a normal quase permanente N_Sg = {num(Nsg, 0)} kN. A "
             f"expressão do item 15.8.4 diverge, o que é a própria peça "
             f"dizendo que instabiliza sob carga de longa duração."))
         return 0.0, avisos
     fator = math.exp(pilar.phi_fluencia * Nsg / (Ne - Nsg)) - 1.0
-    return abs(e1) * fator, avisos
+    razao = (cfg.Msg_sobre_Md / cfg.Nsg_sobre_Nd
+             if cfg.Msg_sobre_Md > 0 and cfg.Nsg_sobre_Nd > 0 else 1.0)
+    e_sg = abs(e1) * razao
+    return (e_sg + excentricidade_acidental_local(pilar)) * fator, avisos
 
 
-def analisar(pilar: Pilar, esb: Esbeltez) -> SegundaOrdem:
-    """Segunda ordem local na direção de ``esb``."""
+def theta1_local(altura_cm: float) -> float:
+    """Desaprumo das imperfeições locais, rad (item 11.3.3.4.1):
+    ``theta1 = 1/(100 sqrt(H))``, H em metros, com ``1/300 <= theta1 <=
+    1/200``. O 1/300 fixo, usado até aqui, só vale a partir de 9 m: num
+    lance de 3 m o teto 1/200 governa e a e_a sai 50 % maior."""
+    H = altura_cm / 100.0
+    bruto = 1.0 / (100.0 * math.sqrt(H)) if H > 0 else THETA1_MAXIMO_LOCAL
+    return min(max(bruto, THETA1_LOCAL), THETA1_MAXIMO_LOCAL)
+
+
+def excentricidade_acidental_local(pilar: Pilar) -> float:
+    """``e_a`` da falta de retilineidade do lance, cm: ``theta1 . Hi / 2``
+    (Figura 11.2-b)."""
+    return theta1_local(pilar.lance.altura) * pilar.lance.altura / 2.0
+
+
+def metodo_efetivo(pilar: Pilar) -> str:
+    """O método de 2ª ordem que de fato roda. ``menor`` compara curvatura e
+    rigidez kappa, mas a rigidez (15.8.3.3.3) só vale em seção retangular:
+    nas demais o ``menor`` fica com a curvatura, em vez de reprovar o lance
+    com o método padrão do programa (achado nos pilares circulares das OAE
+    da ERS-531)."""
+    metodo = pilar.config.metodo_2a_ordem
+    if metodo == "menor" and pilar.secao.tipo in ("L", "T", "U"):
+        # Nas L, T e U nenhum arranjo é simétrico nos dois eixos, e os
+        # métodos aproximados (curvatura e rigidez) exigem armadura
+        # simétrica (15.8.3.3.2 e 15.8.3.3.3): o "menor" reprovava esses
+        # lances sempre. Fica o pilar-padrão acoplado a diagramas M, N, 1/r,
+        # que não tem essa restrição.
+        return "diagrama"
+    if metodo == "menor" and pilar.secao.tipo != "retangular":
+        return "curvatura"
+    return metodo
+
+
+def analisar(pilar: Pilar, esb: Esbeltez, secao=None) -> SegundaOrdem:
+    """Segunda ordem local na direção de ``esb``.
+
+    ``secao`` (uma :class:`seccional.SecaoDiscreta` com as barras) só é usada
+    pelos métodos que dependem da armadura (``METODOS_COM_SECAO``); sem ela,
+    esses métodos devolvem a estimativa pela curvatura aproximada.
+    """
     avisos: list[str] = []
     prop = pilar.secao.propriedades()
     Nd = pilar.Nd
-    nu = forca_normal_adimensional(abs(Nd), prop.area,
+    # gamma_n (13.2.3) majora os esforços **finais** (nota da Tabela 13.1):
+    # a 2ª ordem se calcula sem ele e o resultado é que se multiplica. Como
+    # ``M = Nd e`` já usa o Nd final, basta tirar gamma_n do nu que entra na
+    # curvatura -- a rigidez kappa não depende de Nd. Até a R05 o nu levava
+    # gamma_n, e a curvatura menor dava até 11 % a menos de 2ª ordem.
+    nu = forca_normal_adimensional(abs(Nd) / pilar.gamma_n, prop.area,
                                    pilar.concreto.fcd_kNcm2)
 
     if not esb.considerar_2a_ordem or Nd <= 0.0:
         motivo = ("a normal é de tração" if Nd <= 0.0
-                  else f"lambda = {esb.lam:.1f} <= lambda_1 = {esb.lam_1:.1f}")
+                  else f"λ = {num(esb.lam, 1)} <= λ₁ = {num(esb.lam_1, 1)}")
         return SegundaOrdem(direcao=esb.direcao, aplicavel=False, nu=nu,
                             metodo=f"dispensada ({motivo})", avisos=avisos)
 
     h = esb.h
-    # e1 que entra na segunda ordem já é o de projeto: alfa_b vezes o de
-    # primeira ordem, com o piso do momento mínimo (item 15.8.3.3.2).
-    e1 = esb.alfa_b * max(abs(esb.e1), esb.e1_min)
+    # e1 que entra na segunda ordem: alfa_b vezes o de primeira ordem -- o
+    # mesmo que a situação do meio carrega. Com o mínimo como piso
+    # ("planilha"), o piso entra aqui também; com a envoltória mínima (padrão
+    # da 2026, 11.3.3.4.3 e Figura 15.2), não: o mínimo é verificado à parte,
+    # com a própria 2ª ordem (``dimensionar._momento_total_minimo``). Até a
+    # R05 o piso entrava sempre, e a rigidez kappa -- a única cujo e2 depende
+    # de e1 -- saía até 40 % maior que o PCalc com o momento real abaixo do
+    # mínimo, somada a um alfa_b e1 sem piso na situação do meio.
+    if pilar.config.momento_minimo_metodo == "planilha":
+        e1 = esb.alfa_b * max(abs(esb.e1), esb.e1_min)
+    else:
+        e1 = esb.alfa_b * abs(esb.e1)
+
+    cfg = pilar.config
+    metodo_cfg = metodo_efetivo(pilar)
+    # Fluência (15.8.4): e_cc "se soma à excentricidade e1" e a 2ª ordem é
+    # calculada "como se fosse um efeito imediato" -- entra no e1 que os
+    # métodos de amplificação (rigidez, M-N-1/r) amplificam. Até a R05 ela
+    # se somava ao e2, sem amplificação. Com ``fluencia_metodo =
+    # "diagrama"`` e um método de curva, a fluência vai na curva, não aqui.
+    e_cc = 0.0
+    fator_fluencia = 1.0
+    pela_curva = (cfg.considerar_fluencia and cfg.fluencia_metodo == "diagrama"
+                  and metodo_cfg == "diagrama")
+    if cfg.considerar_fluencia and not pela_curva:
+        Ic = prop.Ix if esb.direcao == "x" else prop.Iy
+        e_cc, av_flu = excentricidade_fluencia(pilar, esb.direcao, e1, Ic)
+        avisos += av_flu
+    elif pela_curva:
+        fator_fluencia = 1.0 + pilar.phi_fluencia * cfg.Nsg_sobre_Nd
+    elif esb.fluencia_obrigatoria:
+        avisos.append(av.erro(
+            f"Esbeltez em {esb.direcao} = {num(esb.lam, 0)} > 90 e a fluência "
+            f"está desligada nos critérios; o item 15.8.4 a torna "
+            f"obrigatória nessa faixa."))
+    e1_amp = e1 + e_cc
 
     curv = curvatura_aproximada(h, nu)
     e2_curv = e2_por_curvatura(esb.le, curv)
-    e_total_rig, kappa = e2_por_rigidez(esb.le, h, e1)
-    e2_rig = max(e_total_rig - e1, 0.0)
+    e_total_rig, kappa = e2_por_rigidez(esb.le, h, e1_amp)
+    # O item 15.8.3.3.3 escreve kappa = 32 (1 + 5 M_tot/(h Nd)) nu; a
+    # quadrática em excentricidades elimina o nu, mas o kappa que vai para a
+    # auditoria é o da norma.
+    kappa *= nu
+    e2_rig = max(e_total_rig - e1_amp, 0.0)
 
-    cfg = pilar.config
-    if cfg.metodo_2a_ordem == "curvatura":
+    EI_sec = 0.0
+    if metodo_cfg == "curvatura":
         e2, metodo = e2_curv, "pilar-padrão com curvatura aproximada"
-    elif cfg.metodo_2a_ordem == "rigidez":
+    elif metodo_cfg == "rigidez":
         e2, metodo = e2_rig, "pilar-padrão com rigidez aproximada"
+    elif metodo_cfg == "diagrama":
+        if secao is None:
+            e2, metodo = e2_curv, ("estimativa pela curvatura aproximada "
+                                   "(ainda sem armadura)")
+        else:
+            # gamma_n fora, como no nu da curvatura: esforços finais
+            Nd_2 = abs(Nd) / pilar.gamma_n
+            sentido = esb.sinal_A
+            rs = mc.rigidez_secante(secao, Nd_2, esb.direcao, sentido,
+                                    fator_fluencia=fator_fluencia)
+            if rs is None:
+                e2 = float("inf")
+                avisos.append(av.erro(
+                    f"Diagrama M, N, 1/r em {esb.direcao}: a curva de "
+                    f"deformabilidade (1,10 fcd, Nd/γf3) não alcança "
+                    f"MRd/γf3 dentro dos limites de deformação -- a "
+                    f"rigidez secante (EI)sec da Figura 15.1 não fica "
+                    f"definida."))
+            else:
+                EI_sec = rs.EI
+                e2 = e2_por_diagrama(Nd_2, esb.le, rs.EI, e1_amp)
+                if not math.isfinite(e2):
+                    avisos.append(av.erro(
+                        f"Diagrama M, N, 1/r em {esb.direcao}: Nd le²/10 = "
+                        f"{num(Nd_2 * esb.le ** 2 / 10, sig=3)} kN·cm² atinge a "
+                        f"rigidez secante (EI)sec = {num(rs.EI, sig=3)} kN·cm² -- "
+                        f"instabilidade."))
+            metodo = "pilar-padrão acoplado a diagramas M, N, 1/r"
+        if esb.lam > 140.0:
+            avisos.append(av.erro(
+                f"O pilar-padrão acoplado a diagramas M, N, 1/r (15.8.3.3.4) "
+                f"vale até λ = 140; em {esb.direcao} λ = "
+                f"{num(esb.lam, 0)}."))
     else:
         if e2_curv <= e2_rig:
             e2, metodo = e2_curv, "curvatura aproximada (menor dos dois)"
         else:
             e2, metodo = e2_rig, "rigidez aproximada (menor dos dois)"
 
-    if (cfg.metodo_2a_ordem in ("rigidez", "menor")
+    if (cfg.metodo_2a_ordem == "menor"
+            and pilar.secao.tipo != "retangular"):
+        avisos.append(av.construtivo(
+            f"Método 'menor dos dois': a rigidez aproximada (15.8.3.3.3) só "
+            f"vale para seção retangular, e a seção é {pilar.secao.tipo}; "
+            f"adotada a curvatura aproximada (15.8.3.3.2)."))
+    if (metodo_cfg == "rigidez"
             and pilar.secao.tipo != "retangular"):
         avisos.append(av.erro(
             f"O método da rigidez aproximada (15.8.3.3.3) só vale para seção "
@@ -183,21 +349,15 @@ def analisar(pilar: Pilar, esb: Esbeltez) -> SegundaOrdem:
             f"raiz real: a peça não encontra equilíbrio de segunda ordem com "
             f"essa esbeltez e essa excentricidade de primeira ordem."))
 
-    e_cc = 0.0
-    if cfg.considerar_fluencia:
-        Ic = prop.Ix if esb.direcao == "x" else prop.Iy
-        e_cc, av_flu = excentricidade_fluencia(pilar, esb.direcao, e1, Ic)
-        avisos += av_flu
-    elif esb.fluencia_obrigatoria:
-        avisos.append(av.erro(
-            f"Esbeltez em {esb.direcao} = {esb.lam:.0f} > 90 e a fluência "
-            f"está desligada nos critérios; o item 15.8.4 a torna "
-            f"obrigatória nessa faixa."))
+    # gamma_n1 (15.8.1, lambda > 140) majora os efeitos locais de 2ª ordem --
+    # só a parcela de 2ª ordem, não o momento de 1ª. Até a R05 era calculado
+    # e anunciado num aviso, mas não entrava em conta nenhuma.
+    e2 *= esb.gamma_n1
 
     return SegundaOrdem(direcao=esb.direcao, aplicavel=True, nu=nu,
                         curvatura=curv, e2_curvatura=e2_curv,
                         e2_rigidez=e2_rig, e2=e2 + e_cc, metodo=metodo,
-                        e_cc=e_cc, kappa=kappa, avisos=avisos)
+                        e_cc=e_cc, kappa=kappa, EI_sec=EI_sec, avisos=avisos)
 
 
 # ---------------------------------------------------------------------------
@@ -259,8 +419,11 @@ def situacoes(pilar: Pilar, esb: dict[str, Esbeltez],
     normativo (padrão) e, desligado, reproduz a planilha.
     """
     Nd = pilar.Nd
-    ex1 = esb["x"].e1
-    ey1 = esb["y"].e1
+    # e1 com o sentido físico de M1d,A: com armadura assimétrica o sentido
+    # decide qual face do diagrama resiste (até a R05 o meio e o extremo
+    # ficavam sempre do lado positivo dos eixos)
+    ex1 = esb["x"].e1 * esb["x"].sinal_A
+    ey1 = esb["y"].e1 * esb["y"].sinal_A
     abx, aby = esb["x"].alfa_b, esb["y"].alfa_b
     e2x, e2y = so["x"].e2, so["y"].e2
     combinar = pilar.config.combinar_2a_ordem_biaxial
@@ -273,19 +436,29 @@ def situacoes(pilar: Pilar, esb: dict[str, Esbeltez],
         Mx_min = esb["x"].M1d_min
         My_min = esb["y"].M1d_min
 
-        def s(nome, posicao, ex, ey, descricao) -> Situacao:
+        bidirecional = pilar.config.piso_minimo_bidirecional
+
+        def s(nome, posicao, ex, ey, descricao, piso) -> Situacao:
+            """``piso``: a direção cujo mínimo a situação impõe. Com o piso
+            bidirecional (o critério antigo) ele vale nas duas direções em
+            toda situação; com o unidirecional, só na direção da situação --
+            "numa direção de cada vez"."""
+            px = bidirecional or piso == "x"
+            py = bidirecional or piso == "y"
             return Situacao(nome=nome, posicao=posicao, ex=ex, ey=ey,
-                            Mx=momento_com_piso(Nd, ex, Mx_min),
-                            My=momento_com_piso(Nd, ey, My_min),
-                            descricao=descricao)
+                            Mx=momento_com_piso(Nd, ex, Mx_min if px else 0.0),
+                            My=momento_com_piso(Nd, ey, My_min if py else 0.0),
+                            descricao=descricao + (
+                                " (piso nas duas direções)" if bidirecional
+                                else ""))
 
         lista = [
             s("Situação 1", "extremo",
               math.copysign(max(abs(ex1), exmin), ex1 or 1.0), ey1,
-              "extremo do pilar, mínimo imposto em x"),
+              "extremo do pilar, mínimo imposto em x", "x"),
             s("Situação 2", "extremo",
               ex1, math.copysign(max(abs(ey1), eymin), ey1 or 1.0),
-              "extremo do pilar, mínimo imposto em y"),
+              "extremo do pilar, mínimo imposto em y", "y"),
         ]
 
         ex_meio = math.copysign(abx * max(abs(ex1), exmin), ex1 or 1.0)
@@ -297,20 +470,20 @@ def situacoes(pilar: Pilar, esb: dict[str, Esbeltez],
             lista.append(s("Situação 3", "meio",
                            ex_meio + sx * e2x, ey_livre + sy * e2y,
                            "meio do pilar, mínimo imposto em x, 2ª ordem "
-                           "nas duas direções"))
+                           "nas duas direções", "x"))
             lista.append(s("Situação 4", "meio",
                            ex_livre + sx * e2x, ey_meio + sy * e2y,
                            "meio do pilar, mínimo imposto em y, 2ª ordem "
-                           "nas duas direções"))
+                           "nas duas direções", "y"))
         else:
             lista.append(s("Situação 3", "meio", ex_meio + sx * e2x,
                            ey_livre,
                            "meio do pilar, mínimo e 2ª ordem em x (critério "
-                           "da planilha)"))
+                           "da planilha)", "x"))
             lista.append(s("Situação 4", "meio", ex_livre,
                            ey_meio + sy * e2y,
                            "meio do pilar, mínimo e 2ª ordem em y (critério "
-                           "da planilha)"))
+                           "da planilha)", "y"))
         return lista
 
     # "envoltoria": sem piso -- o momento mínimo é verificado à parte.
@@ -367,10 +540,15 @@ def situacoes_altura(pilar: Pilar, esb: dict[str, Esbeltez],
       quando uma direção precisa e a outra não, que é o caso em que os três
       pontos deixam de enxergar o pior ponto real.
 
-    Em pilar biapoiado (``le = altura``) o seno de cada direção com 2ª ordem
-    vale zero nos dois extremos e máximo no meio físico; em balanço
-    (``le = 2 altura``), o lance físico é a metade inferior dessa senoide --
-    zero no engaste, máximo na ponta livre.
+    A forma da 2ª ordem ao longo do lance: no biapoiado, ``sen(pi z/L)`` --
+    zero nos dois extremos, máximo no meio físico do lance (com ``le < L``,
+    das vigas que encurtam o le, o seno em ``le`` saía negativo perto do topo
+    e a 2ª ordem **subtraía**); em balanço, ``cos(pi z/(2 L))`` -- máximo no
+    engaste e zero na ponta livre, que é onde o momento de 2ª ordem
+    ``N (a(L) - a(z))`` do pilar-padrão em balanço vale o quê. Até aqui o
+    balanço usava ``sen(pi z/le)``, a deformada, que põe o pico na ponta
+    livre: os pares (Mx, My) combinados com a outra direção saíam trocados.
+    É a mesma forma do método geral (``metodo_geral``).
 
     Todos os pontos entram com ``posicao="meio"``: os extremos exatos
     (momento real, sem 2ª ordem) já são verificados à parte, em
@@ -389,7 +567,8 @@ def situacoes_altura(pilar: Pilar, esb: dict[str, Esbeltez],
     # A base vem pelo conversor de convenção do modelo, não crua.
     Mx_topo, Mx_base = f * pilar.esforcos.Mx_topo, f * pilar.momento_base("x")
     My_topo, My_base = f * pilar.esforcos.My_topo, f * pilar.momento_base("y")
-    ex1, ey1 = esb["x"].e1, esb["y"].e1
+    ex1 = esb["x"].e1 * esb["x"].sinal_A
+    ey1 = esb["y"].e1 * esb["y"].sinal_A
     abx, aby = esb["x"].alfa_b, esb["y"].alfa_b
     sx = 1.0 if (ex1 or 1.0) >= 0 else -1.0
     sy = 1.0 if (ey1 or 1.0) >= 0 else -1.0
@@ -397,26 +576,29 @@ def situacoes_altura(pilar: Pilar, esb: dict[str, Esbeltez],
     e2y_max = so["y"].e2 if esb["y"].considerar_2a_ordem else 0.0
     le_x, le_y = esb["x"].le, esb["y"].le
 
+    def forma(direcao: str, t: float) -> float:
+        if esb[direcao].vinculo == 3:                      # balanço
+            return math.cos(math.pi * t / 2.0)
+        return math.sin(math.pi * t)
+
     lista: list[Situacao] = []
     for i in range(n):
         z = altura * i / (n - 1)
         t = z / altura if altura > 0 else 0.0
         if esb["x"].considerar_2a_ordem:
             Mx = (abx * Nd * ex1
-                  + (Nd * sx * e2x_max * math.sin(math.pi * z / le_x)
-                     if le_x > 0 else 0.0))
+                  + (Nd * sx * e2x_max * forma("x", t) if le_x > 0 else 0.0))
         else:
             Mx = Mx_base + (Mx_topo - Mx_base) * t
         if esb["y"].considerar_2a_ordem:
             My = (aby * Nd * ey1
-                  + (Nd * sy * e2y_max * math.sin(math.pi * z / le_y)
-                     if le_y > 0 else 0.0))
+                  + (Nd * sy * e2y_max * forma("y", t) if le_y > 0 else 0.0))
         else:
             My = My_base + (My_topo - My_base) * t
         ex = Mx / Nd if abs(Nd) > 1e-9 else 0.0
         ey = My / Nd if abs(Nd) > 1e-9 else 0.0
         lista.append(Situacao(
-            nome=f"z = {z:.0f} cm", posicao="meio", ex=ex, ey=ey,
+            nome=f"z = {num(z, 0)} cm", posicao="meio", ex=ex, ey=ey,
             Mx=Mx, My=My,
             descricao=f"varredura contínua, ponto {i + 1}/{n} da altura"))
     return lista

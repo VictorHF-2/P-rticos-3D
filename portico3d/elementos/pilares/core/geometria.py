@@ -405,3 +405,31 @@ def recortar_semiplano(pol: Poligono, cos_t: float, sin_t: float,
             t = d0 / (d0 - d1)
             saida.append((x0 + t * (x1 - x0), y0 + t * (y1 - y0)))
     return saida
+
+
+def ponto_no_poligono(x: float, y: float, poligono: Poligono) -> bool:
+    """Ponto dentro do polígono (regra par-ímpar)."""
+    dentro = False
+    n = len(poligono)
+    for i in range(n):
+        x0, y0 = poligono[i]
+        x1, y1 = poligono[(i + 1) % n]
+        if (y0 > y) != (y1 > y):
+            xc = x0 + (y - y0) * (x1 - x0) / (y1 - y0)
+            if x < xc:
+                dentro = not dentro
+    return dentro
+
+
+def distancia_ao_contorno(x: float, y: float, poligono: Poligono) -> float:
+    """Menor distância do ponto aos lados do polígono, cm."""
+    melhor = float("inf")
+    n = len(poligono)
+    for i in range(n):
+        x0, y0 = poligono[i]
+        x1, y1 = poligono[(i + 1) % n]
+        dx, dy = x1 - x0, y1 - y0
+        L2 = dx * dx + dy * dy
+        t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((x - x0) * dx + (y - y0) * dy) / L2))
+        melhor = min(melhor, math.hypot(x - (x0 + t * dx), y - (y0 + t * dy)))
+    return melhor

@@ -1,0 +1,323 @@
+{
+  "nome": "V11",
+  "tramos": [
+    {
+      "L": 4.0,
+      "secao": {
+        "bw": 20.0,
+        "h": 55.00000000000001,
+        "tipo": "T",
+        "bf": 80.0,
+        "hf": 12.0
+      },
+      "nome": "",
+      "mudancas": [],
+      "alinhamento": ""
+    },
+    {
+      "L": 5.0,
+      "secao": {
+        "bw": 20.0,
+        "h": 55.00000000000001,
+        "tipo": "T",
+        "bf": 80.0,
+        "hf": 12.0
+      },
+      "nome": "",
+      "mudancas": [],
+      "alinhamento": ""
+    },
+    {
+      "L": 3.5,
+      "secao": {
+        "bw": 20.0,
+        "h": 55.00000000000001,
+        "tipo": "T",
+        "bf": 46.25,
+        "hf": 12.0
+      },
+      "nome": "",
+      "mudancas": [],
+      "alinhamento": ""
+    }
+  ],
+  "apoios": [
+    {
+      "tipo": "mola",
+      "largura": 20.0,
+      "k_mola": 19085.088225957796,
+      "nome": "",
+      "altura_pilar_abaixo": 272.5
+    },
+    {
+      "tipo": "mola",
+      "largura": 50.0,
+      "k_mola": 149102.25176529525,
+      "nome": "",
+      "altura_pilar_abaixo": 272.5
+    },
+    {
+      "tipo": "mola",
+      "largura": 50.0,
+      "k_mola": 149102.25176529525,
+      "nome": "",
+      "altura_pilar_abaixo": 272.5
+    },
+    {
+      "tipo": "mola",
+      "largura": 20.0,
+      "k_mola": 19085.088225957796,
+      "nome": "",
+      "altura_pilar_abaixo": 272.5
+    }
+  ],
+  "distribuidas": [
+    {
+      "q1": 2.7500000000000004,
+      "q2": 2.7500000000000004,
+      "x_ini": 0.0,
+      "x_fim": 3.915,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.1"
+    },
+    {
+      "q1": -0.0,
+      "q2": 9.195402298850574,
+      "x_ini": 0.0,
+      "x_fim": 1.9575,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.1"
+    },
+    {
+      "q1": 9.195402298850574,
+      "q2": -0.0,
+      "x_ini": 1.9575,
+      "x_fim": 3.915,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.1"
+    },
+    {
+      "q1": 5.517241379310344,
+      "q2": 5.517241379310344,
+      "x_ini": 0.0,
+      "x_fim": 3.915,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.1"
+    },
+    {
+      "q1": 2.7500000000000004,
+      "q2": 2.7500000000000004,
+      "x_ini": 4.085,
+      "x_fim": 8.915,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.2"
+    },
+    {
+      "q1": -0.0,
+      "q2": 9.540636042402827,
+      "x_ini": 4.085,
+      "x_fim": 6.085,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.2"
+    },
+    {
+      "q1": 9.540636042402827,
+      "q2": 9.540636042402827,
+      "x_ini": 6.085,
+      "x_fim": 6.915,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.2"
+    },
+    {
+      "q1": 9.540636042402827,
+      "q2": -0.0,
+      "x_ini": 6.915,
+      "x_fim": 8.915,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.2"
+    },
+    {
+      "q1": 5.590062111801242,
+      "q2": 5.590062111801242,
+      "x_ini": 4.085,
+      "x_fim": 8.915,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.2"
+    },
+    {
+      "q1": 2.7500000000000004,
+      "q2": 2.7500000000000004,
+      "x_ini": 9.085,
+      "x_fim": 12.5,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.3"
+    },
+    {
+      "q1": -0.0,
+      "q2": 8.071010248901903,
+      "x_ini": 9.085,
+      "x_fim": 10.7925,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.3"
+    },
+    {
+      "q1": 8.071010248901903,
+      "q2": -0.0,
+      "x_ini": 10.7925,
+      "x_fim": 12.5,
+      "acao": "g",
+      "descricao": "G · V3.2PAV.3"
+    },
+    {
+      "q1": -0.0,
+      "q2": 4.086845466155811,
+      "x_ini": 0.0,
+      "x_fim": 1.9575,
+      "acao": "q",
+      "descricao": "Q · V3.2PAV.1"
+    },
+    {
+      "q1": 4.086845466155811,
+      "q2": -0.0,
+      "x_ini": 1.9575,
+      "x_fim": 3.915,
+      "acao": "q",
+      "descricao": "Q · V3.2PAV.1"
+    },
+    {
+      "q1": 3.0651340996168583,
+      "q2": 3.0651340996168583,
+      "x_ini": 0.0,
+      "x_fim": 3.915,
+      "acao": "q",
+      "descricao": "Q · V3.2PAV.1"
+    },
+    {
+      "q1": -0.0,
+      "q2": 4.240282685512367,
+      "x_ini": 4.085,
+      "x_fim": 6.085,
+      "acao": "q",
+      "descricao": "Q · V3.2PAV.2"
+    },
+    {
+      "q1": 4.240282685512367,
+      "q2": 4.240282685512367,
+      "x_ini": 6.085,
+      "x_fim": 6.915,
+      "acao": "q",
+      "descricao": "Q · V3.2PAV.2"
+    },
+    {
+      "q1": 4.240282685512367,
+      "q2": -0.0,
+      "x_ini": 6.915,
+      "x_fim": 8.915,
+      "acao": "q",
+      "descricao": "Q · V3.2PAV.2"
+    },
+    {
+      "q1": 3.1055900621118013,
+      "q2": 3.1055900621118013,
+      "x_ini": 4.085,
+      "x_fim": 8.915,
+      "acao": "q",
+      "descricao": "Q · V3.2PAV.2"
+    },
+    {
+      "q1": -0.0,
+      "q2": 3.5871156661786237,
+      "x_ini": 9.085,
+      "x_fim": 10.7925,
+      "acao": "q",
+      "descricao": "Q · V3.2PAV.3"
+    },
+    {
+      "q1": 3.5871156661786237,
+      "q2": -0.0,
+      "x_ini": 10.7925,
+      "x_fim": 12.5,
+      "acao": "q",
+      "descricao": "Q · V3.2PAV.3"
+    }
+  ],
+  "concentradas": [],
+  "momentos": [],
+  "torcores": [],
+  "concreto": {
+    "fck": 30.0,
+    "gamma_c": 1.4,
+    "agregado": "granito",
+    "peso_especifico": 25.0
+  },
+  "aco": {
+    "categoria": "CA-50",
+    "gamma_s": 1.15,
+    "Es": 210000.0
+  },
+  "aco_estribo": {
+    "categoria": "CA-60",
+    "gamma_s": 1.15,
+    "Es": 210000.0
+  },
+  "ambiente": {
+    "caa": "II",
+    "cobrimento": null,
+    "controle_rigoroso": false
+  },
+  "config": {
+    "gamma_g": 1.4,
+    "gamma_g_fav": 1.0,
+    "gamma_q": 1.4,
+    "psi0": 0.5,
+    "psi1": 0.4,
+    "psi2": 0.3,
+    "alternancia": true,
+    "peso_proprio": false,
+    "redistribuicao": 1.0,
+    "arredondar_momento_apoio": true,
+    "engastamento_minimo_extremidade": 0.0,
+    "modelo_cisalhamento": 1,
+    "theta": 45.0,
+    "alpha_estribo": 90.0,
+    "reducao_apoio": true,
+    "considerar_torcao": true,
+    "torcao_equilibrio": true,
+    "verificar_els": true,
+    "verificar_fadiga": false,
+    "psi1_fadiga": 0.0,
+    "tempo_meses": 70.0,
+    "t0_meses": 1.0,
+    "limite_flecha_visual": 250.0,
+    "limite_flecha_alvenaria": 500.0,
+    "parede_apoiada": "alvenaria",
+    "verificar_vibracao": false,
+    "limite_flecha_vibracao": 350.0,
+    "verificar_piso_plano": false,
+    "limite_piso_total": 350.0,
+    "limite_piso_apos": 600.0,
+    "phi_estribo": 5.0,
+    "n_ramos": 2,
+    "phi_longitudinal": 0.0,
+    "bitolas_flexao": {},
+    "bitolas_estribo": {},
+    "bitolas_pele": {},
+    "uniformizar_estribos": true,
+    "usar_grampos": true,
+    "phi_grampo": 6.3,
+    "phi_max_longitudinal": 25.0,
+    "phi_min_longitudinal": 8.0,
+    "d_agregado": 1.9,
+    "pernas_amarracao_estribo": 10.0,
+    "gancho_estribo": true,
+    "ancoragem_gancho": true,
+    "tipo_gancho": "Ângulo reto",
+    "ganchos_flexao": {},
+    "reduzir_ancoragem_com_gancho": false,
+    "largura_reduzida_excepcional": false
+  },
+  "projeto": "",
+  "observacoes": "",
+  "_formato": "viga-nbr6118",
+  "_versao": 1
+}

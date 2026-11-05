@@ -301,6 +301,9 @@ def figura_secoes(res: ResultadoViga, posicoes_m=None) -> Figure:
                             edgecolor=estilo.CINZA, lw=1.2, zorder=1)
         _desenhar_polilinha(ax, sec.estribo, 1.0, facecolor="none",
                             edgecolor=estilo.VERDE, lw=1.4, zorder=2)
+        if sec.estribo_mesa is not None:
+            _desenhar_polilinha(ax, sec.estribo_mesa, 1.0, facecolor="none",
+                                edgecolor=estilo.VERDE, lw=1.4, zorder=2)
         for c in sec.barras:
             cor = CORES.get(c.camada, estilo.VERMELHO)
             ax.add_patch(Circle(c.centro, max(c.raio, 0.28), facecolor=cor,

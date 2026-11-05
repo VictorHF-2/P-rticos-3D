@@ -28,14 +28,34 @@ excluí-las por simetria quebraria o programa na primeira exportação:
     **arquivos de dados** — os modelos .xml do docx e os recursos do ezdxf —,
     que precisam ser coletados à mão: sem eles o pacote monta e só falha na
     hora de gravar, que é o pior momento para descobrir.
+
+``pyvista``/``vtkmodules``/``pyvistaqt``/``qtpy``
+    o motor de desenho 3D (revisão R03, substituiu o matplotlib). Sem hook
+    dedicado do PyInstaller para o PyVista — a receita é ``collect_all()``
+    nos quatro pacotes, a mesma que Consolos R03 e Lajes R06 já usam: VTK
+    importa centenas de submódulos por nome em tempo de execução, e a
+    varredura estática não os descobre sozinha. Diferente do Lajes (que só
+    abre janela nativa e dispensa ``pyvistaqt``/``qtpy``), aqui as seis
+    vistas embutidas exigem os dois — só a vista de Armadura é janela nativa.
+    ``QT_API=pyside6`` precisa estar fixado **antes** de importar
+    ``pyvistaqt`` (feito em ``portico3d/ui/vista3d.py``), senão o ``qtpy``
+    sondaria bindings que não foram empacotados.
 """
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 RAIZ = Path(SPECPATH)
 ICONE = RAIZ / "portico3d" / "recursos" / "porticos.ico"
+
+_pacotes_pv = ("pyvista", "vtkmodules", "pyvistaqt", "qtpy")
+_dados_pv, _binarios_pv, _ocultos_pv = [], [], []
+for _pacote in _pacotes_pv:
+    _d, _b, _o = collect_all(_pacote)
+    _dados_pv += _d
+    _binarios_pv += _b
+    _ocultos_pv += _o
 
 # Recursos próprios e os exemplos. Os exemplos vão junto porque abrir um
 # modelo pronto é a primeira coisa que se faz num programa destes — sem eles,
@@ -47,21 +67,19 @@ recursos = [
     (str(RAIZ / "exemplos"), "exemplos"),
     (str(RAIZ / "LEIAME.md"), "."),
     (str(RAIZ / "requirements.txt"), "."),
-]
+] + _dados_pv
 
 # Dados das bibliotecas de saída: modelos do Word, recursos do CAD.
 recursos += collect_data_files("docx")
 recursos += collect_data_files("ezdxf")
 
 ocultos = [
-    "matplotlib.backends.backend_qtagg",
-    "matplotlib.backends.backend_agg",
     "openpyxl.cell._writer",
     # o Importer do ezdxf é carregado só na hora de montar a prancha única
     "ezdxf.addons",
     "ezdxf.addons.importer",
     "ezdxf.bbox",
-]
+] + _ocultos_pv
 # O ezdxf resolve parte dos seus módulos por nome, em tempo de execução.
 ocultos += collect_submodules("ezdxf.render")
 
@@ -89,10 +107,8 @@ excluir = [
     "pip",
     "pandas",
     "PIL.ImageQt",
-    "matplotlib.backends.backend_webagg",
-    "matplotlib.backends.backend_tkagg",
-    "matplotlib.backends._tkagg",
-    # Módulos Qt fora de uso: só QtCore, QtGui e QtWidgets entram.
+    # Módulos Qt fora de uso: só QtCore, QtGui e QtWidgets entram (mais o que
+    # o pyvistaqt exige, coletado acima por collect_all).
     "PySide6.Qt3DAnimation",
     "PySide6.Qt3DCore",
     "PySide6.Qt3DExtras",
@@ -137,7 +153,7 @@ excluir = [
 analise = Analysis(
     ["main.py"],
     pathex=[str(RAIZ)],
-    binaries=[],
+    binaries=_binarios_pv,
     datas=recursos,
     hiddenimports=ocultos,
     excludes=excluir,

@@ -83,6 +83,70 @@ def _titulo(msp, texto: str, x: float, y: float, altura: float = 25.0) -> None:
                  ).set_placement((x, y))
 
 
+def montar_coluna_de_vigas(alvo, msp, pares, x_coluna: float = 0.0,
+                          y_inicial: float = 0.0) -> tuple[float, int]:
+    """Desenha uma viga por vaga, empilhadas numa coluna só.
+
+    ``pares`` é uma lista de ``(nome, resultado)`` já dimensionados. Cada
+    viga entra **sem PNG** — só o DXF é gerado, que é a metade do desenho que
+    esta prancha de fato usa; a elevação e as seções em imagem, que ninguém
+    abre aqui, custariam o render inteiro do matplotlib à toa.
+
+    Não se acrescenta título aqui: o próprio DXF de cada viga já nasce com
+    ``VIGA <nome> - DETALHAMENTO`` escrito no topo do desenho (ver
+    ``vigas.saidas.dxf``), e repetir o rótulo por cima só duplicaria o texto.
+
+    Devolve ``(largura_usada, quantidade desenhada)``, para quem chama saber
+    onde termina a coluna e se algo saiu.
+    """
+    from ..dimensionamento import gravar_desenhos
+
+    largura_maxima = 0.0
+    y = y_inicial
+    desenhadas = 0
+    with tempfile.TemporaryDirectory(prefix="portico3d_vigas_") as temporaria:
+        temp = Path(temporaria)
+        for nome, resultado in pares:
+            try:
+                arquivos = gravar_desenhos(resultado, nome, temp,
+                                           com_dxf=True, com_png=False)
+            except Exception:                            # noqa: BLE001
+                continue
+            fontes = [Path(a) for a in arquivos
+                      if isinstance(a, str) and a.endswith(".dxf")]
+            if not fontes or not fontes[0].exists():
+                continue
+            tamanho = _importar(alvo, msp, fontes[0], x_coluna, y)
+            if tamanho is None:
+                continue
+            largura_maxima = max(largura_maxima, tamanho[0])
+            y -= tamanho[1] + FOLGA
+            desenhadas += 1
+    return largura_maxima, desenhadas
+
+
+def montar_dxf_de_vigas(pares, caminho) -> Path:
+    """A prancha só das vigas: uma coluna, lado a lado, tudo num DXF só.
+
+    É o que a ação "Dimensionar vigas" grava — um arquivo, e não um par de
+    PNG mais um DXF por viga. Mais rápido de gerar, porque poupa o desenho em
+    matplotlib que ninguém abria, e mais fácil de levar à obra: uma prancha
+    em vez de N arquivos soltos.
+    """
+    import ezdxf
+
+    alvo = ezdxf.new("R2010", setup=True)
+    if "PRANCHA" not in alvo.layers:
+        alvo.layers.add("PRANCHA", color=7)
+    msp = alvo.modelspace()
+    montar_coluna_de_vigas(alvo, msp, pares)
+
+    destino = Path(caminho)
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    alvo.saveas(str(destino))
+    return destino
+
+
 def _quadro(msp, projeto, x: float, y: float) -> None:
     """O quadro de quantidades, desenhado na própria prancha.
 
@@ -121,7 +185,7 @@ def gerar(projeto, caminho) -> Path:
         raise RuntimeError("para gravar a prancha é preciso o ezdxf: "
                            "py -m pip install ezdxf") from erro
 
-    from ..dimensionamento import gravar_desenhos, gravar_desenhos_de_laje
+    from ..dimensionamento import gravar_desenhos_de_laje
 
     alvo = ezdxf.new("R2010", setup=True)
     for camada, cor in (("PRANCHA", 7), ("QUADRO", 7)):
@@ -134,28 +198,8 @@ def gerar(projeto, caminho) -> Path:
         x_coluna = 0.0
 
         # -- vigas ---------------------------------------------------------
-        largura_maxima = 0.0
-        y = 0.0
-        desenhadas = 0
-        for v in projeto.vigas:
-            if not v.passou:
-                continue
-            try:
-                arquivos = gravar_desenhos(v.resultado, v.nome, temp / "vigas",
-                                           com_dxf=True)
-            except Exception:                            # noqa: BLE001
-                continue
-            fontes = [Path(a) for a in arquivos
-                      if isinstance(a, str) and a.endswith(".dxf")]
-            if not fontes or not fontes[0].exists():
-                continue
-            _titulo(msp, f"VIGA {v.nome}", x_coluna, y + 40.0)
-            tamanho = _importar(alvo, msp, fontes[0], x_coluna, y)
-            if tamanho is None:
-                continue
-            largura_maxima = max(largura_maxima, tamanho[0])
-            y -= tamanho[1] + FOLGA
-            desenhadas += 1
+        pares = [(v.nome, v.resultado) for v in projeto.vigas if v.passou]
+        largura_maxima, desenhadas = montar_coluna_de_vigas(alvo, msp, pares)
         if desenhadas:
             x_coluna += largura_maxima + FOLGA_COLUNA
 
@@ -163,7 +207,7 @@ def gerar(projeto, caminho) -> Path:
         largura_maxima = 0.0
         y = 0.0
         for v in projeto.lajes:
-            if not v.passou:
+            if not v.passou or v.resultado is None:
                 continue
             try:
                 arquivos = gravar_desenhos_de_laje(

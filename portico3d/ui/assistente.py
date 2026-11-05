@@ -228,9 +228,9 @@ class AssistenteDePortico(QDialog):
             "triangular no lado menor e trapezoidal no maior. O peso próprio "
             "da laje sai da espessura; o das barras, da seção. A carga direta "
             "nas vigas é só a parede.\n\n"
-            "A laje é painel de carga, não elemento de casca: ela não trabalha "
-            "como diafragma, de modo que as prumadas resistem ao vento cada "
-            "uma pela sua rigidez.")
+            "Por padrão a laje é só painel de carga. Como diafragma rígido, ou "
+            "como grelha de barras ligada às vigas, ela entra pelo menu "
+            "Cálculo da janela principal.")
         aviso.setWordWrap(True)
         aviso.setStyleSheet("color: #4a5666; font-size: 9pt;")
 

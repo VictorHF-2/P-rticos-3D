@@ -115,7 +115,8 @@ def armadura_minima(concreto: Concreto, h: float, tipo: str) -> float:
 
 def dimensionar_secao(md: float, h: float, d: float, cobrimento: float,
                       concreto: Concreto, aco: Aco, tipo_minima: str,
-                      rotulo: str = "") -> ResultadoFlexao:
+                      rotulo: str = "", limite_xd: float | None = None
+                      ) -> ResultadoFlexao:
     """Armadura de flexão da faixa de 1 m, para o momento de cálculo dado.
 
     ``md`` em kN·m/m e sempre em módulo -- quem chama sabe de que face é a
@@ -125,7 +126,9 @@ def dimensionar_secao(md: float, h: float, d: float, cobrimento: float,
     res = ResultadoFlexao(rotulo=rotulo, md=abs(md), h=h, d=d,
                           cobrimento=cobrimento, tipo_minima=tipo_minima,
                           rho_min=interpola_rho_min(concreto.fck),
-                          x_sobre_d_limite=concreto.x_sobre_d_limite)
+                          x_sobre_d_limite=(
+                              concreto.x_sobre_d_limite if limite_xd is None
+                              else limite_xd))
     res.As_minima = armadura_minima(concreto, h, tipo_minima)
     res.md_minimo = momento_minimo(concreto, h)
 
@@ -157,10 +160,13 @@ def dimensionar_secao(md: float, h: float, d: float, cobrimento: float,
         res.As_calculada = sigma * lam * b * res.x / aco.fyd_kNcm2
 
     if res.x_sobre_d > res.x_sobre_d_limite + 1e-9:
+        regime = ("em regime rígido-plástico" if limite_xd is None
+                  else "por análise elástica (com a redistribuição "
+                       "adotada)")
         res.erro = (f"x/d = {res.x_sobre_d:.3f} passa do limite de "
                     f"{res.x_sobre_d_limite:.2f} que o item 14.6.4.3 impõe "
-                    f"a quem determina as solicitações em regime "
-                    f"rígido-plástico: engrosse a laje")
+                    f"a quem determina as solicitações {regime}: engrosse "
+                    f"a laje")
 
     if res.As_calculada >= res.As_minima:
         res.As = res.As_calculada

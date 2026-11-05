@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 from . import avisos as av
 from . import geometria as geo
 from .materiais import Aco, Concreto
+from .formato import num
 
 #: Tensão máxima admitida na armadura transversal, MPa (item 17.4.2.2).
 FYWD_MAXIMO = 435.0
@@ -88,6 +89,8 @@ class Cisalhamento:
     s_necessario: float = 0.0    # cm, o que 17.4 exigiria (0 = dispensado)
     tracao_estadio_1: float = 0.0  # MPa, tração na borda, seção em estádio I
     fctk: float = 0.0            # MPa
+    #: Taxa mínima do item 17.4.1.1.1 como Asw/s, cm²/cm (0 = dispensada).
+    Asw_s_min: float = 0.0
     avisos: list[str] = field(default_factory=list)
 
     @property
@@ -118,7 +121,8 @@ class Cisalhamento:
     def ok(self) -> bool:
         return (self.razao_biela <= 1.0 + 1e-6
                 and self.razao_tracao <= 1.0 + 1e-6
-                and (self.s <= self.s_maximo + 1e-9 or self.s_maximo <= 0.0))
+                and (self.s <= self.s_maximo + 1e-9 or self.s_maximo <= 0.0)
+                and self.Asw_s >= self.Asw_s_min - 1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +161,62 @@ def espacamento_maximo(Vd: float, vrd2: float, d: float) -> tuple[float, str]:
     if vrd2 > 0 and Vd > 0.67 * vrd2:
         return min(0.3 * d, 20.0), "0,3 d <= 20 cm (Vd > 0,67 VRd2)"
     return min(0.6 * d, 30.0), "0,6 d <= 30 cm (Vd <= 0,67 VRd2)"
+
+
+def asw_s_minimo(concreto: Concreto, aco: Aco, bw: float) -> float:
+    """Armadura transversal mínima do item 17.4.1.1.1, como Asw/s, cm²/cm.
+
+    ``rho_sw = Asw/(bw s sen a) >= 0,2 fct,m/fywk``, estribo a 90°. Vale
+    sempre que a alínea c) do 17.4.1.1.2 não dispensa a armadura de
+    cisalhamento."""
+    return 0.2 * concreto.fctm / aco.fyk * bw
+
+
+def normal_de_servico(pilar) -> float:
+    """Normal com ``gamma_f = 1``, kN, para o ``M0`` do item 17.4.2.2.
+
+    ``pilar.Nd`` já vem majorada por ``gamma_f`` e por ``gamma_n`` (Tabela
+    13.1); o ``gamma_n`` sai aqui também -- dividir só por 1,4 deixava a
+    normal "de serviço" até 25 % acima numa seção de 14 cm, e com ela M0 e
+    Vc, contra a segurança."""
+    return abs(pilar.Nd) / max(pilar.gamma_n, 1e-9) / GAMMA_F_PADRAO
+
+
+def modulo_tracionado(contornos, I: float, direcao: str) -> float:
+    """Módulo resistente da borda mais afastada do CG na direção, cm³.
+
+    ``I/(h/2)`` só vale na seção simétrica; numa L ou T a borda tracionada
+    pode estar bem mais longe do CG que h/2, e o W1 superestimado aumentava
+    M0 e Vc. Fica a borda mais afastada, que é o pior dos dois sentidos."""
+    eixo = 0 if direcao == "x" else 1
+    area = momento = 0.0
+    for k, pol in enumerate(contornos):
+        a = geo.area_poligono(pol)
+        # o externo soma, os furos subtraem, qualquer que seja a orientação
+        a = abs(a) if k == 0 else -abs(a)
+        cx = sum(p[eixo] for p in pol) / len(pol) if len(pol) else 0.0
+        c = _centroide(pol, eixo) if len(pol) >= 3 else cx
+        area += a
+        momento += a * c
+    if abs(area) < 1e-12:
+        return 0.0
+    cg = momento / area
+    us = [p[eixo] for p in contornos[0]]
+    y_max = max(max(us) - cg, cg - min(us))
+    return I / y_max if y_max > 0 else 0.0
+
+
+def _centroide(pol, eixo: int) -> float:
+    """Coordenada do centroide de um polígono simples na direção ``eixo``."""
+    a2 = s = 0.0
+    n = len(pol)
+    for i in range(n):
+        x0, y0 = pol[i]
+        x1, y1 = pol[(i + 1) % n]
+        cruz = x0 * y1 - x1 * y0
+        a2 += cruz
+        s += ((x0 + x1) if eixo == 0 else (y0 + y1)) * cruz
+    return s / (3.0 * a2) if abs(a2) > 1e-12 else 0.0
 
 
 def espacamento_necessario(Vd: float, vc: float, Asw: float, d: float,
@@ -238,6 +298,15 @@ def altura_util(barras, contornos: list[geo.Poligono], direcao: str) -> float:
     Usa a posição real das barras -- não ``0,9 h`` nem uma camada média. Como
     o pilar inverte o sinal do momento, os dois sentidos são medidos e fica o
     **menor** ``d``, que é o pior caso.
+
+    "Tração" aqui é **toda a metade tracionada** da seção, inclusive as
+    barras intermediárias das faces laterais. Critério conservador, decidido
+    em 05/11/2026: a lógica de viga (programa de Vigas, IPR 751) leva ``d``
+    só até a camada da face tracionada -- ``h - d'`` com uma camada --, e com
+    ela ``VRd2``, ``Vc0`` e ``Vsw`` sairiam maiores (no 60x80 com 20 ø25 do
+    IPR, ``d`` = 55 cm contra 48,2 cm aqui). A norma não define a armadura
+    de tração do pilar em flexão composta; fica a leitura de menos
+    resistência.
     """
     eixo = 0 if direcao == "x" else 1
     coords = [p[eixo] for pol in contornos for p in pol]
@@ -261,8 +330,8 @@ def altura_util(barras, contornos: list[geo.Poligono], direcao: str) -> float:
 # ---------------------------------------------------------------------------
 
 def verificar(pilar, arr, est, secao_discreta,
-              momentos: dict[str, float] | None = None
-              ) -> dict[str, Cisalhamento]:
+              momentos: dict[str, float] | None = None,
+              ln_fora: bool = False) -> dict[str, Cisalhamento]:
     """Verifica as duas direções ao item 17.4, modelo I.
 
     ``momentos`` traz ``MSd,max`` em kN·cm por direção -- o momento de
@@ -278,7 +347,7 @@ def verificar(pilar, arr, est, secao_discreta,
     aco_t = pilar.aco_estribo
     Asw = RAMOS * (math.pi * (est.phi / 10.0) ** 2 / 4.0) if est else 0.0
     s = est.s if est else 0.0
-    N_servico = abs(pilar.Nd) / GAMMA_F_PADRAO
+    N_servico = normal_de_servico(pilar)
 
     saida: dict[str, Cisalhamento] = {}
     for direcao in ("x", "y"):
@@ -300,20 +369,25 @@ def verificar(pilar, arr, est, secao_discreta,
         c.Vc0 = Vc0(pilar.concreto, bw, d)
 
         # W1: módulo resistente da fibra mais tracionada na direção.
-        h = props.hx if direcao == "x" else props.hy
         I = props.Ix if direcao == "x" else props.Iy
-        W1 = I / (h / 2.0) if h > 0 else 0.0
+        W1 = modulo_tracionado(contornos, I, direcao)
         c.MSd_max = abs((momentos or {}).get(direcao, 0.0))
         if c.MSd_max <= 0.0:
-            c.MSd_max = abs(pilar.momento_base(direcao)) * pilar.fator_esforcos
+            c.MSd_max = max(abs(pilar.momento_base(direcao)),
+                            abs(pilar.esforcos.topo(direcao))) \
+                * pilar.fator_esforcos
         c.M0 = (N_servico / Ac) * W1 if Ac > 0 else 0.0
 
         if pilar.Nd > 0.0 and c.MSd_max > 1e-9:
             fator = min(1.0 + c.M0 / c.MSd_max, 2.0)
         elif pilar.Nd > 0.0:
             fator = 2.0            # compressão sem momento: o teto do 17.4.2.2
+        elif ln_fora:
+            # 17.4.2.2-b: "Vc = 0 nos elementos estruturais tracionados
+            # quando a linha neutra se situa fora da seção"
+            fator = 0.0
         else:
-            fator = 1.0            # flexo-tração: Vc = Vc0 (linha neutra na seção)
+            fator = 1.0            # flexo-tração com a linha neutra na seção
         c.Vc = c.Vc0 * fator
 
         c.Asw_s = Asw / s if s > 0 else 0.0
@@ -321,7 +395,8 @@ def verificar(pilar, arr, est, secao_discreta,
         nec = espacamento_necessario(Vd, c.Vc, Asw, d, aco_t)
         c.s_necessario = 0.0 if nec == float("inf") else nec
 
-        tensao = (c.MSd_max / W1 if W1 > 0 else 0.0) - abs(pilar.Nd) / Ac
+        # compressão positiva: a normal de tração SOMA à tração da flexão
+        tensao = (c.MSd_max / W1 if W1 > 0 else 0.0) - pilar.Nd / Ac
         c.tracao_estadio_1 = max(tensao, 0.0) * 10.0     # kN/cm² -> MPa
 
         if Vd <= 1e-9:
@@ -342,52 +417,61 @@ def verificar(pilar, arr, est, secao_discreta,
         motivo = ""
         if not c.dispensa_minima:
             c.s_maximo, motivo = espacamento_maximo(Vd, c.VRd2, d)
+            c.Asw_s_min = asw_s_minimo(pilar.concreto, aco_t, bw)
 
         if secao.tipo != "retangular":
             c.avisos.append(av.construtivo(
                 f"Direção {direcao}: o modelo I do item 17.4.2.2 é escrito "
                 f"para elemento com alma de largura definida. Nesta seção "
-                f"{secao.tipo}, bw = {bw:.1f} cm foi medido como a **menor** "
+                f"{secao.tipo}, bw = {num(bw, 1)} cm foi medido como a **menor** "
                 f"largura de material entre as barras extremas da direção, e "
-                f"d = {d:.1f} cm pela posição real das barras. A extensão do "
+                f"d = {num(d, 1)} cm pela posição real das barras. A extensão do "
                 f"modelo a esta seção é decisão do programa, não da norma."))
 
         if c.razao_biela > 1.0 + 1e-6:
             c.avisos.append(av.erro(
-                f"Direção {direcao}: VSd = {Vd:.1f} kN passa de VRd2 = "
-                f"{c.VRd2:.1f} kN -- ruína da diagonal comprimida de concreto "
+                f"Direção {direcao}: VSd = {num(Vd, 1)} kN passa de VRd2 = "
+                f"{num(c.VRd2, 1)} kN -- ruína da diagonal comprimida de concreto "
                 f"(item 17.4.2.2-a). Nem armadura resolve: é preciso aumentar "
                 f"a seção ou a classe do concreto."))
         if c.razao_tracao > 1.0 + 1e-6:
             c.avisos.append(av.erro(
-                f"Direção {direcao}: VSd = {Vd:.1f} kN passa de VRd3 = Vc + "
-                f"Vsw = {c.Vc:.1f} + {c.Vsw:.1f} = {c.VRd3:.1f} kN (item "
+                f"Direção {direcao}: VSd = {num(Vd, 1)} kN passa de VRd3 = Vc + "
+                f"Vsw = {num(c.Vc, 1)} + {num(c.Vsw, 1)} = {num(c.VRd3, 1)} kN (item "
                 f"17.4.2.2-b). O espaçamento de estribos precisa cair para "
-                f"{c.s_necessario:.1f} cm."))
+                f"{num(c.s_necessario, 1)} cm."))
         if s > c.s_maximo + 1e-9:
             c.avisos.append(av.erro(
-                f"Direção {direcao}: espaçamento de estribos de {s:g} cm "
-                f"acima do máximo de {c.s_maximo:.1f} cm do item 18.3.3.2 "
+                f"Direção {direcao}: espaçamento de estribos de {num(s)} cm "
+                f"acima do máximo de {num(c.s_maximo, 1)} cm do item 18.3.3.2 "
                 f"({motivo}), que passa a valer porque há cortante a "
                 f"resistir."))
+        if c.Asw_s < c.Asw_s_min - 1e-12:
+            c.avisos.append(av.erro(
+                f"Direção {direcao}: Asw/s = {num(c.Asw_s, 4)} cm²/cm abaixo "
+                f"da armadura transversal mínima do item 17.4.1.1.1, "
+                f"0,2 fct,m/fywk · bw = {num(c.Asw_s_min, 4)} cm²/cm, que vale "
+                f"porque a alínea c) do 17.4.1.1.2 não a dispensa. O "
+                f"espaçamento precisa cair para "
+                f"{num(Asw / c.Asw_s_min, 1)} cm."))
         if c.dispensa_minima:
             c.avisos.append(av.construtivo(
-                f"Direção {direcao}: VSd = {Vd:.1f} kN <= Vc = {c.Vc:.1f} kN "
-                f"e a tração na borda em estádio I ({c.tracao_estadio_1:.2f} "
-                f"MPa) não passa de fctk ({c.fctk:.2f} MPa) -- o item "
+                f"Direção {direcao}: VSd = {num(Vd, 1)} kN <= Vc = {num(c.Vc, 1)} kN "
+                f"e a tração na borda em estádio I ({num(c.tracao_estadio_1, 2)} "
+                f"MPa) não passa de fctk ({num(c.fctk, 2)} MPa) -- o item "
                 f"17.4.1.1.2-c) dispensa a armadura transversal mínima de "
                 f"cisalhamento, e o estribo construtivo do 18.4.3 basta."))
         else:
             c.avisos.append(av.construtivo(
                 f"Direção {direcao}: o item 17.4.1.1.2-c) **não** dispensa a "
-                f"armadura de cisalhamento (VSd = {Vd:.1f} kN, Vc = "
-                f"{c.Vc:.1f} kN, tração em estádio I = "
-                f"{c.tracao_estadio_1:.2f} MPa contra fctk = {c.fctk:.2f} "
+                f"armadura de cisalhamento (VSd = {num(Vd, 1)} kN, Vc = "
+                f"{num(c.Vc, 1)} kN, tração em estádio I = "
+                f"{num(c.tracao_estadio_1, 2)} MPa contra fctk = {num(c.fctk, 2)} "
                 f"MPa); o estribo foi verificado pelo item 17.4.2.2."))
             c.avisos.append(av.construtivo(
-                f"Direção {direcao}: M0 = {c.M0 / 100.0:.1f} kN·m calculado "
-                f"com a normal de serviço estimada em Nd/{GAMMA_F_PADRAO:g} = "
-                f"{N_servico:.0f} kN, como o item 17.4.2.2 pede (gamma_f = "
+                f"Direção {direcao}: M0 = {num(c.M0 / 100.0, 1)} kN·m calculado "
+                f"com a normal de serviço estimada em Nd/(γn·{num(GAMMA_F_PADRAO)}) = "
+                f"{num(N_servico, 0)} kN, como o item 17.4.2.2 pede (γf = "
                 f"1,0 na tensão de compressão)."))
         saida[direcao] = c
     return saida

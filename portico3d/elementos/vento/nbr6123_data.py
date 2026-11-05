@@ -459,7 +459,7 @@ TAB36_SUSPENSAS = {
 # Versão da norma usada pelo app (controle de versão)
 # ===========================================================================
 NORMA_VERSAO = "ABNT NBR 6123:2023"
-APP_VERSAO = "2.2 (núcleo + pontes/OAEs + Bloco A/B + correção ℓ1/ℓ2) — ver DOC.txt"
+APP_VERSAO = "2.3 (tema visual + janela adaptável à tela) — ver DOC.txt"
 
 # ===========================================================================
 # Seção 5.5 / Tabela 5 - Mudança de rugosidade do terreno

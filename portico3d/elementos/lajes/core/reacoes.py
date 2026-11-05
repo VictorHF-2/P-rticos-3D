@@ -181,9 +181,14 @@ def calcular(laje: Laje, esforcos, cfg: Config) -> ReacoesLaje:
     do que ela precisa para montar as combinações dela.
     """
     a, b = laje.a_ef, laje.b_ef
+    area = a * b
     g = laje.g_total                       # com as paredes espalhadas
     q = laje.variavel
-    area = a * b
+    # cargas concentradas (R11): espalhadas na área para as reações --
+    # o total chega às vigas, a concentração junto à carga não (aviso)
+    if laje.cargas_concentradas:
+        g += sum(c.g for c in laje.cargas_concentradas) / area
+        q += sum(c.q for c in laje.cargas_concentradas) / area
     res = ReacoesLaje(laje=laje.nome, carga_total=(g + q) * area,
                       carga_total_d=(cfg.gamma_g * g + cfg.gamma_q * q) * area)
 
@@ -199,6 +204,11 @@ def calcular(laje: Laje, esforcos, cfg: Config) -> ReacoesLaje:
             f"{laje.nome}: b/a = {ba:.2f} sai da tabela de Hahn (1,00 a "
             f"2,00); as reações vieram da construção das charneiras a "
             f"45°/60°/90° (14.7.6.1), que é o critério que a tabela tabula.")
+    if laje.cargas_concentradas:
+        res.avisos.append(
+            f"{laje.nome}: as cargas concentradas entraram nas reações "
+            f"espalhadas na laje -- a viga mais próxima da carga recebe "
+            f"mais que isso; confira a viga se a carga for grande.")
     if caso is None:
         res.avisos.append(
             f"{laje.nome}: a laje tem bordo livre, situação sem entrada na "

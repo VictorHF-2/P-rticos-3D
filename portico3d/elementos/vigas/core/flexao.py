@@ -24,7 +24,6 @@ from .materiais import Aco, Concreto, interpola_rho_min
 from .modelo import Secao
 from . import avisos as av
 
-ES_KNCM2 = 21_000.0        # módulo de elasticidade do aço, kN/cm²
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +229,7 @@ def dimensionar(secao: Secao, concreto: Concreto, aco: Aco, M_kNm: float,
     if dupla:
         eps2 = concreto.eps_cu / y * (y - lam * d_linha)
         s2 = math.copysign(fyd, eps2) if abs(eps2) > aco.eps_yd \
-            else ES_KNCM2 * eps2
+            else aco.Es / 10.0 * eps2             # Es do aço, em kN/cm²
         s2_liq = s2 - sig if d_linha <= y else s2
         dM = Md - Md_max
         if abs(s2) < 1e-6:
@@ -272,8 +271,8 @@ def dimensionar(secao: Secao, concreto: Concreto, aco: Aco, M_kNm: float,
         "Md (kN.m)": Md / 100.0,
         "d (cm)": d,
         "d' (cm)": d_linha,
-        "alfa_c.eta_c.fcd (kN/cm²)": sig,
-        "lambda": lam,
+        "αc·ηc·fcd (kN/cm²)": sig,
+        "λ": lam,
         "x_lim/d": x_lim_d_,
         "origem do limite": origem,
         "y_max (cm)": y_max,
@@ -297,11 +296,11 @@ def dimensionar(secao: Secao, concreto: Concreto, aco: Aco, M_kNm: float,
             else "T (y > hf)"
     if dupla:
         memoria.update({
-            "eps'_s": eps2,
-            "sigma'_s (kN/cm²)": s2,
-            "sigma'_s líquida (kN/cm²)": s2_liq,
-            "A's com sigma'_s (cm²)": As_linha_s2,
-            "A's com sigma'_s líquida (cm²)": As_linha_s2l,
+            "ε's": eps2,
+            "σ's (kN/cm²)": s2,
+            "σ's líquida (kN/cm²)": s2_liq,
+            "A's com σ's (cm²)": As_linha_s2,
+            "A's com σ's líquida (cm²)": As_linha_s2l,
         })
 
     return ResultadoFlexao(
@@ -343,53 +342,108 @@ def momento_minimo(secao: Secao, concreto: Concreto, aco: Aco, d: float,
 
 def momento_resistente(secao: Secao, concreto: Concreto, aco: Aco,
                        As: float, d: float, As_linha: float = 0.0,
-                       d_linha: float = 0.0, face: str = "inferior") -> float:
-    """Momento resistente, kN.m, de uma seção com armadura conhecida.
+                       d_linha: float = 0.0, face: str = "inferior",
+                       convencao_sigma2: str = "liquida") -> float:
+    """Momento resistente de cálculo, kN.m, de uma seção com armadura conhecida.
 
-    Usa o mesmo bloco retangular do dimensionamento e resolve o equilíbrio
-    iterativamente, já que a tensão da armadura comprimida depende de x.
+    Resolve o equilíbrio por **compatibilidade de deformações**, em qualquer
+    domínio: a tensão da armadura tracionada é ``Es.eps`` até ``fyd`` e não se
+    supõe que ela escoe. A suposição de escoamento vale nos domínios 2 e 3 e é
+    **contra a segurança** na seção superarmada (domínio 4), onde a armadura não
+    escoa e o momento resistente é menor: nos exemplos do livro de Araújo
+    (seção 15x40, As = 14,07 cm²) a versão antiga dava 159,8 e 138,9 kN.m
+    contra 147,2 e 125,5 kN.m do cálculo completo.
+
+    O concreto é o bloco retangular de profundidade ``y = lambda.x`` com
+    tensão ``sigma_cd`` (já com ``eta_c``); numa seção T com a mesa comprimida,
+    o bloco soma a mesa e a alma. A armadura comprimida segue
+    ``convencao_sigma2``, como em :func:`dimensionar`: ``"liquida"`` desconta o
+    concreto que a barra desloca quando ela está dentro do bloco.
     """
+    return _resolver_secao(secao, concreto, aco, As, d, As_linha, d_linha,
+                           face, convencao_sigma2)[1]
+
+
+def linha_neutra(secao: Secao, concreto: Concreto, aco: Aco, As: float,
+                 d: float, As_linha: float = 0.0, d_linha: float = 0.0,
+                 face: str = "inferior",
+                 convencao_sigma2: str = "liquida") -> float:
+    """Profundidade da linha neutra no ELU da seção **adotada**, cm.
+
+    É o mesmo equilíbrio de :func:`momento_resistente`, com a armadura que a
+    seção tem e não a que o cálculo pediu. É dela que sai a ductilidade real
+    (14.6.4.3): três Ø25 onde bastavam 10,7 cm² aprofundam a linha neutra, e
+    o x/d do As necessário (0,35 na V04 do pacote de conferência) não diz nada
+    sobre os 0,48 da seção sem armadura comprimida.
+    """
+    return _resolver_secao(secao, concreto, aco, As, d, As_linha, d_linha,
+                           face, convencao_sigma2)[0]
+
+
+def _resolver_secao(secao: Secao, concreto: Concreto, aco: Aco, As: float,
+                    d: float, As_linha: float, d_linha: float, face: str,
+                    convencao_sigma2: str) -> tuple[float, float]:
+    """``(x em cm, MRd em kN.m)`` da seção com armadura conhecida."""
     if As <= 0.0:
-        return 0.0
+        return 0.0, 0.0
     sig = concreto.sigma_cd
     fyd = aco.fyd_kNcm2
+    es = aco.Es / 10.0                                  # kN/cm²
     lam = concreto.lambda_
+    ecu = concreto.eps_cu
     mesa_comprimida = (secao.tipo == "T" and face == "inferior") or \
                       (secao.tipo == "T invertida" and face == "superior")
     bf = secao.bf if mesa_comprimida else secao.bw
     hf = secao.hf if mesa_comprimida else 0.0
+    bw = secao.bw
 
-    y = 0.0
-    for _ in range(60):
-        s2 = 0.0
-        if As_linha > 0.0 and y > 0.0:
-            eps2 = concreto.eps_cu / y * (y - lam * d_linha)
-            s2 = math.copysign(fyd, eps2) if abs(eps2) > aco.eps_yd \
-                else ES_KNCM2 * eps2
-            if d_linha <= y:
-                s2 -= sig
-        alvo = As * fyd - As_linha * s2
-        if hf > 0.0 and alvo > bf * hf * sig:
-            y_novo = (alvo - (bf - secao.bw) * hf * sig) / (secao.bw * sig)
+    def bloco(y: float) -> tuple[float, float]:
+        """Área comprimida do concreto e a profundidade do seu centroide."""
+        y = min(y, secao.h)
+        if hf > 0.0 and y > hf:
+            area = bf * hf + bw * (y - hf)
+            momento = bf * hf * hf / 2.0 + bw * (y - hf) * (hf + (y - hf) / 2.0)
         else:
-            y_novo = alvo / (bf * sig)
-        y_novo = max(min(y_novo, secao.h), 0.0)
-        if abs(y_novo - y) < 1e-8:
-            y = y_novo
-            break
-        y = y_novo
+            b = bf if hf > 0.0 else bw
+            area, momento = b * y, b * y * y / 2.0
+        return area, (momento / area if area > 0.0 else 0.0)
 
-    if hf > 0.0 and y > hf:
-        Mc = (secao.bw * y * sig * (d - y / 2.0)
-              + (bf - secao.bw) * hf * sig * (d - hf / 2.0))
-    else:
-        b = bf if hf > 0.0 else secao.bw
-        Mc = b * y * sig * (d - y / 2.0)
-    if As_linha > 0.0:
-        eps2 = concreto.eps_cu / y * (y - lam * d_linha) if y > 0 else 0.0
-        s2 = math.copysign(fyd, eps2) if abs(eps2) > aco.eps_yd \
-            else ES_KNCM2 * eps2
-        if d_linha <= y:
-            s2 -= sig
-        Mc += As_linha * s2 * (d - d_linha)
-    return Mc / 100.0
+    def tensao(eps: float) -> float:
+        """Tensão no aço, kN/cm², com o sinal da deformação."""
+        return math.copysign(min(abs(eps) * es, fyd), eps)
+
+    def estado(x: float) -> tuple[float, float, float]:
+        """Equilíbrio de forças e o momento, para a linha neutra ``x``."""
+        # plano de deformações: encurtamento ecu no topo (domínios 3 a 5); no
+        # domínio 2 é o alongamento de 10 ‰ da armadura tracionada que limita
+        eps_topo = ecu
+        if d > x and ecu * (d - x) / x > 10.0e-3:
+            eps_topo = 10.0e-3 * x / (d - x)
+        y = lam * x
+        area, yc = bloco(y)
+        Fc = area * sig
+        eps_s = eps_topo * (x - d) / x                 # compressão positiva
+        Fs = As * tensao(eps_s)               # compressão positiva: tração < 0
+        F2 = 0.0
+        if As_linha > 0.0:
+            s2 = tensao(eps_topo * (x - d_linha) / x)
+            if convencao_sigma2 == "liquida" and d_linha <= y:
+                s2 -= sig
+            F2 = As_linha * s2
+        return Fc + Fs + F2, Fc * (d - yc) + F2 * (d - d_linha), Fc
+
+    # a resultante cresce com x: bissecção. O limite superior é a seção toda
+    # comprimida (y = h), além da qual o bloco não aumenta
+    lo, hi = 1.0e-9, secao.h / lam
+    if estado(hi)[0] < 0.0:
+        return hi, estado(hi)[1] / 100.0
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        if estado(mid)[0] > 0.0:
+            hi = mid
+        else:
+            lo = mid
+        if hi - lo < 1.0e-10:
+            break
+    x = (lo + hi) / 2.0
+    return x, estado(x)[1] / 100.0

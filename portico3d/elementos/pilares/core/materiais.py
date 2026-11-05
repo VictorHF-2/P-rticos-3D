@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from .formato import num
 
 # ---------------------------------------------------------------------------
 # Tabelas auxiliares
@@ -135,8 +136,15 @@ ESPACAMENTO_LIVRE_MINIMO = 2.0
 #: duas vezes a menor dimensão, sem exceder 40 cm.
 ESPACAMENTO_EIXOS_MAXIMO = 40.0
 
-#: Taxa geométrica máxima de armadura, incluída a emenda (17.3.5.3.2).
-RHO_MAXIMO = 0.08
+#: Taxa geométrica máxima de armadura (17.3.5.3.2), critério de projeto:
+#: 4 % na seção corrente e 8 % na região de emenda, onde as barras do lance e
+#: as de espera se sobrepõem. Com todas as barras emendadas no mesmo nível,
+#: a taxa da emenda é o dobro da corrente.
+RHO_MAXIMO_CORRENTE = 0.04
+RHO_MAXIMO_EMENDA = 0.08
+#: O limite que a busca de arranjo e as verificações usam como teto da seção
+#: corrente.
+RHO_MAXIMO = RHO_MAXIMO_CORRENTE
 
 #: Piso da taxa geométrica mínima de armadura (17.3.5.3.1).
 RHO_MINIMO_PISO = 0.004
@@ -201,7 +209,7 @@ class Concreto:
 
     ``fck`` em MPa. As classes acima de C50 usam o diagrama parábola-retângulo
     com os parâmetros do item 8.2.10.1, o que altera ``eps_c2``, ``eps_cu``,
-    ``alfa_c`` e ``lambda_bloco`` -- e é aí que o comportamento do pilar muda
+    ``n``, ``alfa_c`` e ``lambda_bloco``; acima de C40 entra ``eta_c`` -- e é aí que o comportamento do pilar muda
     de fato, porque a compressão é o esforço que governa.
     """
 
@@ -282,11 +290,43 @@ class Concreto:
         return 1.4 + 23.4 * ((90.0 - self.fck) / 100.0) ** 4
 
     @property
+    def eta_c(self) -> float:
+        """Fator que considera a fragilidade do concreto (8.2.10.1, Figura
+        8.2): 1,0 até 40 MPa; ``(40/fck)^(1/3)`` acima. Novo na edição de
+        2026 -- entra nos dois diagramas do ELU, o parábola-retângulo e o
+        retângulo equivalente do 17.2.2-e.
+        """
+        if self.fck <= 40.0:
+            return 1.0
+        return (40.0 / self.fck) ** (1.0 / 3.0)
+
+    @property
     def alfa_c(self) -> float:
-        """Redutor da tensão no diagrama retangular (item 17.2.2)."""
+        """``alfa_c`` do retângulo equivalente (item 17.2.2-e): 0,85 até 50
+        MPa; ``0,85·[1 - (fck - 50)/200]`` acima. Só o bloco retangular o
+        usa; o parábola-retângulo tem pico fixo em ``0,85·eta_c·fcd``.
+        """
         if self.fck <= 50.0:
             return 0.85
         return 0.85 * (1.0 - (self.fck - 50.0) / 200.0)
+
+    @property
+    def fator_pico(self) -> float:
+        """Pico do parábola-retângulo sobre ``fcd``: ``0,85·eta_c`` (Figura
+        8.2 e item 17.2.2-e da edição de 2026). Até a R05 era ``alfa_c`` --
+        o redutor do bloco retangular, emprestado ao diagrama curvo, e sem
+        ``eta_c``.
+        """
+        return 0.85 * self.eta_c
+
+    @property
+    def fator_bloco(self) -> float:
+        """Tensão do retângulo equivalente sobre ``fcd``: ``alfa_c·eta_c``
+        (item 17.2.2-e), para largura que não diminui rumo à borda
+        comprimida -- a única forma em que o roteiro fechado (retangular) o
+        usa. A largura decrescente pediria ``0,9·alfa_c·eta_c``.
+        """
+        return self.alfa_c * self.eta_c
 
     @property
     def lambda_bloco(self) -> float:
@@ -298,19 +338,20 @@ class Concreto:
     def sigma_c(self, eps_mil: float) -> float:
         """Tensão do diagrama parábola-retângulo, kN/cm², para ``eps`` em ‰.
 
-        Compressão positiva. Serve o motor seccional por integração; o método
-        do bloco retangular usa ``alfa_c`` e ``lambda_bloco``.
+        Compressão positiva, pico ``0,85·eta_c·fcd`` (Figura 8.2). Serve o
+        motor seccional por integração; o bloco retangular usa
+        ``fator_bloco`` e ``lambda_bloco``.
         """
         if eps_mil <= 0.0:
             return 0.0
-        fcd = self.alfa_c * self.fcd_kNcm2
+        fcd = self.fator_pico * self.fcd_kNcm2
         if eps_mil >= self.eps_c2_mil:
             return fcd
         r = 1.0 - eps_mil / self.eps_c2_mil
         return fcd * (1.0 - r ** self.expoente_n)
 
     def descricao(self) -> str:
-        return f"C{self.fck:g}"
+        return f"C{num(self.fck)}"
 
 
 # ---------------------------------------------------------------------------
@@ -462,11 +503,11 @@ class Ambiente:
             return "valor imposto pelo projetista"
         candidatos = [
             (self.cobrimento_tabelado, f"Tabela 7.2, CAA {self.caa}"),
-            (phi_barra / 10.0, f"item 7.4.7.5: ø{phi_barra:g} mm da barra"),
+            (phi_barra / 10.0, f"item 7.4.7.5: ø{num(phi_barra)} mm da barra"),
             (phi_estribo / 10.0,
-             f"item 7.4.7.5: ø{phi_estribo:g} mm do estribo"),
+             f"item 7.4.7.5: ø{num(phi_estribo)} mm do estribo"),
             (self.dmax_agregado / 1.2,
-             f"item 7.4.7.6: dmáx/1,2 = {self.dmax_agregado / 1.2:.2f} cm"),
+             f"item 7.4.7.6: dmáx/1,2 = {num(self.dmax_agregado / 1.2, 2)} cm"),
         ]
         return max(candidatos, key=lambda t: t[0])[1]
 
@@ -492,9 +533,10 @@ def f_bd(concreto: Concreto, phi_mm: float, boa_aderencia: bool = True,
     ``fbd = eta1 . eta2 . eta3 . fctd``, com ``eta2 = 1,0`` em boa situação de
     aderência e 0,7 em má, e ``eta3 = 1,0`` para bitolas até 32 mm.
 
-    Em pilar a situação é **sempre boa** enquanto a concretagem for vertical e
-    o lance não passar de 60 cm de altura de uma vez (9.3.1); o parâmetro fica
-    exposto porque o lance de arranque de bloco pode não cumprir isso.
+    Em pilar a barra é vertical: inclinação maior que 45° com a horizontal,
+    a alínea a) do item 9.3.1 -- boa aderência, qualquer que seja a altura de
+    concretagem (a condição dos 60 cm é das barras horizontais). O
+    parâmetro fica exposto para quem quiser declarar má aderência à parte.
     """
     eta2 = 1.0 if boa_aderencia else 0.7
     eta3 = 1.0 if phi_mm <= 32.0 else (132.0 - phi_mm) / 100.0
@@ -544,6 +586,24 @@ def comprimento_espera(lb: float, As_calc: float, As_efet: float,
     return max(lb * As_calc / As_efet, minimo)
 
 
+#: Coeficiente alfa_0t da emenda de barras tracionadas (item 9.5.2.2.1,
+#: Tabela 9.4) com mais de 50 % das barras emendadas na mesma seção -- o
+#: caso do pilar, em que todas as barras param no mesmo nível.
+ALFA_0T_PILAR = 2.0
+
+
+def comprimento_traspasse_tracao(lb: float, lb_nec: float, phi_mm: float,
+                                 alfa_0t: float = ALFA_0T_PILAR
+                                 ) -> tuple[float, float]:
+    """Traspasse de barras tracionadas, cm (item 9.5.2.2.1).
+
+    ``l0t = alfa_0t . lb,nec >= l0t,min``, com
+    ``l0t,min = max(0,3 alfa_0t lb; 15 phi; 20 cm)``. Devolve
+    ``(l0t, l0t,min)``."""
+    minimo = max(0.3 * alfa_0t * lb, 15.0 * phi_mm / 10.0, 20.0)
+    return max(alfa_0t * lb_nec, minimo), minimo
+
+
 # ---------------------------------------------------------------------------
 # Coeficiente adicional gamma_n do item 13.2.3
 # ---------------------------------------------------------------------------
@@ -564,8 +624,9 @@ def gamma_n(menor_dimensao: float) -> float:
 def gamma_n1(esbeltez: float) -> float:
     """Coeficiente adicional dos pilares com lambda > 140 (item 15.8.1).
 
-    ``gamma_n1 = 1 + 0,01 (lambda - 140) / 1,4``. Multiplica os esforços
-    solicitantes **finais**, isto é, depois da segunda ordem.
+    ``gamma_n1 = 1 + (lambda - 140)/140`` (escrito ``1 + 0,01 (lambda -
+    140)/1,4``). Majora os **efeitos locais de 2ª ordem** -- a parcela
+    ``Nd e2`` --, não o momento de 1ª ordem (texto da edição de 2026).
     """
     if esbeltez <= ESBELTEZ_METODO_EXATO:
         return 1.0

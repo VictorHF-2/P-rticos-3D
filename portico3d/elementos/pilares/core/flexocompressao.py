@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 
 from . import avisos as av
 from .materiais import Aco, Concreto
+from .formato import num
 
 #: Deformação máxima de tração no aço, ‰ (item 17.2.2).
 EPS_S_MAXIMA = 10.0
@@ -73,7 +74,11 @@ class Retangular:
 
     @property
     def alfa_c(self) -> float:
-        return self.concreto.alfa_c
+        """Tensão do retângulo equivalente sobre ``fcd``: ``alfa_c·eta_c``
+        (17.2.2-e, edição de 2026). O nome ficou ``alfa_c`` porque é o lugar
+        dele nas fórmulas do roteiro; a largura da seção retangular não
+        diminui rumo à borda, então não cabe o fator 0,9."""
+        return self.concreto.fator_bloco
 
     @property
     def lam(self) -> float:
@@ -103,7 +108,7 @@ class Retangular:
 
     @property
     def y_c(self) -> float:
-        """Profundidade do polo C, cm: ``h (eps_cu - eps_c2)/eps_cu``."""
+        """Profundidade do polo C, cm: ``h (εcu - εc2)/εcu``."""
         return self.h * (self.eps_cu - self.eps_c2) / self.eps_cu
 
     @property
@@ -271,7 +276,11 @@ def classificar(sec: Retangular, Nd: float, Md: float) -> Classificacao:
             caso = "FC3" if pequena else "FC4"
             excentricidade = "Pequena" if pequena else "Composta"
         else:
-            caso = "FT3" if e0 < meio else "FT4"
+            # Com a resultante entre as camadas a seção já está toda
+            # tracionada; o roteiro separa a tração centrada (FT4, as duas
+            # camadas iguais) da excêntrica (FT3). Antes o teste ``e0 <
+            # meio`` repetia o do ramo e o FT4 nunca era escolhido.
+            caso = "FT4" if e0 <= 1e-6 * max(meio, 1.0) else "FT3"
             excentricidade = "Pequena"
 
     # -- caso simétrico -----------------------------------------------------
@@ -362,8 +371,9 @@ class Dimensionamento:
 
 
 def _residuo_simetrica(sec: Retangular, Nd: float, Md: float, x: float
-                       ) -> tuple[float, float, float]:
-    """Diferença entre as duas expressões de ``As`` para a linha neutra ``x``.
+                       ) -> tuple[float, float]:
+    """Resíduo do equilíbrio simétrico para a linha neutra ``x`` e o ``As``
+    que dele sai: ``(F, As)``.
 
     Com armadura simétrica sobram duas incógnitas -- ``As`` e ``x`` -- e duas
     equações, a de força normal e a de momento:
@@ -371,23 +381,33 @@ def _residuo_simetrica(sec: Retangular, Nd: float, Md: float, x: float
         ``N = Rcc + As (sigma1 + sigma2)``
         ``M = Rcc . z + As (sigma2 - sigma1) (d - d')/2``
 
-    Cada uma isola um ``As``. A raiz de ``As_N(x) - As_M(x)`` é o ponto em que
-    as duas concordam, e é o equilíbrio procurado. Resolver assim, em vez de
-    iterar o ponto fixo ``x -> As -> x`` da planilha, atende às **mesmas duas
-    equações** e não depende de chute inicial nem de o ponto fixo ser
-    contrativo.
+    Cada uma isola um ``As``: ``As_N = (N - Rcc)/soma`` e ``As_M = (M - Rcc
+    z)/denom``. O equilíbrio é onde as duas concordam -- mas a **diferença**
+    ``As_N - As_M`` tem polos onde ``soma`` ou ``denom`` se anulam, e
+    ``soma = sigma1 + sigma2`` vale **zero em todo o domínio 3** (uma camada
+    tracionada e a outra comprimida, as duas escoando): ali ``As_N`` não
+    existe, e a solução -- ``Rcc = N`` --, a que a seção de pilar mais cai,
+    ficava de fora. O resíduo é, então, a forma **multiplicada em cruz**,
+
+        ``F = (N - Rcc) denom - (M - Rcc z) soma``
+
+    que é contínua e se anula exatamente no equilíbrio, sem dividir por nada
+    -- é o que a função ``f(xi)`` do roteiro de ARAÚJO (2018, eq. 2.5.11) faz.
+    O ``As`` sai da equação de maior denominador.
     """
     s1 = sec.sigma1(x)
     s2 = sec.sigma2(x)
     Rcc = sec.Rcc(x)
     soma = s1 + s2
-    dif = s2 - s1
-    braco = (sec.d - sec.d_linha) / 2.0
-    As_N = (Nd - Rcc) / soma if abs(soma) > 1e-9 else float("nan")
-    denom = dif * braco
-    As_M = ((abs(Md) - Rcc * sec.braco_Rcc(x)) / denom
-            if abs(denom) > 1e-9 else float("nan"))
-    return As_N - As_M, As_N, As_M
+    denom = (s2 - s1) * (sec.d - sec.d_linha) / 2.0
+    num_N = Nd - Rcc
+    num_M = abs(Md) - Rcc * sec.braco_Rcc(x)
+    F = num_N * denom - num_M * soma
+    if abs(denom) >= abs(soma):
+        As = num_M / denom if abs(denom) > 1e-9 else float("nan")
+    else:
+        As = num_N / soma
+    return F, As
 
 
 def dimensionar_simetrica(sec: Retangular, Nd: float, Md: float,
@@ -412,7 +432,7 @@ def dimensionar_simetrica(sec: Retangular, Nd: float, Md: float,
     raizes: list[float] = []
     for i in range(1, n + 1):
         x = x_max * i / n
-        r, As_N, As_M = _residuo_simetrica(sec, Nd, Md, x)
+        r, _ = _residuo_simetrica(sec, Nd, Md, x)
         if not math.isfinite(r):
             anterior = None
             continue
@@ -422,8 +442,7 @@ def dimensionar_simetrica(sec: Retangular, Nd: float, Md: float,
 
     melhor: tuple[float, float] | None = None       # (As, x)
     for x in raizes:
-        _, As_N, As_M = _residuo_simetrica(sec, Nd, Md, x)
-        As = As_N if math.isfinite(As_N) else As_M
+        _, As = _residuo_simetrica(sec, Nd, Md, x)
         if not math.isfinite(As) or As < -1e-6:
             continue
         As = max(As, 0.0)
@@ -433,8 +452,8 @@ def dimensionar_simetrica(sec: Retangular, Nd: float, Md: float,
     if melhor is None:
         avisos.append(av.construtivo(
             f"O roteiro de armadura de partida não achou equilíbrio "
-            f"simétrico em {direcao} para Nd = {Nd:.0f} kN e "
-            f"Md = {abs(Md):.0f} kN·cm com o modelo de duas camadas (As1 "
+            f"simétrico em {direcao} para Nd = {num(Nd, 0)} kN e "
+            f"Md = {num(abs(Md), 0)} kN·cm com o modelo de duas camadas (As1 "
             f"em d, As2 em d'). É uma limitação conhecida do roteiro, não "
             f"um veredito sobre a seção: ele ignora de propósito a "
             f"contribuição das barras das faces laterais para a força "

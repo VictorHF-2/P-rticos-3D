@@ -154,6 +154,10 @@ class Esforcos:
 
     laje: str
     classificacao: Classificacao
+    #: de onde vêm os momentos do ELU: ``"charneiras"`` ou ``"mef"`` (R10)
+    metodo: str = "charneiras"
+    #: redistribuição aplicada aos negativos do ``mef`` (1 = nenhuma)
+    delta_mef: float = 1.0
 
     # -- cargas -------------------------------------------------------------
     g: float = 0.0                  # kN/m², permanente superficial
@@ -190,6 +194,9 @@ class Esforcos:
 
     # -- faixa de parede paralela ao vão (uma direção) ---------------------
     faixas: list["Faixa"] = field(default_factory=list)
+    #: (R11) o que cada carga concentrada fez na laje -- ver
+    #: :class:`EfeitoConcentrada`
+    concentradas: list["EfeitoConcentrada"] = field(default_factory=list)
 
     avisos: list[str] = field(default_factory=list)
 
@@ -232,6 +239,32 @@ class Faixa:
     a1: float = 0.0                 # cm, distância do eixo da parede ao apoio
     b_difusao: float = 0.0          # cm, t + h
     descricao: str = ""
+
+
+@dataclass
+class EfeitoConcentrada:
+    """O efeito de uma carga concentrada na laje (R11), para a memória."""
+
+    indice: int                     # 1, 2, ... na ordem da laje
+    descricao: str
+    u: float                        # m, posição na laje (ao longo de b)
+    v: float                        # m, (ao longo de a)
+    du: float                       # cm, dimensões da área carregada
+    dv: float
+    P_k: float                      # kN, g + q
+    P_d: float                      # kN, de cálculo (com γn)
+    #: laje em cruz: raio equivalente da área difundida até o plano médio
+    #: (m), distância ao apoio mais próximo (m) e o momento do leque, kN·m/m
+    c: float = 0.0
+    r: float = 0.0
+    m_leque: float = 0.0
+    #: laje em cruz: fator da flecha (Navier) aplicado à carga espalhada
+    k_flecha: float = 0.0
+    #: laje em uma direção: faixa colaborante (cm) e momentos dela
+    bw_vao: float = 0.0
+    bw_eng: float = 0.0
+    m_vao: float = 0.0
+    m_eng: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +416,56 @@ def _esforcos_uma_direcao(laje: Laje, cls: Classificacao, cfg: Config,
             f"{parede.espessura:g} cm ({parede.carga:.2f} kN/m), "
             f"difusão a 45° com b = t + h = {b_dif:.0f} cm"))
 
+    # -- cargas concentradas (R11): faixa colaborante da Tabela A.1.5 -------
+    largura_transv = (laje.b_ef if direcao == "a" else laje.a_ef) * 100.0
+    for k, carga in enumerate(laje.cargas_concentradas, start=1):
+        u, v, du, dv = laje.carga_local(carga)
+        # posição ao longo do vão e dimensão transversal da área carregada
+        pos = v if direcao == "a" else u
+        b_transv = du if direcao == "a" else dv
+        b_dif = b_transv + laje.h
+        a1 = min(max(pos, 0.0), L) * 100.0
+        if esquema == 4:
+            bw_v = bw_e = b_dif + _delta_bw(a1, b_dif, L * 100.0, "balanco")
+        else:
+            bw_v = b_dif + _delta_bw(a1, b_dif, L * 100.0, "vao")
+            bw_e = b_dif + _delta_bw(a1, b_dif, L * 100.0, "engaste")
+        # a faixa não passa da largura da laje (Tabela A.1.5)
+        bw_v = min(bw_v, largura_transv)
+        bw_e = min(bw_e, largura_transv)
+        nome = carga.descricao or f"carga concentrada {k}"
+        faixa = montar_faixa(
+            nome, g, bw_v, bw_e, a1, b_dif,
+            f"faixa colaborante de {bw_v:.0f} cm sob a carga de "
+            f"{carga.total:.1f} kN ({du:g} x {dv:g} cm), difusão até o "
+            f"plano médio, b = {b_dif:.0f} cm (Souza & Cunha, Tabela A.1.5)")
+        # a carga na posição mais desfavorável do vão, espalhada na faixa
+        fv, fe = fator["vao"], fator["engaste"]
+        dm_v_g, dm_v_q = carga.g * L * fv, carga.q * L * fv
+        dm_e_g, dm_e_q = carga.g * L * fe, carga.q * L * fe
+        bv, be = bw_v / 100.0, bw_e / 100.0
+        faixa.m_vao += gn * (cfg.gamma_g * dm_v_g + cfg.gamma_q * dm_v_q) / bv
+        faixa.m_eng += gn * (cfg.gamma_g * dm_e_g + cfg.gamma_q * dm_e_q) / be
+        faixa.m_vao_ser += (dm_v_g + cfg.psi_2 * dm_v_q) / bv
+        faixa.m_eng_ser += (dm_e_g + cfg.psi_2 * dm_e_q) / be
+        # flecha: a carga no meio do vão biapoiado equivale a 1,6 P / L
+        # espalhada (P L³/48 = 5 q L⁴/384) -- aproximação declarada
+        faixa.p_ser += 1.6 * (carga.g + cfg.psi_2 * carga.q) / (L * bv)
+        faixa.p_d += (cfg.gamma_g * carga.g + cfg.gamma_q * carga.q) / (L * bv)
+        esf.faixas.append(faixa)
+        esf.concentradas.append(EfeitoConcentrada(
+            indice=k, descricao=nome, u=u, v=v, du=du, dv=dv,
+            P_k=carga.total,
+            P_d=gn * (cfg.gamma_g * carga.g + cfg.gamma_q * carga.q),
+            bw_vao=bw_v, bw_eng=bw_e, m_vao=faixa.m_vao,
+            m_eng=faixa.m_eng))
+    if laje.cargas_concentradas:
+        esf.avisos.append(
+            f"{laje.nome}: {len(laje.cargas_concentradas)} carga(s) "
+            f"concentrada(s) em laje armada em uma direção -- cada uma "
+            f"carrega uma faixa colaborante bw (Tabela A.1.5 de Souza & "
+            f"Cunha), na posição mais desfavorável do vão.")
+
     # a laje é dimensionada pela faixa mais solicitada de cada seção
     esf.p_d = max(f.p_d for f in esf.faixas)
     esf.p_ser = max(f.p_ser for f in esf.faixas)
@@ -399,6 +482,28 @@ def _esforcos_uma_direcao(laje: Laje, cls: Classificacao, cfg: Config,
         if laje.bordos[bordo - 1].vinculo == "engastado":
             esf.m_neg[bordo] = m_eng
             esf.m_neg_ser[bordo] = m_eng_s
+
+    # -- bordo menor engastado (R11) ----------------------------------------
+    # A laje armada em uma direção também tem os bordos curtos, os que
+    # cortam o vão principal. Engastados (continuidade ou elemento rígido),
+    # eles pedem negativa: m' = p·lx²/16 (Aderson Moreira da Rocha, eq. 3.4
+    # de Souza & Cunha), com lx o vão principal. Antes da R11 esses bordos
+    # ficavam sem momento -- a borda comum saía só com o momento do vizinho
+    # e, sem vizinho, sem armadura nenhuma.
+    outra = "b" if direcao == "a" else "a"
+    curtos = [bordo for bordo in BORDOS_DA_DIRECAO[outra]
+              if laje.bordos[bordo - 1].vinculo == "engastado"]
+    if curtos and esquema != 4:
+        m_curto = gn * esf.p_d * L ** 2 / 16.0
+        m_curto_s = esf.p_ser * L ** 2 / 16.0
+        for bordo in curtos:
+            esf.m_neg[bordo] = m_curto
+            esf.m_neg_ser[bordo] = m_curto_s
+        esf.avisos.append(
+            f"{laje.nome}: bordo(s) {', '.join(map(str, curtos))} "
+            f"engastado(s) no lado menor da laje armada em uma direção -- "
+            f"negativa m' = p·lx²/16 = {m_curto:.2f} kN·m/m (Souza & Cunha, "
+            f"eq. 3.4).")
     return esf
 
 
@@ -500,14 +605,139 @@ def _esforcos_em_cruz(laje: Laje, cls: Classificacao, cfg: Config,
 # Interface pública
 # ---------------------------------------------------------------------------
 
+#: Fator do efeito localizado da carga isolada espalhada na laje em cruz
+#: (Souza & Cunha, eq. 1.11).
+FATOR_CARGA_ISOLADA = 1.2
+
+
+def _navier_w(a: float, b: float, x: float, y: float, carga=None,
+              termos: int = 31) -> float:
+    """Flecha (sem D) da placa apoiada a x b no ponto (x, y) pela série de
+    Navier: carga uniforme unitária (``carga`` None) ou ``(xi, eta, u, v)``
+    -- força unitária espalhada no retângulo u x v centrado em (xi, eta)."""
+    w = 0.0
+    for m in range(1, termos + 1):
+        for n in range(1, termos + 1):
+            if carga is None:
+                if m % 2 == 0 or n % 2 == 0:
+                    continue
+                pmn = 16.0 / (math.pi ** 2 * m * n)
+            else:
+                xi, eta, u, v = carga
+                pmn = (16.0 / (math.pi ** 2 * m * n * u * v)
+                       * math.sin(m * math.pi * xi / a)
+                       * math.sin(n * math.pi * eta / b)
+                       * math.sin(m * math.pi * u / (2 * a))
+                       * math.sin(n * math.pi * v / (2 * b)))
+            w += (pmn * math.sin(m * math.pi * x / a)
+                  * math.sin(n * math.pi * y / b)
+                  / (math.pi ** 4 * ((m / a) ** 2 + (n / b) ** 2) ** 2))
+    return w
+
+
+def fator_flecha_concentrada(a: float, b: float, xi: float, eta: float,
+                             u: float, v: float) -> float:
+    """Quanto a flecha máxima da carga P na área u x v em (xi, eta) passa da
+    flecha da mesma P espalhada na laje inteira (placa apoiada, Navier). A
+    flecha máxima da carga é tomada no maior entre o centro e o ponto da
+    carga; a da carga espalhada, no centro."""
+    w_unif = _navier_w(a, b, a / 2, b / 2) / (a * b)
+    if w_unif <= 0.0:
+        return 1.0
+    w_p = max(_navier_w(a, b, a / 2, b / 2, (xi, eta, u, v)),
+              _navier_w(a, b, xi, eta, (xi, eta, u, v)))
+    return max(w_p / w_unif, 1.0)
+
+
+def _concentradas_em_cruz(laje: Laje, cls: Classificacao, cfg: Config,
+                          gn: float, esf0: Esforcos) -> Esforcos:
+    """A laje em cruz com cargas concentradas (R11).
+
+    ELU: o maior entre (1) as cargas espalhadas na área com o fator 1,2 do
+    efeito localizado (eq. 1.11 de Souza & Cunha) e (2) o momento da carga
+    uniforme somado ao do leque de charneiras em volta da carga mais
+    desfavorável, m = P_d (1 - 2c/3r) / 2π (Cap. 5), com c o raio
+    equivalente da área difundida até o plano médio e r a distância ao
+    apoio mais próximo -- o leque não passa do apoio. Os negativos ficam os
+    de (1). ELS: as cargas espalhadas com o fator de flecha da série de
+    Navier (placa apoiada), que pode passar muito de 1,2 com a carga no
+    centro."""
+    import copy as _copy
+    area = laje.a_ef * laje.b_ef
+    soma_g = sum(c.g for c in laje.cargas_concentradas)
+    soma_q = sum(c.q for c in laje.cargas_concentradas)
+    eq = _copy.copy(laje)
+    eq.permanente_extra = (laje.permanente_extra
+                           + FATOR_CARGA_ISOLADA * soma_g / area)
+    eq.variavel = laje.variavel + FATOR_CARGA_ISOLADA * soma_q / area
+    esf = _esforcos_em_cruz(eq, cls, cfg, gn)
+    esf.g, esf.q = esf0.g, esf0.q
+
+    # -- leque de charneiras -------------------------------------------------
+    apoios = [k for k in (1, 2, 3, 4)
+              if laje.bordos[k - 1].vinculo != "livre"]
+    m_leque = 0.0
+    efeitos = []
+    for k, carga in enumerate(laje.cargas_concentradas, start=1):
+        u, v, du, dv = laje.carga_local(carga)
+        dist = {1: u, 3: laje.b - u, 2: v, 4: laje.a - v}
+        r = min((dist[b] for b in apoios), default=min(laje.a, laje.b) / 2)
+        r = max(r, 1e-3)
+        c = math.sqrt((du + laje.h) * (dv + laje.h) / math.pi) / 100.0
+        P_d = gn * (cfg.gamma_g * carga.g + cfg.gamma_q * carga.q)
+        m = P_d / (2.0 * math.pi) * max(0.0, 1.0 - 2.0 * c / (3.0 * r))
+        m_leque = max(m_leque, m)
+        efeitos.append(EfeitoConcentrada(
+            indice=k, descricao=carga.descricao or f"carga concentrada {k}",
+            u=u, v=v, du=du, dv=dv, P_k=carga.total, P_d=P_d, c=c, r=r,
+            m_leque=m))
+    ma_eq, mb_eq = esf.ma, esf.mb
+    esf.ma = max(ma_eq, esf0.ma + m_leque)
+    esf.mb = max(mb_eq, esf0.mb + m_leque)
+
+    # -- ELS: carga espalhada com o fator de flecha de Navier ---------------
+    soma_ser = 0.0
+    for ef, carga in zip(efeitos, laje.cargas_concentradas):
+        ef.k_flecha = fator_flecha_concentrada(
+            laje.b_ef, laje.a_ef, min(max(ef.u, 1e-3), laje.b_ef - 1e-3),
+            min(max(ef.v, 1e-3), laje.a_ef - 1e-3),
+            (ef.du + laje.h) / 100.0, (ef.dv + laje.h) / 100.0)
+        soma_ser += ef.k_flecha * (carga.g + cfg.psi_2 * carga.q)
+    ser = _copy.copy(laje)
+    ser.permanente_extra = laje.permanente_extra + soma_ser / area
+    esf_ser = _esforcos_em_cruz(ser, cls, cfg, gn)
+    esf.p_ser = esf_ser.p_ser
+    esf.ma_ser, esf.mb_ser = esf_ser.ma_ser, esf_ser.mb_ser
+    esf.m_neg_ser = dict(esf_ser.m_neg_ser)
+    esf.concentradas = efeitos
+    esf.avisos.append(
+        f"{laje.nome}: {len(efeitos)} carga(s) concentrada(s) -- ELU pelo "
+        f"maior entre a carga espalhada x {FATOR_CARGA_ISOLADA:g} (m_a = "
+        f"{ma_eq:.2f}) e a uniforme mais o leque de charneiras (m_a = "
+        f"{esf0.ma + m_leque:.2f} kN·m/m); ELS com a carga espalhada pelo "
+        f"fator de flecha de Navier "
+        f"({max(e.k_flecha for e in efeitos):.2f}).")
+    return esf
+
+
 def calcular(laje: Laje, cfg: Config) -> Esforcos:
     """Momentos da laje nos dois regimes."""
     cls = classificar(laje)
     gn = gamma_n(laje.h) if cls.balanco else 1.0
+    # ``ref`` é a laje sem as cargas concentradas: a razão borda/vão do
+    # §1.7 é critério da carga uniforme, e o pico local de uma carga
+    # concentrada não pede negativa maior no bordo
     if cls.em_cruz:
-        esf = _esforcos_em_cruz(laje, cls, cfg, gn)
+        esf = ref = _esforcos_em_cruz(laje, cls, cfg, gn)
+        if laje.cargas_concentradas:
+            esf = _concentradas_em_cruz(laje, cls, cfg, gn, ref)
     else:
-        esf = _esforcos_uma_direcao(laje, cls, cfg, gn)
+        esf = ref = _esforcos_uma_direcao(laje, cls, cfg, gn)
+        if laje.cargas_concentradas:
+            import copy as _copy
+            sem = _copy.copy(laje)
+            sem.cargas_concentradas = []
+            ref = _esforcos_uma_direcao(sem, cls, cfg, gn)
 
     if gn > 1.0:
         esf.avisos.append(
@@ -516,9 +746,9 @@ def calcular(laje: Laje, cfg: Config) -> Esforcos:
             f"(13.2.4.1).")
 
     # razão mínima entre momento de borda e momento de vão (§1.7)
-    for bordo, m_neg in esf.m_neg.items():
+    for bordo, m_neg in ref.m_neg.items():
         direcao = "b" if bordo in BORDOS_DA_DIRECAO["b"] else "a"
-        m_vao = esf.momento_da_direcao(direcao)
+        m_vao = ref.momento_da_direcao(direcao)
         if m_vao > 1e-9 and m_neg / m_vao < cfg.razao_minima_borda_vao - 1e-6:
             esf.avisos.append(
                 f"{laje.nome}, bordo {bordo}: a razão entre o momento de "

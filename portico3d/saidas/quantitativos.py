@@ -73,8 +73,9 @@ def formas_das_vigas(projeto) -> dict:
         except ErroDeModelo:
             continue
         for aresta in arestas:
-            encostadas.setdefault(aresta.barra, []).append(
-                max(laje.espessura, 0.0))
+            for barra in aresta.barras:
+                encostadas.setdefault(barra, []).append(
+                    max(laje.altura, 0.0))
 
     fundo = laterais = 0.0
     for v in projeto.vigas:
@@ -170,11 +171,19 @@ def consolidar(projeto) -> dict:
         if not v.passou:
             continue
         n_l += 1
-        q = v.resultado.quantitativo or {}
-        aco_l += float(q.get("massa_total", 0.0) or 0.0)
-        concreto_l += float(q.get("volume_concreto", 0.0) or 0.0)
-        _somar_bitolas(por_bitola_total, q.get("por_bitola"))
-        formas_l += _formas_do_pavimento(v)
+        if v.resultado is not None:
+            q = v.resultado.quantitativo or {}
+            aco_l += float(q.get("massa_total", 0.0) or 0.0)
+            concreto_l += float(q.get("volume_concreto", 0.0) or 0.0)
+            _somar_bitolas(por_bitola_total, q.get("por_bitola"))
+            formas_l += _formas_do_pavimento(v)
+        # Treliçada: o aço e o concreto moldado no local do motor; a fôrma é
+        # a vigota com o enchimento, que não leva fôrma.
+        for f in getattr(v, "trelicadas", []):
+            if f.passou:
+                q = f.resultado.quantitativo or {}
+                aco_l += float(q.get("aco_kg", 0.0) or 0.0)
+                concreto_l += float(q.get("volume_concreto", 0.0) or 0.0)
     if n_l:
         por_elemento["Lajes"] = {"aco": aco_l, "aco_perdas": aco_l * 1.10,
                                  "concreto": concreto_l,
@@ -337,7 +346,7 @@ def _aba_verificacoes(wb, projeto) -> None:
                                  "aprovada" if v.aprovado else "REPROVADA",
                                  obs[:200]])
     for v in projeto.lajes:
-        erros = list(v.resultado.erros) if v.passou else []
+        erros = v.erros if v.passou else []
         L = linha_tabela(ws, L, [f"cota {v.cota:g} m", "pavimento",
                                  "aprovado" if v.passou and not erros
                                  else "REPROVADO",

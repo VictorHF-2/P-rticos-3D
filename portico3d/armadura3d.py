@@ -43,8 +43,9 @@ seção em cada direção.
 **Laje.** O programa de Lajes já entrega a geometria da barra no sistema
 **global da planta**, em centímetros, porque o pavimento vai inteiro para ele
 com as coordenadas do modelo. Só falta a cota: a laje é desenhada centrada no
-plano dos nós, como na vista de sólido, e a barra fica a um cobrimento da face
-de baixo (positiva) ou da face de cima (negativa).
+plano dos nós, **com o topo no topo das vigas**, como na vista de sólido
+(``core.lajes.deslocamento_do_centro``), e a barra fica a um cobrimento da
+face de baixo (positiva) ou da face de cima (negativa).
 """
 
 from __future__ import annotations
@@ -157,8 +158,12 @@ def vigas_do_pavimento(modelo: Modelo, cota: float) -> list:
 # ---------------------------------------------------------------------------
 
 def fios_do_pilar(modelo: Modelo, barra: str, resultado,
-                  estribos: bool = True) -> list[Fio]:
-    """Longitudinais e estribos de um lance, no lugar em que ele está."""
+                  estribos: bool = True, espera: float = 0.0) -> list[Fio]:
+    """Longitudinais e estribos de um lance, no lugar em que ele está.
+
+    ``espera`` (m) é o quanto as barras sobem acima do topo do lance para a
+    emenda com o de cima (o ``ℓ0c`` do 9.5.2.3); zero no último lance.
+    """
     from .core.montagem import preparar_barras
 
     arranjo = getattr(resultado, "arranjo", None)
@@ -173,9 +178,10 @@ def fios_do_pilar(modelo: Modelo, barra: str, resultado,
     ey, ez = preparada.R[1], preparada.R[2]
 
     fios = []
+    acima = np.array([0.0, 0.0, max(espera, 0.0)])
     for aco in arranjo.barras:
         desvio = aco.x * CM * ey + aco.y * CM * ez
-        fios.append(Fio(np.array([pi + desvio, pj + desvio]),
+        fios.append(Fio(np.array([pi + desvio, pj + desvio + acima]),
                         "pilar longitudinal", barra, aco.phi))
 
     est = getattr(resultado, "estribos", None)
@@ -227,6 +233,36 @@ def intervalos_da_viga(resultado, comprimento: float
     return [(a, b) for a, b in zip(ordenados, ordenados[1:]) if b - a > 1e-4]
 
 
+def _lados_com_laje(modelo: Modelo, viga, ey: np.ndarray):
+    """``f(x) -> +1, -1 ou 0``: de que lado da viga (no sentido do ``ey``
+    local) há laje na abscissa ``x`` da cadeia — 0 quando há dos dois lados
+    ou de nenhum, que é quando a mesa simétrica do motor já está certa."""
+    from .dimensionamento import _lajes_ao_lado
+    from .core.lajes import retangulo
+
+    ao_lado = _lajes_ao_lado(modelo)
+    trechos = []
+    for barra in viga.barras:
+        b = modelo.barras[barra]
+        meio = (modelo.ponto(b.no_i) + modelo.ponto(b.no_j)) / 2.0
+        sinais = set()
+        for laje, _, _ in ao_lado.get(barra, []):
+            x0, y0, x1, y1, _ = retangulo(modelo, laje)
+            centro = np.array([(x0 + x1) / 2.0, (y0 + y1) / 2.0])
+            s = float((centro - meio[:2]) @ np.asarray(ey, float)[:2])
+            sinais.add(1 if s > 0.0 else -1)
+        pos = dict(zip(viga.nos, viga.posicoes))
+        a, c = sorted((pos[b.no_i], pos[b.no_j]))
+        trechos.append((a, c, sinais.pop() if len(sinais) == 1 else 0))
+
+    def lado(x: float) -> int:
+        for a, c, s in trechos:
+            if a - 1e-9 <= x <= c + 1e-9:
+                return s
+        return 0
+    return lado
+
+
 def fios_da_viga(modelo: Modelo, viga, resultado,
                  estribos: bool = True) -> list[Fio]:
     """Longitudinais e estribos de uma viga contínua, no lugar dela."""
@@ -235,10 +271,14 @@ def fios_da_viga(modelo: Modelo, viga, resultado,
 
     if not viga.barras or viga.comprimento <= 0.0:
         return []
+    from .core.lajes import desnivel_da_viga
+
     preparada = preparar_barras(modelo)[viga.barras[0]]
     ey, ez = preparada.R[1], preparada.R[2]
     secao = modelo.secoes[modelo.barras[viga.barras[0]].secao]
-    origem = modelo.ponto(viga.nos[0])
+    # o topo da viga no nível do pavimento, como o sólido e a laje
+    origem = modelo.ponto(viga.nos[0]) + np.array(
+        [0.0, 0.0, desnivel_da_viga(modelo, viga.barras[0])])
     eixo = np.array(viga.direcao, dtype=float)
     comprimento = viga.comprimento
 
@@ -248,15 +288,37 @@ def fios_da_viga(modelo: Modelo, viga, resultado,
                 + (u_cm * CM - secao.b / 2.0) * ey
                 + (v_cm * CM - secao.h / 2.0) * ez)
 
-    fios = []
+    lados = _lados_com_laje(modelo, viga, ey)
+    # os trechos também se cortam nos nós: é ali que a laje pode trocar de
+    # lado (a sacada que começa no fim da laje de dentro), e a mesa com ela
+    nos_internos = [s for s in viga.posicoes if 1e-4 < s < comprimento - 1e-4]
+    trechos = []
     for x0, x1 in intervalos_da_viga(resultado, comprimento):
+        cortes = [x0] + [s for s in nos_internos if x0 + 1e-4 < s
+                         < x1 - 1e-4] + [x1]
+        trechos += list(zip(cortes, cortes[1:]))
+    fios = []
+    for x0, x1 in trechos:
         meio = (x0 + x1) / 2.0
         try:
             corte = geo.montar_secao(resultado, meio)
         except (IndexError, KeyError, ValueError):
             continue
+        # A mesa da seção T: o motor a trata simétrica, metade de cada lado
+        # da alma. Na viga de borda a laje está de um lado só, e metade das
+        # barras do laço da mesa ficava no ar, do lado de fora. Ali a mesa
+        # vai inteira para o lado da laje (seção L): as barras fora da alma
+        # andam (bf − bw)/2 para esse lado — a ponta da mesa cai na ponta da
+        # laje, e as do canto de fora, junto à face da alma.
+        lado = lados(meio)
+        sec = resultado.viga.secao_em(meio)
+        desvio = (lado * (sec.bf - sec.bw) / 2.0
+                  if lado and sec.tipo != "retangular" and sec.bf > sec.bw
+                  else 0.0)
         for circulo in corte.barras:
             u, v = circulo.centro
+            if desvio and not -1e-6 <= u <= secao.b / CM + 1e-6:
+                u += desvio
             fios.append(Fio(np.array([ponto(x0, u, v), ponto(x1, u, v)]),
                             "viga longitudinal", viga.nome,
                             circulo.raio * 20.0))
@@ -301,15 +363,38 @@ def fios_das_lajes(modelo: Modelo, cota: float, resultado) -> list[Fio]:
     global, em centímetros. Aqui só se acrescenta a cota e se repete a barra
     ao longo da faixa, no espaçamento adotado.
     """
-    espessuras = {l.nome: max(l.espessura, 0.01)
-                  for l in modelo.lajes.values()}
+    from .core.lajes import deslocamento_do_centro
+
     ambiente = getattr(getattr(resultado, "pavimento", None), "ambiente", None)
+    faces: dict[str, tuple[float, float]] = {}
+
+    def topo_e_fundo(nome: str) -> tuple[float, float]:
+        """Topo e fundo da laje acima do plano dos nós, m.
+
+        O negativo sobre a viga entre duas lajes vem com o nome das duas
+        ("L1 / L2"): ele fica sob o topo mais alto, e não no de uma laje que
+        não existe com esse nome — que o mandava para o plano dos nós, dentro
+        da viga.
+        """
+        if nome not in faces:
+            lajes = [modelo.lajes[n.strip()] for n in nome.split(" / ")
+                     if n.strip() in modelo.lajes]
+            if not lajes:
+                faces[nome] = (0.05, -0.05)
+            else:
+                # o plano médio da laje fica acima dos nós: o topo dela é o
+                # das vigas
+                pares = [(deslocamento_do_centro(modelo, l),
+                          max(l.altura, 0.01) / 2.0) for l in lajes]
+                faces[nome] = (max(c + h for c, h in pares),
+                               min(c - h for c, h in pares))
+        return faces[nome]
 
     fios = []
     for p in resultado.todas_posicoes:
         if p.quantidade <= 0 or p.espacamento <= 0.0:
             continue
-        h = espessuras.get(p.laje, 0.10)
+        topo, fundo = topo_e_fundo(p.laje)
         # a face de cima e a de baixo não levam o mesmo cobrimento: a superior
         # tem a ressalva do item 7.4.7.5, e é a própria classe de ambiente do
         # programa de Lajes que decide qual vale
@@ -320,8 +405,8 @@ def fios_das_lajes(modelo: Modelo, cota: float, resultado) -> list[Fio]:
         else:
             cob = ambiente.cobrimento_superior(p.phi) * CM
         # a laje é desenhada centrada no plano dos nós, como na vista sólida
-        z = (cota - h / 2.0 + cob if p.face == "inferior"
-             else cota + h / 2.0 - cob)
+        z = (cota + fundo + cob if p.face == "inferior"
+             else cota + topo - cob)
         a, b = p.inicio * CM, p.fim * CM
         f0, f1 = p.faixa_inicio * CM, p.faixa_fim * CM
         passo = p.espacamento * CM
@@ -392,34 +477,75 @@ def armadura_do_pavimento(modelo: Modelo, cota: float,
             # o lance é armado uma vez só: entre as combinações vale a de
             # maior armadura, que é a que governa o arranjo executado
             melhor = max(aprovadas, key=_n_barras)
+            anc = getattr(melhor.resultado, "ancoragem", None)
+            espera = (getattr(anc, "l0c", 0.0) / 100.0
+                      if anc is not None and _tem_lance_acima(modelo, barra)
+                      else 0.0)
             saida.fios.extend(fios_do_pilar(modelo, barra, melhor.resultado,
-                                            estribos))
+                                            estribos, espera))
 
     # -- vigas -------------------------------------------------------------
-    from .elementos.vigas.core.dimensionar import dimensionar as dim_viga
-
-    for viga in vigas_do_pavimento(modelo, cota):
-        if len(viga.apoios) < 2:
+    # Pelas mesmas contas do "Dimensionar vigas": inclusive a viga apoiada em
+    # outra viga, em que uma entra como apoio e a outra como carga.
+    cadeias = []
+    for v in vigas_do_pavimento(modelo, cota):
+        if len(v.suportes) >= 2:
+            cadeias.append(v)
+        else:
+            # sem dois apoios não há viga contínua para o motor armar; sumir
+            # do desenho sem dizer nada parece armadura esquecida
+            saida.avisos.append(
+                f"viga {v.nome}: sem armadura — tem {len(v.suportes)} apoio(s) "
+                "em pilar ou viga, e o motor precisa de pelo menos dois")
+    por_nome = {v.nome: v for v in cadeias}
+    # A envoltória vai junto: com ela a viga é armada pelos esforços do
+    # pórtico, e a armadura desenhada é a mesma do "Dimensionar vigas".
+    for verificacao in dim.dimensionar_cadeias(
+            modelo, cadeias, fck=fck, envoltorias=envoltorias,
+            conferir_aviso_de_envoltoria=False):
+        if not verificacao.passou:
+            saida.avisos.append(
+                f"viga {verificacao.nome}: {verificacao.erro}")
             continue
-        try:
-            resultado = dim_viga(dim.montar_viga(modelo, viga, fck=fck))
-        except (ErroDeModelo, ValueError, ZeroDivisionError,
-                IndexError, KeyError) as erro:
-            saida.avisos.append(f"viga {viga.nome}: {erro}")
-            continue
-        saida.fios.extend(fios_da_viga(modelo, viga, resultado, estribos))
+        saida.fios.extend(fios_da_viga(modelo, por_nome[verificacao.nome],
+                                       verificacao.resultado, estribos))
 
     # -- lajes -------------------------------------------------------------
     from .elementos.lajes.core.dimensionar import dimensionar as dim_laje
 
+    trelicadas = [l.nome for l in modelo.lajes.values()
+                  if l.trelicada and abs(modelo.ponto(l.no_a)[2] - cota) < 1e-6]
+    if trelicadas:
+        saida.avisos.append(
+            f"lajes treliçadas da cota {cota:g} m ({', '.join(trelicadas)}) "
+            "não entram no desenho 3D da armadura: o detalhamento delas sai "
+            "no Dimensionar lajes")
     try:
         resultado = dim_laje(dim.montar_pavimento(modelo, cota, fck))
     except (ErroDeModelo, ValueError, ZeroDivisionError, KeyError) as erro:
-        saida.avisos.append(f"lajes da cota {cota:g} m: {erro}")
+        if not trelicadas or "maciça" not in str(erro):
+            saida.avisos.append(f"lajes da cota {cota:g} m: {erro}")
     else:
         saida.fios.extend(fios_das_lajes(modelo, cota, resultado))
 
     return saida
+
+
+def _tem_lance_acima(modelo: Modelo, barra: str) -> bool:
+    """Se há outro pilar nascendo no topo deste lance."""
+    from .continuidade import _eh_vertical
+
+    b = modelo.barras[barra]
+    topo = b.no_j if modelo.ponto(b.no_j)[2] >= modelo.ponto(b.no_i)[2] \
+        else b.no_i
+    for nome, outra in modelo.barras.items():
+        if nome == barra or not _eh_vertical(modelo, outra):
+            continue
+        baixo = outra.no_i if modelo.ponto(outra.no_i)[2] <= \
+            modelo.ponto(outra.no_j)[2] else outra.no_j
+        if baixo == topo:
+            return True
+    return False
 
 
 def _n_barras(verificacao) -> int:

@@ -2,7 +2,15 @@
 numpy>=1.26
 scipy>=1.11
 PySide6>=6.6
-matplotlib>=3.8
+
+# Motor de desenho 3D (revisão R03) — substitui o matplotlib da R02. Todas as
+# sete vistas (Modelo, Sólido, Laje, Armadura, Deformada, diagramas de
+# esforço e Modo de flambagem) usam PyVista/VTK; ``pyvistaqt`` é o widget
+# embutido nas abas (Modelo, Sólido, Laje, Deformada, diagramas, Modo de
+# flambagem). A vista de Armadura abre como janela nativa do VTK, sem
+# ``pyvistaqt`` no caminho — mesmo padrão do Consolos R03 e do Lajes R06.
+pyvista>=0.44
+pyvistaqt>=0.11
 
 # Saídas de projeto. Não são opcionais: os motores de elemento copiados em
 # portico3d/elementos gravam memória de cálculo em Word e planilha em Excel, e
@@ -11,3 +19,28 @@ matplotlib>=3.8
 python-docx>=1.1     # memória de cálculo (.docx)
 openpyxl>=3.1        # quadro de quantidades (.xlsx)
 ezdxf>=1.1           # desenho para CAD (.dxf)
+
+# Só para a bateria de confronto do --autoteste (portico3d/validacao.py,
+# seção "Bateria cruzada contra o PyNiteFEA") — não são dependências do
+# programa em si, mas sem elas essa parte do autoteste não roda.
+pynite>=3.2          # motor externo de referência, usado dentro do autoteste
+
+# Terceiro motor de referência, OpenSeesPy — NÃO instalar neste ambiente
+# (Python 3.14): o pacote ``openseespywin`` do Windows falha ao importar
+# porque o seu ``opensees.pyd`` foi compilado contra ``python312.dll``
+# (confirmado com ``pefile``), ABI que este Python não tem. A suíte não
+# importa ``openseespy`` direto nunca — ela chama, por ``subprocess``, um
+# Python 3.12 **separado**, instalado ao lado deste via
+# ``py install 3.12`` (o launcher ``py`` do Windows, ``py -3.12``), com
+# ``openseespy`` e ``numpy`` instalados só nesse interpretador:
+#
+#     py -3.12 -m pip install openseespy numpy
+#
+# O script-ponte autocontido é ``portico3d/core/opensees_ponte.py`` — ele
+# roda isolado sob ``py -3.12`` e conversa com o resto do programa (que
+# continua em Python 3.14) por JSON na entrada/saída padrão; ver o cabeçalho
+# desse arquivo e da seção 44 de ``validacao.py`` para os detalhes da
+# convenção de eixo e das pegadinhas de API achadas. Se ``py -3.12`` ou o
+# ``openseespy`` não existirem na máquina que rodar o ``--autoteste``, as
+# conferências desta seção são puladas com aviso — a suíte inteira não cai
+# por isso.

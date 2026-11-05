@@ -26,6 +26,7 @@ import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
+from ..core.atribuicao import cargas_da_laje
 from ..core.esforcos import BORDOS_DA_DIRECAO
 from . import estilo
 
@@ -153,6 +154,62 @@ def _vigas(ax, laje) -> None:
                                alpha=0.9, zorder=1.2))
 
 
+#: Cor de preenchimento de cada tipo de laje na planta.
+COR_TIPO = {"macica": estilo.CONCRETO, "trelicada": estilo.LARANJA_CLARO,
+            "alveolar": estilo.VERDE_CLARO, "nervurada_uni": estilo.AZUL_CLARO,
+            "nervurada_bi": "#cfc2e0"}
+
+
+def _preencher_laje(ax, laje) -> None:
+    """Retângulo da laje na cor do tipo; nas de nervura e painel, com as
+    nervuras (ou as juntas dos painéis) em traço fino ao longo do vão --
+    é o que mostra, na planta, por onde ela se arma."""
+    x0, y0, x1, y1 = laje.retangulo
+    ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0,
+                           facecolor=COR_TIPO[laje.tipo], edgecolor="none",
+                           alpha=0.65, zorder=1))
+    if not laje.especial:
+        return
+    eixos = ("X", "Y") if laje.tipo == "nervurada_bi" \
+        else (laje.direcao_global(laje.direcao),)
+    for eixo in eixos:
+        if eixo == "X":      # nervuras paralelas a X, espaçadas em Y
+            n = max(int((y1 - y0) / 0.45), 3)
+            for k in range(1, n):
+                y = y0 + (y1 - y0) * k / n
+                ax.plot([x0, x1], [y, y], color=estilo.CINZA_MEDIO,
+                        lw=0.45, alpha=0.7, zorder=1.5)
+        else:
+            n = max(int((x1 - x0) / 0.45), 3)
+            for k in range(1, n):
+                x = x0 + (x1 - x0) * k / n
+                ax.plot([x, x], [y0, y1], color=estilo.CINZA_MEDIO,
+                        lw=0.45, alpha=0.7, zorder=1.5)
+
+
+def _numero_dos_bordos(ax, laje) -> None:
+    x0, y0, x1, y1 = laje.retangulo
+    for bordo in (1, 2, 3, 4):
+        _simbolo_bordo(ax, laje, bordo)
+        # número do bordo, por dentro
+        bx0, by0, bx1, by1 = laje.segmento_do_bordo(bordo)
+        mx, my = (bx0 + bx1) / 2.0, (by0 + by1) / 2.0
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        dx, dy = (cx - mx), (cy - my)
+        norma = math.hypot(dx, dy) or 1.0
+        ax.text(mx + dx / norma * 0.30, my + dy / norma * 0.30,
+                str(bordo), ha="center", va="center", fontsize=7,
+                color=estilo.CINZA_MEDIO, zorder=7)
+
+
+def _texto_do_tipo(laje) -> str:
+    """Linha de rótulo de uma laje especial: tipo, perfil e sentido do vão."""
+    texto = laje.rotulo_tipo + (f" {laje.perfil}" if laje.perfil else "")
+    if laje.tipo in ("trelicada", "alveolar", "nervurada_uni"):
+        texto += f" · vão em {laje.direcao_global(laje.direcao)}"
+    return texto
+
+
 def _rotulo_laje(ax, laje, esf=None, extra: str = "") -> None:
     x0, y0, x1, y1 = laje.retangulo
     cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
@@ -203,38 +260,99 @@ def _legenda(fig, ax, itens) -> None:
 # Planta de formas
 # ---------------------------------------------------------------------------
 
+def _cargas_concentradas(ax, laje) -> bool:
+    """A área de cada carga concentrada (R11), com o valor. Devolve se
+    desenhou alguma."""
+    from matplotlib.patches import Rectangle
+    for c in laje.cargas_concentradas:
+        X, Y = laje.centro_da_carga(c)
+        lx, ly = max(c.dx, 8.0) / 100.0, max(c.dy, 8.0) / 100.0
+        ax.add_patch(Rectangle((X - lx / 2, Y - ly / 2), lx, ly,
+                               facecolor=estilo.VERMELHO, edgecolor="none",
+                               alpha=0.85, zorder=9))
+        # por cima do rótulo da laje (zorder 8): a carga no centro, que é
+        # o padrão, cai justamente embaixo dele
+        ax.annotate(f"P = {c.total:g} kN", (X, Y - ly / 2),
+                    xytext=(0, -3), textcoords="offset points",
+                    ha="center", va="top", fontsize=6.5,
+                    color=estilo.VERMELHO, zorder=9,
+                    bbox=dict(boxstyle="round,pad=0.1", fc="white",
+                              ec="none", alpha=0.8))
+    return bool(laje.cargas_concentradas)
+
+
+def _zonas_de_canto(ax, res) -> bool:
+    """O quadrado da armadura superior de canto (R11), voltado para dentro
+    da laje."""
+    from matplotlib.patches import Rectangle
+    cantos = getattr(res, "cantos", [])
+    for c in cantos:
+        laje = res.pavimento.laje(c.laje)
+        if laje is None:
+            continue
+        x0, y0, x1, y1 = laje.retangulo
+        ox = c.x if c.x < (x0 + x1) / 2 else c.x - c.zona
+        oy = c.y if c.y < (y0 + y1) / 2 else c.y - c.zona
+        ax.add_patch(Rectangle((ox, oy), c.zona, c.zona,
+                               facecolor="none", edgecolor=estilo.AZUL,
+                               hatch="xx", lw=0.6, alpha=0.6, zorder=4))
+    return bool(cantos)
+
+
 def figura_planta(res) -> Figure:
     """Planta do pavimento com vinculação, espessura e vãos."""
     fig, ax = _preparar(res, f"Planta do pavimento — "
                              f"{res.pavimento.nome}")
     for rl in res.lajes:
         laje = rl.laje
-        x0, y0, x1, y1 = laje.retangulo
-        ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0,
-                               facecolor=estilo.CONCRETO, edgecolor="none",
-                               alpha=0.65, zorder=1))
-        for bordo in (1, 2, 3, 4):
-            _simbolo_bordo(ax, laje, bordo)
-            # número do bordo, por dentro
-            bx0, by0, bx1, by1 = laje.segmento_do_bordo(bordo)
-            mx, my = (bx0 + bx1) / 2.0, (by0 + by1) / 2.0
-            cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-            dx, dy = (cx - mx), (cy - my)
-            norma = math.hypot(dx, dy) or 1.0
-            ax.text(mx + dx / norma * 0.30, my + dy / norma * 0.30,
-                    str(bordo), ha="center", va="center", fontsize=7,
-                    color=estilo.CINZA_MEDIO, zorder=7)
+        _preencher_laje(ax, laje)
+        _numero_dos_bordos(ax, laje)
         _rotulo_laje(ax, laje, rl.esforcos,
                      f"p = {rl.esforcos.g + rl.esforcos.q:.2f} kN/m²")
         _cotas(ax, laje)
+        _cargas_concentradas(ax, laje)
+    tem_canto = _zonas_de_canto(ax, res)
+    # as lajes especiais (R09): contorno, sentido do vão e o sistema
+    tipos = set()
+    for e in getattr(res, "especiais", []):
+        for nome in e.lajes:
+            laje = res.pavimento.laje(nome)
+            if laje is None:
+                continue
+            tipos.add(laje.tipo)
+            _preencher_laje(ax, laje)
+            _numero_dos_bordos(ax, laje)
+            _rotulo_laje(ax, laje, None, _texto_do_tipo(laje)
+                         + ("" if len(e.lajes) == 1
+                            else f"\nfaixa {e.nome}"))
+            _cotas(ax, laje)
 
     from matplotlib.lines import Line2D
-    _legenda(fig, ax, [
+    itens = [
         Line2D([], [], color=estilo.CINZA, lw=1.6, label="bordo apoiado"),
         Line2D([], [], color=estilo.AZUL, lw=1.6, label="bordo engastado"),
         Line2D([], [], color=estilo.CINZA, lw=1.4, ls=(0, (4, 3)),
-               label="bordo livre")])
+               label="bordo livre")]
+    from matplotlib.patches import Patch
+    if any(rl.laje.cargas_concentradas for rl in res.lajes):
+        itens.append(Patch(facecolor=estilo.VERMELHO,
+                           label="carga concentrada"))
+    if tem_canto:
+        itens.append(Patch(facecolor="none", edgecolor=estilo.AZUL,
+                           hatch="xx", label="armadura de canto"))
+    itens += _legenda_dos_tipos(tipos)
+    _legenda(fig, ax, itens)
     return fig
+
+
+def _legenda_dos_tipos(tipos) -> list:
+    """Uma entrada de legenda por tipo de laje especial presente."""
+    from matplotlib.patches import Patch
+    rotulos = {"trelicada": "laje treliçada", "alveolar": "laje alveolar",
+               "nervurada_uni": "nervurada unidirecional",
+               "nervurada_bi": "nervurada bidirecional"}
+    return [Patch(facecolor=COR_TIPO[t], alpha=0.65, label=rotulos[t])
+            for t in rotulos if t in tipos]
 
 
 class _Previa:
@@ -281,15 +399,18 @@ def figura_planta_simples(pav, mostrar_vigas: bool = False) -> Figure:
         x0, y0, x1, y1 = laje.retangulo
         if mostrar_vigas:
             _vigas(ax, laje)
-        ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0,
-                               facecolor=estilo.CONCRETO, edgecolor="none",
-                               alpha=0.65, zorder=1))
+        _preencher_laje(ax, laje)
         for bordo in (1, 2, 3, 4):
             _simbolo_bordo(ax, laje, bordo)
         _rotulo_laje(ax, laje, None,
-                     f"{laje.a:g} x {laje.b:g} m\n"
-                     f"g = {laje.g_total:.2f} / q = {laje.variavel:.2f} kN/m²")
+                     (f"{_texto_do_tipo(laje)}\n" if laje.especial else "")
+                     + f"{laje.a:g} x {laje.b:g} m\n"
+                     + (f"g adic. = {cargas_da_laje(laje)[0]:.2f} / "
+                        if laje.especial else f"g = {laje.g_total:.2f} / ")
+                     + f"q = {laje.variavel:.2f} kN/m²")
         _cotas(ax, laje)
+        if not laje.especial:
+            _cargas_concentradas(ax, laje)
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
     itens = [
@@ -297,11 +418,96 @@ def figura_planta_simples(pav, mostrar_vigas: bool = False) -> Figure:
         Line2D([], [], color=estilo.AZUL, lw=1.6, label="bordo engastado"),
         Line2D([], [], color=estilo.CINZA, lw=1.4, ls=(0, (4, 3)),
                label="bordo livre")]
+    if any(l.cargas_concentradas for l in pav.lajes if not l.especial):
+        itens.append(Patch(facecolor=estilo.VERMELHO,
+                           label="carga concentrada"))
     if mostrar_vigas:
         itens.append(Patch(facecolor=estilo.CINZA_CLARO,
                            edgecolor=estilo.CINZA, hatch="////",
                            label="viga de apoio"))
+    itens += _legenda_dos_tipos({l.tipo for l in pav.lajes})
     _legenda(fig, ax, itens)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Mapas da análise por elementos finitos (R10)
+# ---------------------------------------------------------------------------
+
+#: Grandezas que o mapa dos elementos finitos sabe mostrar.
+GRANDEZAS_MEF = (
+    "Mx (kN·m/m)", "My (kN·m/m)", "Mxy (kN·m/m)",
+    "M*x inferior, Wood-Armer (kN·m/m)", "M*y inferior, Wood-Armer (kN·m/m)",
+    "M*x superior, Wood-Armer (kN·m/m)", "M*y superior, Wood-Armer (kN·m/m)",
+    "Deslocamento w sob a carga de cálculo (mm)")
+
+
+def valor_da_celula(mef, c: dict, grandeza: str) -> float:
+    """Valor de uma célula da malha para o mapa (``grandeza`` de
+    :data:`GRANDEZAS_MEF`)."""
+    from ..core import woodarmer as wa
+    mc = c["Mc"]
+    if grandeza.startswith("Mx ("):
+        return float(mc[0])
+    if grandeza.startswith("My ("):
+        return float(mc[1])
+    if grandeza.startswith("Mxy"):
+        return float(mc[2])
+    if grandeza.startswith("Deslocamento"):
+        return c["w"] * 1000.0
+    nome = mef.paineis[c["painel"]].nome
+    ix, iy, sx, sy = wa.wood_armer(float(mc[0]), float(mc[1]), float(mc[2]),
+                                   mef.k, mef.mxyc_por_laje.get(nome, 0.0))
+    if grandeza.startswith("M*x inferior"):
+        return ix
+    if grandeza.startswith("M*y inferior"):
+        return iy
+    if grandeza.startswith("M*x superior"):
+        return sx
+    return sy
+
+
+def figura_mef(res, grandeza: str = GRANDEZAS_MEF[3]) -> Figure:
+    """Mapa, célula a célula, de uma grandeza da análise por elementos
+    finitos sobre a planta -- com os contornos das lajes por cima."""
+    from matplotlib.collections import PolyCollection
+    mef = res.mef
+    fig, ax = _preparar(res, f"Elementos finitos — {grandeza}")
+    if mef is None:
+        ax.text(0.5, 0.5, "Método dos esforços: linhas de ruptura.\nEscolha "
+                "'Elementos finitos' nos Critérios de cálculo.",
+                transform=ax.transAxes, ha="center", va="center",
+                color=estilo.CINZA)
+        return fig
+    r = mef.resultado
+    poligonos, valores = [], []
+    for (j, i), c in r.celulas.items():
+        x0, x1 = r.x[i], r.x[i + 1]
+        y0, y1 = r.y[j], r.y[j + 1]
+        poligonos.append([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+        valores.append(valor_da_celula(mef, c, grandeza))
+    valores = np.array(valores)
+    assinalada = grandeza.startswith(("Mx (", "My (", "Mxy"))
+    vmax = float(np.max(np.abs(valores))) if len(valores) else 1.0
+    colecao = PolyCollection(
+        poligonos, array=valores, edgecolors="face", linewidths=0.3,
+        cmap="RdBu_r" if assinalada else "YlOrRd", zorder=2)
+    if assinalada:
+        colecao.set_clim(-vmax, vmax)
+    ax.add_collection(colecao)
+    barra = fig.colorbar(colecao, ax=ax, shrink=0.8, pad=0.02)
+    barra.ax.tick_params(labelsize=8)
+    for p in mef.paineis:
+        ax.add_patch(Rectangle((p.x0, p.y0), p.x1 - p.x0, p.y1 - p.y0,
+                               facecolor="none", edgecolor=estilo.CINZA,
+                               lw=1.0, zorder=5))
+        ax.text((p.x0 + p.x1) / 2.0, (p.y0 + p.y1) / 2.0,
+                f"{p.nome}\nmáx. {np.max([abs(valor_da_celula(mef, c, grandeza)) for c in r.celulas.values() if mef.paineis[c['painel']].nome == p.nome]):.2f}",
+                ha="center", va="center", fontsize=8, color=estilo.AZUL,
+                zorder=6, bbox=dict(boxstyle="round,pad=0.25",
+                                    facecolor="white", edgecolor="none",
+                                    alpha=0.75))
+    fig.tight_layout()
     return fig
 
 

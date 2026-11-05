@@ -1,0 +1,640 @@
+{
+  "versao": 1,
+  "tipo": "lancamento",
+  "nome": "residencial",
+  "fck": 30.0,
+  "agregado": "granito e gnaisse",
+  "peso_especifico": 25.0,
+  "cota_base": 0.0,
+  "trecho_rigido": true,
+  "categoria_acidental": "residencial",
+  "plantas": {
+    "Tipo": {
+      "nome": "Tipo",
+      "pilares": [
+        {
+          "nome": "P1",
+          "x": 0.0,
+          "y": 0.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P2",
+          "x": 4.0,
+          "y": 0.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 0.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P3",
+          "x": 9.0,
+          "y": 0.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P4",
+          "x": 0.0,
+          "y": 5.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P5",
+          "x": 4.0,
+          "y": 5.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 0.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P6",
+          "x": 9.0,
+          "y": 5.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P7",
+          "x": 0.0,
+          "y": 8.5,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P8",
+          "x": 4.0,
+          "y": 8.5,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 0.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P9",
+          "x": 9.0,
+          "y": 8.5,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        }
+      ],
+      "vigas": [
+        {
+          "nome": "V1",
+          "pontos": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              9.0,
+              0.0
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V2",
+          "pontos": [
+            [
+              0.0,
+              5.0
+            ],
+            [
+              9.0,
+              5.0
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V3",
+          "pontos": [
+            [
+              0.0,
+              8.5
+            ],
+            [
+              9.0,
+              8.5
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V4",
+          "pontos": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              8.5
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V5",
+          "pontos": [
+            [
+              4.0,
+              0.0
+            ],
+            [
+              4.0,
+              8.5
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V6",
+          "pontos": [
+            [
+              9.0,
+              0.0
+            ],
+            [
+              9.0,
+              8.5
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V7",
+          "pontos": [
+            [
+              6.5,
+              0.0
+            ],
+            [
+              6.5,
+              5.0
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.4
+        }
+      ],
+      "lajes": [
+        {
+          "nome": "L1",
+          "x": 2.0,
+          "y": 2.5,
+          "espessura": 0.1,
+          "permanente": 0.0,
+          "acidental": 0.0,
+          "tipo_carga": "residencial",
+          "tipo": "macica",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.0,
+          "capa": 0.0,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        },
+        {
+          "nome": "L2",
+          "x": 5.2,
+          "y": 2.5,
+          "espessura": 0.1,
+          "permanente": 0.0,
+          "acidental": 0.0,
+          "tipo_carga": "residencial",
+          "tipo": "macica",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.0,
+          "capa": 0.0,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        },
+        {
+          "nome": "L3",
+          "x": 7.7,
+          "y": 2.5,
+          "espessura": 0.1,
+          "permanente": 0.0,
+          "acidental": 0.0,
+          "tipo_carga": "residencial",
+          "tipo": "macica",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.0,
+          "capa": 0.0,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        },
+        {
+          "nome": "L4",
+          "x": 2.0,
+          "y": 6.7,
+          "espessura": 0.1,
+          "permanente": 0.0,
+          "acidental": 0.0,
+          "tipo_carga": "residencial",
+          "tipo": "macica",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.0,
+          "capa": 0.0,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        },
+        {
+          "nome": "L5",
+          "x": 6.5,
+          "y": 6.7,
+          "espessura": 0.1,
+          "permanente": 0.0,
+          "acidental": 0.0,
+          "tipo_carga": "residencial",
+          "tipo": "macica",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.0,
+          "capa": 0.0,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        }
+      ],
+      "paredes": [
+        {
+          "nome": "Pa1",
+          "pontos": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              9.0,
+              0.0
+            ],
+            [
+              9.0,
+              8.5
+            ],
+            [
+              0.0,
+              8.5
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "espessura": 0.15,
+          "peso_especifico": 13.0,
+          "altura": 0.0
+        }
+      ]
+    },
+    "Cobertura": {
+      "nome": "Cobertura",
+      "pilares": [
+        {
+          "nome": "P1",
+          "x": 0.0,
+          "y": 0.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P2",
+          "x": 4.0,
+          "y": 0.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 0.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P3",
+          "x": 9.0,
+          "y": 0.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P4",
+          "x": 0.0,
+          "y": 5.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P5",
+          "x": 4.0,
+          "y": 5.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 0.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P6",
+          "x": 9.0,
+          "y": 5.0,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P7",
+          "x": 0.0,
+          "y": 8.5,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P8",
+          "x": 4.0,
+          "y": 8.5,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 0.0,
+          "insercao": "centro"
+        },
+        {
+          "nome": "P9",
+          "x": 9.0,
+          "y": 8.5,
+          "b": 0.2,
+          "h": 0.4,
+          "angulo": 90.0,
+          "insercao": "centro"
+        }
+      ],
+      "vigas": [
+        {
+          "nome": "V1",
+          "pontos": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              9.0,
+              0.0
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V2",
+          "pontos": [
+            [
+              0.0,
+              5.0
+            ],
+            [
+              9.0,
+              5.0
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V3",
+          "pontos": [
+            [
+              0.0,
+              8.5
+            ],
+            [
+              9.0,
+              8.5
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V4",
+          "pontos": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              8.5
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V5",
+          "pontos": [
+            [
+              4.0,
+              0.0
+            ],
+            [
+              4.0,
+              8.5
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V6",
+          "pontos": [
+            [
+              9.0,
+              0.0
+            ],
+            [
+              9.0,
+              8.5
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.45
+        },
+        {
+          "nome": "V7",
+          "pontos": [
+            [
+              6.5,
+              0.0
+            ],
+            [
+              6.5,
+              5.0
+            ]
+          ],
+          "b": 0.2,
+          "h": 0.4
+        }
+      ],
+      "lajes": [
+        {
+          "nome": "L1",
+          "x": 2.0,
+          "y": 2.5,
+          "espessura": 0.1,
+          "permanente": 1.0,
+          "acidental": 0.5,
+          "tipo_carga": "",
+          "tipo": "trelicada",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.12,
+          "capa": 0.05,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        },
+        {
+          "nome": "L2",
+          "x": 5.2,
+          "y": 2.5,
+          "espessura": 0.1,
+          "permanente": 1.0,
+          "acidental": 0.5,
+          "tipo_carga": "",
+          "tipo": "trelicada",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.12,
+          "capa": 0.05,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        },
+        {
+          "nome": "L3",
+          "x": 7.7,
+          "y": 2.5,
+          "espessura": 0.1,
+          "permanente": 1.0,
+          "acidental": 0.5,
+          "tipo_carga": "",
+          "tipo": "trelicada",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.12,
+          "capa": 0.05,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        },
+        {
+          "nome": "L4",
+          "x": 2.0,
+          "y": 6.7,
+          "espessura": 0.1,
+          "permanente": 1.0,
+          "acidental": 0.5,
+          "tipo_carga": "",
+          "tipo": "trelicada",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.12,
+          "capa": 0.05,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        },
+        {
+          "nome": "L5",
+          "x": 6.5,
+          "y": 6.7,
+          "espessura": 0.1,
+          "permanente": 1.0,
+          "acidental": 0.5,
+          "tipo_carga": "",
+          "tipo": "trelicada",
+          "direcao": "x",
+          "trelica": "TR 12646",
+          "enchimento": "EPS",
+          "altura_enchimento": 0.12,
+          "capa": 0.05,
+          "largura_bloco": 0.4,
+          "base_vigota": 0.12
+        }
+      ],
+      "paredes": []
+    }
+  },
+  "pavimentos": [
+    {
+      "nome": "1PAV",
+      "cota": 3.0,
+      "planta": "Tipo"
+    },
+    {
+      "nome": "2PAV",
+      "cota": 6.0,
+      "planta": "Tipo"
+    },
+    {
+      "nome": "COB",
+      "cota": 9.0,
+      "planta": "Cobertura"
+    }
+  ],
+  "cargas_de_laje": {
+    "residencial": [
+      1.5,
+      1.5
+    ]
+  },
+  "vento": {
+    "v0": 35.0,
+    "categoria": "III",
+    "grupo_s3": "2",
+    "s1": 1.0
+  },
+  "calculo": {
+    "diafragma": false,
+    "grelha": false,
+    "malha_grelha": 1.0,
+    "fonte_vigas": "portico",
+    "mesa_colaborante": true
+  }
+}

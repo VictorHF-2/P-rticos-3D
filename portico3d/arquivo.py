@@ -15,7 +15,8 @@ import json
 from pathlib import Path
 
 from .core.modelo import (Apoio, CargaDistribuida, CargaNodal, CasoDeCarga,
-                          ErroDeModelo, Modelo, Recalque, Secao)
+                          ErroDeModelo, Modelo, OpcoesDeCalculo, Recalque,
+                          Secao)
 
 VERSAO = 1
 
@@ -31,6 +32,11 @@ def para_dicionario(modelo: Modelo) -> dict:
         "versao": VERSAO,
         "nome": modelo.nome,
         "unidades": "kN, m",
+        "calculo": {"diafragma": modelo.calculo.diafragma,
+                    "grelha": modelo.calculo.grelha,
+                    "malha_grelha": modelo.calculo.malha_grelha,
+                    "fonte_vigas": modelo.calculo.fonte_vigas,
+                    "mesa_colaborante": modelo.calculo.mesa_colaborante},
         "materiais": [{"nome": m.nome, "E": m.E, "poisson": m.poisson,
                        "peso_especifico": m.peso_especifico, "tipo": m.tipo,
                        "fck": m.fck, "agregado": m.agregado,
@@ -58,8 +64,19 @@ def para_dicionario(modelo: Modelo) -> dict:
                   for m in modelo.molas.values()],
         "lajes": [{"nome": l.nome, "no_a": l.no_a, "no_c": l.no_c,
                    "espessura": l.espessura, "material": l.material,
-                   "permanente": l.permanente, "acidental": l.acidental}
+                   "permanente": l.permanente, "acidental": l.acidental,
+                   "tipo_carga": l.tipo_carga, "tipo": l.tipo,
+                   "direcao": l.direcao, "trelica": l.trelica,
+                   "enchimento": l.enchimento,
+                   "altura_enchimento": l.altura_enchimento,
+                   "capa": l.capa, "largura_bloco": l.largura_bloco,
+                   "base_vigota": l.base_vigota,
+                   "balanco": l.balanco, "sentido": l.sentido}
                   for l in modelo.lajes.values()],
+        "cargas_de_laje": [{"nome": t.nome, "permanente": t.permanente,
+                            "acidental": t.acidental,
+                            "descricao": t.descricao}
+                           for t in modelo.cargas_de_laje.values()],
         "casos": [{"nome": c.nome, "natureza": c.natureza,
                    "categoria": c.categoria, "grupo": c.grupo,
                    "nodais": [{"no": q.no, "fx": q.fx, "fy": q.fy, "fz": q.fz,
@@ -69,7 +86,8 @@ def para_dicionario(modelo: Modelo) -> dict:
                                      "qz": q.qz, "sistema": q.sistema,
                                      "inicio": q.inicio, "fim": q.fim,
                                      "qx_fim": q.qx_fim, "qy_fim": q.qy_fim,
-                                     "qz_fim": q.qz_fim}
+                                     "qz_fim": q.qz_fim,
+                                     "origem": q.origem}
                                     for q in c.distribuidas],
                    "recalques": [{"no": r.no, "ux": r.ux, "uy": r.uy,
                                   "uz": r.uz, "rx": r.rx, "ry": r.ry,
@@ -86,6 +104,17 @@ def de_dicionario(d: dict) -> Modelo:
             f"arquivo na versão {versao}; este programa lê até a {VERSAO}")
 
     modelo = Modelo(nome=d.get("nome", "modelo"))
+    # Arquivo sem o bloco de cálculo é de antes dele: lê com os padrões, que
+    # não mudam a análise.
+    c = d.get("calculo", {})
+    padrao = OpcoesDeCalculo()
+    modelo.calculo = OpcoesDeCalculo(
+        diafragma=bool(c.get("diafragma", padrao.diafragma)),
+        grelha=bool(c.get("grelha", padrao.grelha)),
+        malha_grelha=float(c.get("malha_grelha", padrao.malha_grelha)),
+        fonte_vigas=str(c.get("fonte_vigas", padrao.fonte_vigas)),
+        mesa_colaborante=bool(c.get("mesa_colaborante",
+                                    padrao.mesa_colaborante)))
 
     for m in d.get("materiais", []):
         modelo.add_material(_exigir(m, "nome", "material"),
@@ -139,6 +168,13 @@ def de_dicionario(d: dict) -> Modelo:
                         float(m.get("krx", 0.0)), float(m.get("kry", 0.0)),
                         float(m.get("krz", 0.0)))
 
+    for t in d.get("cargas_de_laje", []):
+        ctx = "tipo de carga de laje"
+        modelo.add_carga_de_laje(_exigir(t, "nome", ctx),
+                                 float(t.get("permanente", 0.0)),
+                                 float(t.get("acidental", 0.0)),
+                                 t.get("descricao", ""))
+
     for l in d.get("lajes", []):
         ctx = "laje"
         modelo.add_laje(_exigir(l, "nome", ctx), _exigir(l, "no_a", ctx),
@@ -146,7 +182,19 @@ def de_dicionario(d: dict) -> Modelo:
                         float(l.get("espessura", 0.0)),
                         l.get("material", ""),
                         float(l.get("permanente", 0.0)),
-                        float(l.get("acidental", 0.0)))
+                        float(l.get("acidental", 0.0)),
+                        l.get("tipo_carga", ""),
+                        tipo=l.get("tipo", "macica"),
+                        direcao=l.get("direcao", "x"),
+                        trelica=l.get("trelica", "TR 12646"),
+                        enchimento=l.get("enchimento", "EPS"),
+                        altura_enchimento=float(l.get("altura_enchimento",
+                                                      0.0)),
+                        capa=float(l.get("capa", 0.0)),
+                        largura_bloco=float(l.get("largura_bloco", 0.40)),
+                        base_vigota=float(l.get("base_vigota", 0.12)),
+                        balanco=float(l.get("balanco", 0.0)),
+                        sentido=l.get("sentido", ""))
 
     for c in d.get("casos", []):
         caso = CasoDeCarga(_exigir(c, "nome", "caso de carga"),
@@ -169,7 +217,8 @@ def de_dicionario(d: dict) -> Modelo:
                 float(q.get("qx", 0.0)), float(q.get("qy", 0.0)),
                 float(q.get("qz", 0.0)), q.get("sistema", "local"),
                 float(q.get("inicio", 0.0)), float(q.get("fim", 1.0)),
-                opcional("qx_fim"), opcional("qy_fim"), opcional("qz_fim")))
+                opcional("qx_fim"), opcional("qy_fim"), opcional("qz_fim"),
+                str(q.get("origem", "") or "")))
         for r in c.get("recalques", []):
             caso.recalques.append(Recalque(
                 _exigir(r, "no", "recalque"), float(r.get("ux", 0.0)),
@@ -178,6 +227,10 @@ def de_dicionario(d: dict) -> Modelo:
                 float(r.get("rz", 0.0))))
         modelo.casos[caso.nome] = caso
 
+    # Resolvido de novo na leitura, e não só na hora de montar: se o arquivo
+    # foi editado à mão e um tipo de carga mudou, a laje reflete o valor
+    # atual do tipo, não o número congelado que estava gravado nela.
+    modelo.aplicar_cargas_de_laje()
     modelo.validar()
     return modelo
 
@@ -192,8 +245,23 @@ def gravar(modelo: Modelo, caminho: str | Path) -> Path:
 
 
 def ler(caminho: str | Path) -> Modelo:
+    """Lê o modelo de cálculo — ou, se o arquivo for de **lançamento**
+    (``"tipo": "lancamento"``), gera o modelo a partir dele. O lançamento
+    com erro não vira modelo: a lista de erros sobe como ``ErroDeModelo``.
+    """
     texto = Path(caminho).read_text(encoding="utf-8")
     try:
-        return de_dicionario(json.loads(texto))
+        d = json.loads(texto)
     except json.JSONDecodeError as erro:
         raise ErroDeModelo(f"JSON inválido em {caminho}: {erro}") from None
+    if isinstance(d, dict) and d.get("tipo") == "lancamento":
+        from .lancamento.arquivo import de_dicionario as lancamento_de
+        from .lancamento.gerador import gerar
+        lancamento = lancamento_de(d)
+        geracao = gerar(lancamento)
+        if not geracao.ok:
+            raise ErroDeModelo(geracao.resumo())
+        geracao.modelo.__dict__["geracao"] = geracao
+        geracao.modelo.__dict__["lancamento"] = lancamento
+        return geracao.modelo
+    return de_dicionario(d)

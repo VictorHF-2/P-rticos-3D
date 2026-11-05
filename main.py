@@ -58,6 +58,7 @@ def conferir_janela(destino: str) -> list[str]:
     from portico3d.ui.assistente import gerar_portico
     from portico3d.ui.janela import Janela
     from portico3d.ui.tema import aplicar_tema_claro
+    from portico3d.ui.janela import ANALISES
     from portico3d.ui.vista3d import VISTAS_DE_ESFORCO
 
     aplicacao = QApplication.instance() or QApplication([])
@@ -100,27 +101,48 @@ def conferir_janela(destino: str) -> list[str]:
                            "calculadas")
     notas.append(f"janela: seção calculada pelos lados, Iy = {calculada.text()}")
 
-    janela.escolha_caso.setCurrentText("G")
-    janela.analisar()
+    # Um botão só roda todas as análises; a lista Análise escolhe qual olhar.
+    janela.analisar_tudo()
     if "G" not in janela.resultados:
         raise RuntimeError("a análise do caso G não produziu resultado")
-    notas.append("janela: caso G analisado")
-
-    janela.analisar_flambagem()
-    janela.analisar_combinacoes()
-    janela.analisar_estabilidade()
+    if "G" not in janela.resultados_2a:
+        raise RuntimeError("a 2ª ordem do caso G não produziu resultado")
+    notas.append("janela: um clique em Análise resolveu 1ª e 2ª ordem")
+    if not janela.flambagens or not janela.resultados_estab:
+        raise RuntimeError("flambagem ou estabilidade ficaram sem resultado")
     notas.append("janela: combinações, estabilidade e flambagem percorridas")
 
-    # ``dimensionar_lajes`` e ``dimensionar_vigas`` abrem diálogo de pasta, e
-    # diálogo modal em modo offscreen fica esperando para sempre. O que se
-    # prova aqui é a função por baixo, que é onde mora o cálculo; o botão em
-    # si já é exercitado pelos outros que não pedem pasta.
-    from portico3d.dimensionamento import cotas_com_laje, verificar_lajes
+    if janela.modal_atual is None:
+        raise RuntimeError("a análise modal não produziu resultado")
+    notas.append(f"janela: modal com {len(janela.modal_atual.frequencias)} "
+                 f"frequências (f1 = {janela.modal_atual.frequencia_fundamental:.3f} Hz)")
+
+    # Cada análise oferece só as vistas que fazem sentido para ela: o modal
+    # não tem armadura, e a flambagem não tem diagrama de momento.
+    janela.escolha_analise.setCurrentText("Modal")
+    vistas_modal = [janela.escolha_vista.itemText(i)
+                    for i in range(janela.escolha_vista.count())]
+    if "Armadura" in vistas_modal or "My" in vistas_modal:
+        raise RuntimeError(f"o modal oferece vistas que não são dele: "
+                           f"{vistas_modal}")
+    notas.append(f"janela: o modal oferece só {vistas_modal}")
+
+    # Os três "Dimensionar" não abrem diálogo: calculam, guardam o resultado e
+    # atualizam o modelo 3D da armadura. A pasta só é perguntada em
+    # ``Emitir > Pranchas`` — aí o diálogo é trocado por uma pasta fixa, porque
+    # diálogo modal em modo offscreen fica esperando para sempre.
+    import tempfile
+
+    from portico3d.dimensionamento import cotas_com_laje
     cotas = cotas_com_laje(janela.modelo)
-    lajes = verificar_lajes(janela.modelo)
+    janela.dimensionar_lajes()
+    lajes = janela.dimensionamento.get("lajes") or []
     if not any(v.passou for v in lajes):
         raise RuntimeError("nenhum pavimento de laje foi dimensionado")
-    notas.append(f"janela: {len(cotas)} pavimentos de laje dimensionados")
+    if any(v.desenhos for v in lajes):
+        raise RuntimeError("dimensionar lajes gravou desenho sem ser pedido")
+    notas.append(f"janela: {len(cotas)} pavimentos de laje dimensionados, "
+                 "sem gravar planta")
 
     antes = len(janela.relatorio.toPlainText())
     janela.dimensionar_pilares()
@@ -128,6 +150,55 @@ def conferir_janela(destino: str) -> list[str]:
         raise RuntimeError("o dimensionamento de pilares não produziu relatório")
     notas.append("janela: pilares dimensionados pelo motor copiado")
 
+    janela.dimensionar_vigas()
+    vigas = janela.dimensionamento.get("vigas") or []
+    if not any(v.passou for v in vigas):
+        raise RuntimeError("nenhuma viga foi dimensionada")
+    if any(v.desenhos for v in vigas):
+        raise RuntimeError("dimensionar vigas gravou desenho sem ser pedido")
+    notas.append(f"janela: {len(vigas)} vigas dimensionadas, sem gravar "
+                 "prancha")
+    if not all(v.esforcos == "portico" for v in vigas if v.passou):
+        raise RuntimeError("as vigas não foram armadas pela envoltória do "
+                           "pórtico, que é o padrão")
+    notas.append("janela: vigas armadas pela envoltória do pórtico")
+
+    # O menu Cálculo: diafragma e grelha ligados pela ação, como o usuário
+    # faria, e a Análise de novo. A opção vai para o modelo, sobrevive ao
+    # "Aplicar tabelas" e apaga as análises feitas com a opção anterior.
+    janela.acao_diafragma.setChecked(True)
+    janela.acao_grelha.setChecked(True)
+    if janela.resultados:
+        raise RuntimeError("ligar a grelha não apagou as análises antigas")
+    janela.analisar_tudo()
+    calculo = janela.modelo.calculo
+    texto = janela.relatorio.toPlainText()
+    if not (calculo.diafragma and calculo.grelha):
+        raise RuntimeError("o menu Cálculo não chegou ao modelo")
+    if "Diafragma rígido: 3 pavimentos" not in texto or "grelha:" not in texto:
+        raise RuntimeError("a Análise não relatou o diafragma e a grelha")
+    r = janela.resultados.get("G")
+    if r is None or r.calculo is None:
+        raise RuntimeError("a 1ª ordem não passou pela grelha")
+    janela._mostrar("1ª ordem", "My")
+    notas.append(f"janela: diafragma e grelha pelo menu Cálculo — "
+                 f"{r.calculo[0].calc.n_gdl} graus de liberdade no cálculo, "
+                 f"f1 = {janela.modal_atual.frequencia_fundamental:.3f} Hz")
+    janela.acao_grelha.setChecked(False)
+    janela.acao_diafragma.setChecked(False)
+    janela.analisar_tudo()
+
+    with tempfile.TemporaryDirectory() as pasta_pranchas:
+        janela._pasta_de_saida = lambda titulo: pasta_pranchas
+        janela.emitir_pranchas_de_vigas()
+        janela.emitir_pranchas_de_lajes()
+        gravados = os.listdir(pasta_pranchas)
+    if not any(a.endswith(".dxf") for a in gravados):
+        raise RuntimeError("as pranchas pedidas não foram gravadas")
+    notas.append(f"janela: pranchas gravadas só ao pedir ({len(gravados)} "
+                 "arquivos)")
+
+    janela.escolha_analise.setCurrentText("1ª ordem")
     janela.escolha_caso.setCurrentText("G")
     antes = len(janela.relatorio.toPlainText())
     janela.mostrar_reacoes()
@@ -136,11 +207,48 @@ def conferir_janela(destino: str) -> list[str]:
         raise RuntimeError("a tabela de reações não foi para o relatório")
     notas.append("janela: tabela de reações emitida")
 
-    for vista in ["Modelo", "3D", "Laje", "Armadura", "Deformada",
-                  *VISTAS_DE_ESFORCO, "Modo de flambagem"]:
-        janela.escolha_vista.setCurrentText(vista)
-        janela.redesenhar()
-    notas.append(f"janela: {len(VISTAS_DE_ESFORCO) + 6} vistas desenhadas")
+    # Cada análise com as vistas dela, e o caso que ela resolveu.
+    desenhadas = 0
+    for analise in ANALISES:
+        janela.escolha_analise.setCurrentText(analise)
+        for i in range(janela.escolha_vista.count()):
+            janela.escolha_vista.setCurrentIndex(i)
+            janela.redesenhar()
+            desenhadas += 1
+    notas.append(f"janela: {desenhadas} combinações de análise e vista "
+                 "desenhadas")
+    # O vento do assistente (cargas nodais horizontais) aparece na vista de
+    # cargas, e "todos os casos" junta o permanente, o variável e o vento; as
+    # cargas na mesma barra ficam em camadas, e não umas sobre as outras.
+    from portico3d.ui.janela import TODOS_OS_CASOS
+
+    janela.escolha_analise.setCurrentText("Cargas")
+    janela.escolha_vista.setCurrentText("Cargas")
+    janela.escolha_caso.setCurrentText("VX")
+    janela.redesenhar()
+    setas_vento = [n for n in janela.vista.renderer.actors
+                   if n.startswith("carga_")]
+    if not setas_vento:
+        raise RuntimeError("o vento VX não apareceu na vista de cargas")
+    if not any("Fx = +" in t for t, _ in
+               janela.vista._alvo_de_carga.values()):
+        raise RuntimeError("a carga horizontal do vento não tem o texto de Fx")
+    janela.escolha_caso.setCurrentText(TODOS_OS_CASOS)
+    janela.redesenhar()
+    setas_todas = [n for n in janela.vista.renderer.actors
+                   if n.startswith("carga_")]
+    if len(setas_todas) <= len(setas_vento):
+        raise RuntimeError("'todos os casos' não juntou as cargas dos casos")
+    empilhadas = [v for v in janela.vista._camadas.values() if v > 0.0]
+    if not empilhadas:
+        raise RuntimeError("as cargas da vista não foram empilhadas em camadas")
+    notas.append(f"janela: vista de cargas com o vento ({len(setas_vento)} "
+                 f"setas) e todos os casos juntos ({len(setas_todas)} cargas, "
+                 f"{len(empilhadas)} pilhas de camadas)")
+
+    janela.escolha_analise.setCurrentText("Modelo")
+    janela.escolha_vista.setCurrentText("Armadura")
+    janela.redesenhar()
 
     # A vista de Armadura roda os três motores de elemento e guarda o
     # resultado por cota. Conferir o cache é conferir que girar o desenho não
@@ -201,9 +309,78 @@ def conferir_janela(destino: str) -> list[str]:
     notas.append(f"janela: vista de laje com {len(janela._ultimo_relatorio_de_laje)}"
                  " painéis calculados")
 
-    figura = os.path.join(destino, "janela.png")
-    janela.vista.figure.savefig(figura, dpi=110, facecolor="white")
-    notas.append(f"janela: figura gravada em {figura}")
+    # O motor de desenho é PyVista/VTK: sob QT_QPA_PLATFORM=offscreen o
+    # widget embutido monta a cena inteira (add_mesh, reset_camera, add_text)
+    # normalmente, mas ``render()``/``screenshot()`` não têm janela real para
+    # desenhar (RenderWindowUnavailable — ver a nota no topo de vista3d.py).
+    # A conferência que faz sentido aqui é a mesma que Consolos R03 e
+    # Lajes R06 adotaram: o CONTEÚDO da cena, não o pixel renderizado. A
+    # última vista percorrida no laço acima foi "Modo de vibração", que
+    # desenha pelo menos uma linha do modo — e o esqueleto do modelo.
+    # As lajes do modelo 3D: opacas, e escondidas pela caixa "lajes" sem
+    # redesenhar (a câmera fica onde está).
+    janela.escolha_analise.setCurrentText("Modelo")
+    janela.escolha_vista.setCurrentText("3D")
+    janela.redesenhar()
+    lajes_3d = [(n, a) for n, a in janela.vista.renderer.actors.items()
+                if n.startswith("laje_")]
+    if not lajes_3d:
+        raise RuntimeError("o modelo 3D não desenhou nenhuma laje")
+    if any(a.GetProperty().GetOpacity() < 1.0 for _, a in lajes_3d):
+        raise RuntimeError("as lajes do modelo 3D ainda estão transparentes")
+    if not janela.mostrar_lajes.isEnabled():
+        raise RuntimeError("a caixa das lajes está apagada na vista 3D")
+    janela.vista.camera_position = [(30.0, -40.0, 25.0), (6.0, 5.0, 3.0),
+                                    (0.0, 0.0, 1.0)]
+    posicao = [tuple(p) for p in janela.vista.camera_position]
+    janela.mostrar_lajes.setChecked(False)
+    if any(a.GetVisibility() for _, a in lajes_3d):
+        raise RuntimeError("desmarcar a caixa não escondeu as lajes")
+    if [tuple(p) for p in janela.vista.camera_position] != posicao:
+        raise RuntimeError("esconder as lajes mexeu na câmera")
+    janela.redesenhar()                  # o estado da caixa sobrevive ao redesenho
+    if any(a.GetVisibility() for n, a in janela.vista.renderer.actors.items()
+           if n.startswith("laje_")):
+        raise RuntimeError("o redesenho trouxe as lajes de volta")
+    janela.mostrar_lajes.setChecked(True)
+    if not all(a.GetVisibility() for n, a in janela.vista.renderer.actors.items()
+               if n.startswith("laje_")):
+        raise RuntimeError("marcar a caixa não devolveu as lajes")
+    janela.escolha_vista.setCurrentText("Modelo")
+    janela.redesenhar()
+    if janela.mostrar_lajes.isEnabled():
+        raise RuntimeError("a caixa das lajes devia ficar apagada fora do 3D")
+    notas.append(f"janela: {len(lajes_3d)} lajes opacas no 3D, escondidas e "
+                 "devolvidas pela caixa sem mexer na câmera")
+
+    # a vista de Armadura embutida só mostra um aviso: volta ao modelo para
+    # contar o que a cena desenhou de verdade
+    janela.escolha_vista.setCurrentText("Modelo")
+    janela.redesenhar()
+    n_atores = len(janela.vista.renderer.actors)
+    if n_atores == 0:
+        raise RuntimeError("a vista 3D não desenhou nenhum ator (PyVista)")
+    notas.append(f"janela: cena 3D com {n_atores} atores (motor PyVista)")
+
+    # A vista de Armadura é a única que abre como janela nativa separada
+    # (VistaArmadura3D.mostrar() bloqueia com pv.Plotter().show(), o que
+    # travaria o autoteste); o que se confere aqui é a montagem da cena por
+    # baixo, com um Plotter fora de tela — o mesmo padrão de
+    # ``dimensionar_lajes``/``dimensionar_vigas`` acima, que testam a função
+    # e não o diálogo.
+    import pyvista as pv
+
+    from portico3d.ui.vista3d import construir_cena_armadura
+
+    plotter_armadura = pv.Plotter(off_screen=True)
+    info_armadura = construir_cena_armadura(plotter_armadura, janela.modelo,
+                                            armadura, cota)
+    plotter_armadura.close()
+    if not info_armadura:
+        raise RuntimeError("a cena da armadura não identificou família "
+                           "nenhuma")
+    notas.append(f"janela: cena da armadura com {len(info_armadura)} "
+                 "famílias identificáveis (janela nativa, PyVista)")
 
     # -- cabe em qualquer tela --------------------------------------------
     # O que decide isto é o ``minimumSizeHint``: o Qt ignora um mínimo menor
@@ -252,7 +429,183 @@ def conferir_janela(destino: str) -> list[str]:
         raise RuntimeError(f"atalhos fora do alcance da janela: {faltando}")
     notas.append("janela: os oito atalhos de F2 a F9 alcançam a janela")
 
+    notas += conferir_editor_de_lancamento(janela, aplicacao)
     janela.close()
+    return notas
+
+
+def conferir_editor_de_lancamento(janela, aplicacao) -> list[str]:
+    """O editor de planta por cliques de mouse de verdade (``QTest``), e o
+    modelo gerado chegando à janela.
+
+    Um pórtico de 5 × 4 m em dois pavimentos: quatro pilares clicados de
+    propósito fora da grade (a captura os põe no lugar), a viga como
+    polilinha que captura os centros dos pilares, a laje com um clique, e
+    "Gerar modelo". Depois o exemplo residencial aberto no editor.
+    """
+    from pathlib import Path
+
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtTest import QTest
+
+    notas = []
+    janela.abrir_lancamento()
+    ed = janela.editor_de_lancamento
+    ed.resize(1400, 900)
+    ed.show()
+    aplicacao.processEvents()
+    ed.redesenhar(enquadrar=True)
+    aplicacao.processEvents()
+
+    def clicar(x, y, modificador=Qt.NoModifier):
+        pos = ed.vista.mapFromScene(QPointF(x, -y))
+        QTest.mouseMove(ed.vista.viewport(), pos)
+        QTest.mouseClick(ed.vista.viewport(), Qt.LeftButton,
+                         modificador, pos)
+        aplicacao.processEvents()
+
+    ed.escolher_ferramenta("Pilar")
+    for x, y in ((0.02, -0.01), (5.01, 0.02), (4.99, 3.99), (-0.02, 3.98)):
+        clicar(x, y)
+    centros = sorted((p.x, p.y) for p in ed.planta.pilares)
+    if centros != [(0.0, 0.0), (0.0, 4.0), (5.0, 0.0), (5.0, 4.0)]:
+        raise RuntimeError(f"a captura não pôs os pilares na grade: "
+                           f"{centros}")
+    ed.escolher_ferramenta("Viga")
+    for x, y in ((0.03, 0.02), (5.0, 0.04), (5.02, 4.0), (0.01, 4.02),
+                 (0.0, 0.03)):
+        clicar(x, y)
+    QTest.keyClick(ed.vista, Qt.Key_Return)
+    aplicacao.processEvents()
+    ed.escolher_ferramenta("Laje")
+    clicar(2.5, 2.0)
+    ed.acrescentar_pavimento()
+    g = ed.gerar_modelo()
+    if not g.ok:
+        raise RuntimeError("o lançamento clicado não gerou: "
+                           + "; ".join(g.erros))
+    if len(janela.modelo.barras) != 16 or len(janela.modelo.lajes) != 2:
+        raise RuntimeError("o modelo gerado não chegou à janela")
+    notas.append("editor de lançamento: pilares, viga e laje por clique "
+                 "(captura na grade e nos pilares), dois pavimentos — "
+                 f"{len(janela.modelo.nos)} nós e "
+                 f"{len(janela.modelo.barras)} barras entregues à janela")
+
+    # Precisão: passo de 10 cm sem captura em objetos, coordenada digitada
+    # (absoluta e relativa) e o giro do próximo pilar antes de colocá-lo.
+    ed.escolher_ferramenta("Pilar")
+    ed.definir_passo(0.10)
+    ed.captura_objetos.setChecked(False)
+    if ed.capturar(2.2349, 2.8761) != (2.2, 2.9):
+        raise RuntimeError("o passo de 10 cm não travou a captura")
+    ed.girar()
+    ed.entrar_coordenada("2,2; 2,8")
+    ed.entrar_coordenada("@3; 0")
+    novos = [p for p in ed.planta.pilares if p.y == 2.8]
+    if [(p.x, p.angulo) for p in novos] != [(2.2, 90.0), (5.2, 90.0)]:
+        raise RuntimeError(f"coordenada digitada ou giro falharam: "
+                           f"{[(p.x, p.y, p.angulo) for p in novos]}")
+    ed._ao_mover(1.0, 1.0, Qt.NoModifier)
+    if len(ed._dinamicos) < 3:
+        raise RuntimeError("o pilar não aparece junto do cursor antes do "
+                           "clique")
+    for p in novos:
+        ed.apagar(p)
+    ed.captura_objetos.setChecked(True)
+    ed.definir_passo(0.05)
+    notas.append("editor de lançamento: passo de 10 cm, coordenada digitada "
+                 "(2,2; 2,8 e @3; 0), pilar girado visto no cursor antes do "
+                 "clique")
+
+    # Zoom pela roda: o ponto sob o mouse fica onde está (antes ia ao 0; 0)
+    from PySide6.QtCore import QPoint
+    pixel = QPoint(ed.vista.viewport().width() * 3 // 4,
+                   ed.vista.viewport().height() // 4)
+    antes = ed.vista.mapToScene(pixel)
+    for fator in (1.15, 1.15, 1.15, 1 / 1.15):
+        ed.vista.zoom_em(pixel, fator)
+    depois = ed.vista.mapToScene(pixel)
+    deriva_px = ((depois - antes).manhattanLength() * ed.vista.escala)
+    if deriva_px > 2.0:
+        raise RuntimeError(f"o zoom não ficou no ponto sob o mouse "
+                           f"({deriva_px:.1f} px de deriva)")
+    ed.redesenhar(enquadrar=True)
+    aplicacao.processEvents()
+
+    # A viga clicada com mudança de direção sai como duas vigas
+    antes_v = len(ed.planta.vigas)
+    ed.escolher_ferramenta("Viga")
+    for x, y in ((0.0, 0.0), (4.5, 0.0), (6.0, 2.0)):
+        clicar(x, y)
+    QTest.keyClick(ed.vista, Qt.Key_Return)
+    aplicacao.processEvents()
+    dobradas = ed.planta.vigas[antes_v:]
+    if [v.pontos for v in dobradas] != [[(0.0, 0.0), (4.5, 0.0)],
+                                        [(4.5, 0.0), (6.0, 2.0)]]:
+        raise RuntimeError(f"a viga dobrada não virou duas: "
+                           f"{[v.pontos for v in dobradas]}")
+    for v in dobradas:
+        ed.apagar(v)
+    notas.append(f"editor de lançamento: zoom preso ao ponto sob o mouse "
+                 f"({deriva_px:.2f} px), viga dobrada clicada vira duas")
+
+    # Grelha 6 × 6 numa planta nova, a cota de um espaço clicada e trocada
+    ed.nova_planta()
+    ed.gerar_grelha(6, 5.0, 6, 5.0, pilares=True, vigas=True)
+    if len(ed.planta.pilares) != 36 or len(ed.planta.vigas) != 12:
+        raise RuntimeError("a grelha não lançou 36 pilares e 12 vigas")
+    aplicacao.processEvents()
+    _, _, (cx, cy) = next(c for c in ed._cotas_da_grelha
+                          if c[:2] == ("coluna", 2))
+    if ed._cota_da_grelha_em(cx + 0.1, cy) != ("coluna", 2):
+        raise RuntimeError("o clique na cota do 3º espaço não a acha")
+    ed.editar_espaco("coluna", 2, 2.0)
+    if ed.lanc.grelha.xs != [0.0, 5.0, 10.0, 12.0, 17.0, 22.0]:
+        raise RuntimeError(f"a troca do espaço moveu errado: "
+                           f"{ed.lanc.grelha.xs}")
+    notas.append("editor de lançamento: grelha 6×6 com 36 pilares e 12 "
+                 "vigas; a cota C–D clicada vira 2 m e só ela muda")
+
+    # Seleção múltipla: Ctrl+clique soma, Alt+clique tira, viga não entra
+    # numa seleção de pilares, e o painel e o R valem para todos
+    ed.redesenhar(enquadrar=True)
+    aplicacao.processEvents()
+    ed.escolher_ferramenta("Selecionar")
+    clicar(0.0, 0.0)
+    for x, y in ((5.0, 0.0), (10.0, 5.0), (12.0, 10.0)):
+        clicar(x, y, Qt.ControlModifier)
+    clicar(2.5, 0.0, Qt.ControlModifier)                  # a viga V1
+    clicar(10.0, 5.0, Qt.AltModifier)
+    sel = [p for p in ed.selecionados]
+    if [type(p).__name__ for p in sel] != ["PilarLancado"] * 3 or \
+            sorted(p.centro for p in sel) != [(0.0, 0.0), (5.0, 0.0),
+                                              (12.0, 10.0)]:
+        raise RuntimeError(f"Ctrl/Alt+clique montou a seleção errada: "
+                           f"{[(o.nome, getattr(o, 'centro', '')) for o in sel]}")
+    ed.form._campos["b"].setValue(0.30)
+    fora = [p for p in ed.planta.pilares if not ed.esta_selecionado(p)]
+    angulos = {id(p): p.angulo for p in ed.planta.pilares}
+    ed.girar()
+    if any(p.b != 0.30 or p.angulo != (angulos[id(p)] + 90.0) % 360.0
+           for p in sel) or \
+            any(p.b == 0.30 or p.angulo != angulos[id(p)] for p in fora) or \
+            "nome" in ed.form._campos:
+        raise RuntimeError("a mudança em lote não foi só para os "
+                           "selecionados")
+    notas.append("editor de lançamento: Ctrl+clique em 4 pilares, Alt+clique "
+                 "tira 1, a viga fica fora; seção e giro valem para os 3")
+    ed.apagar_grelha()
+
+    exemplo = Path(__file__).parent / "exemplos" / \
+        "lancamento-residencial.json"
+    if exemplo.exists():
+        ed.abrir(str(exemplo))
+        g = ed.gerar_modelo()
+        if not g.ok or len(janela.modelo.barras) != 72:
+            raise RuntimeError("o exemplo residencial não gerou pelo editor")
+        notas.append("editor de lançamento: o exemplo residencial abre e "
+                     "gera o mesmo modelo (72 barras, 15 lajes)")
+    ed.close()
     return notas
 
 
@@ -329,8 +682,7 @@ def conferir_montagem_pela_janela() -> list[str]:
     if not janela.aplicar():
         raise RuntimeError("as tabelas montadas à mão foram recusadas")
 
-    janela.escolha_caso.setCurrentText("G")
-    janela.analisar()
+    janela.analisar_tudo()
     resultado = janela.resultados.get("G")
     if resultado is None:
         raise RuntimeError("a análise da viga montada não produziu resultado")
@@ -340,9 +692,65 @@ def conferir_montagem_pela_janela() -> list[str]:
         raise RuntimeError(f"momento no vão saiu {meio}, esperado "
                            f"{w * L ** 2 / 8.0}")
 
+    # Ler o esforço com o clique: no diagrama de My, o ponto do meio do vão
+    # tem de devolver wL²/8, com a unidade, e a leitura de verdade (raio
+    # lançado da tela) tem de achar a barra.
+    import numpy as np
+
+    janela.escolha_analise.setCurrentText("1ª ordem")
+    janela.escolha_vista.setCurrentText("My")
+    janela.redesenhar()
+    vista = janela.vista
+    # sem tela o renderizador nasce com tamanho zero, e então o raio lançado
+    # da tela não significa nada: dá-lhe um tamanho de verdade
+    vista.render_window.SetSize(800, 600)
+    janela.redesenhar()
+    if not vista._barra_do_ator:
+        raise RuntimeError("o diagrama de esforços não tem nada em que clicar")
+    # o clique não pode devolver a câmera à posição inicial
+    vista.camera_position = [(10.0, -12.0, 8.0), (L / 2.0, 0.0, 0.0),
+                             (0.0, 0.0, 1.0)]
+    camera_antes = [tuple(np.round(p, 6)) for p in vista.camera_position]
+    texto = vista._ler_esforco("B1", np.array([L / 2.0, 0.0, 0.0]))
+    camera_depois = [tuple(np.round(p, 6)) for p in vista.camera_position]
+    if camera_antes != camera_depois:
+        raise RuntimeError("o clique para ler o esforço moveu a câmera")
+    esperado = f"{w * L ** 2 / 8.0:+.2f} kN·m"
+    if esperado not in texto:
+        raise RuntimeError(f"a leitura do meio do vão saiu '{texto}', "
+                           f"esperado {esperado}")
+    vista.renderer.SetWorldPoint(L / 2.0, 0.0, 0.0, 1.0)
+    vista.renderer.WorldToDisplay()
+    x_tela, y_tela, _ = vista.renderer.GetDisplayPoint()
+    vista._picker.Pick(x_tela, y_tela, 0, vista.renderer)
+    if vista._barra_do_ator.get(vista._picker.GetActor()) != "B1":
+        raise RuntimeError("o clique no meio da barra não achou a barra")
+
+    # A vista de Cargas: o que o caso aplica, clicável, com a resultante.
+    janela.escolha_analise.setCurrentText("Cargas")
+    janela.escolha_caso.setCurrentText("G")
+    janela.redesenhar()
+    if not vista._alvo_de_carga:
+        raise RuntimeError("a vista de cargas não tem nada em que clicar")
+    textos = [t for t, _ in vista._alvo_de_carga.values()]
+    if not any(f"qz = {-w:+.2f} kN/m" in t for t in textos):
+        raise RuntimeError("a carga distribuída da viga não está na vista")
+    resumo = janela._texto_da_analise("Cargas")
+    if f"Fz = {-w * L:+.2f} kN" not in resumo:
+        raise RuntimeError(f"a resultante do caso não fechou: {resumo}")
+    vista.renderer.SetWorldPoint(L / 2.0, 0.0, 0.0, 1.0)
+    vista.renderer.WorldToDisplay()
+    x_tela, y_tela, _ = vista.renderer.GetDisplayPoint()
+    vista._picker.Pick(x_tela, y_tela, 0, vista.renderer)
+    if vista._picker.GetActor() not in vista._alvo_de_carga:
+        raise RuntimeError("o clique no meio da viga não achou carga nem barra")
+
     janela.close()
     return [f"janela: viga montada do zero pelas tabelas, My no vão = "
-            f"{meio:.4f} = wL²/8"]
+            f"{meio:.4f} = wL²/8",
+            f"janela: clique no diagrama lê {esperado} no meio do vão, "
+            "sem mexer na câmera",
+            f"janela: vista de cargas confere a resultante Fz = {-w * L:+.2f} kN"]
 
 
 def autoteste(destino: str) -> int:
@@ -407,8 +815,11 @@ def envoltoriar(caminho: str) -> int:
         modelo = ler(caminho)
         acoes = acoes_do_modelo(modelo)
         validar_acoes(modelo, acoes)
-        combinacoes = combinacoes_elu(acoes) + combinacoes_els(acoes)
-        resultados = resolver_combinacoes(modelo, combinacoes)
+        from portico3d.core.segunda_ordem_global import (
+            resultados_para_dimensionamento, resumo)
+        elu = combinacoes_elu(acoes)
+        combinacoes = elu + combinacoes_els(acoes)
+        resultados, tratamento = resultados_para_dimensionamento(modelo, elu)
         env = envoltoria(modelo, resultados)
     except ErroDeModelo as erro:
         print(f"Erro no modelo: {erro}", file=sys.stderr)
@@ -421,7 +832,9 @@ def envoltoriar(caminho: str) -> int:
         fatores = "  ".join(f"{k}×{v:g}" for k, v in c.fatores.items())
         print(f"  {c.nome:<10} {fatores:<34} {c.descricao}")
 
-    print("\nEnvoltória — extremos e esforços concomitantes")
+    print("\n" + resumo(tratamento))
+    print("\nEnvoltória ELU (com a 2ª ordem global) — extremos e esforços "
+          "concomitantes")
     for nome, barra in env.items():
         print(f"\n  {nome}")
         for componente in ("N", "My", "Mz"):
@@ -449,13 +862,16 @@ def estabilidade(caminho: str) -> int:
         print(f"Erro no modelo: {erro}", file=sys.stderr)
         return 1
 
-    print("Estabilidade global — NBR 6118, itens 15.5.3 e 15.7.2\n")
+    from portico3d.core.segunda_ordem_global import modelo_secante
+    secante = modelo_secante(modelo)
+    print("Estabilidade global — NBR 6118, itens 15.5.3 e 15.7.2, γz com a "
+          "rigidez secante do 15.7.3\n")
     pior = None
     for combinacao in combinacoes:
-        caso = caso_efetivo(modelo, combinacao)
-        modelo.casos[caso.nome] = caso
+        caso = caso_efetivo(secante, combinacao)
+        secante.casos[caso.nome] = caso
         try:
-            g = gama_z(modelo, caso, resolver(modelo, caso.nome))
+            g = gama_z(secante, caso, resolver(secante, caso.nome))
         except ErroDeModelo as erro:
             print(f"  {combinacao.nome:<10} sem γz: {erro}")
             continue

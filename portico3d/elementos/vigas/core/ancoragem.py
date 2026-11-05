@@ -244,6 +244,59 @@ def apoio_extremo(concreto: Concreto, aco: Aco, Vsd: float, al_cm: float,
                         ok=ok, avisos=avisos)
 
 
+@dataclass
+class AncoragemNegativa:
+    """Ancoragem da armadura negativa num apoio de extremidade (18.3.2.4-d).
+
+    Comprimentos em cm, medidos ao longo da barra a partir da face do apoio.
+    ``desenvolvido`` soma só os trechos retos -- o horizontal até a curva e a
+    perna vertical depois dela --, e ignora o arco, a favor da segurança.
+    """
+
+    apoio: int                # nº do apoio (1, 2, ...)
+    phi: float                # mm
+    As_calc: float            # cm²
+    As_ef: float              # cm²
+    lb_nec: float             # 9.4.2.5, ancoragem reta
+    piso: float               # 18.3.2.4.1: (r + 5,5 Ø) e 60 mm
+    exigido: float            # o maior dos dois
+    l_reto: float             # da face do apoio à ponta da barra, no topo
+    diametro_curva: float     # pino da curva, cm (18.2.2 quando desce)
+    perna: float              # perna vertical adotada
+    desenvolvido: float       # o que conta como ancoragem
+    ok: bool
+    solucao: str
+    #: geometria da descida no engaste (zeros quando a barra não desce)
+    reto_ate_curva: float = 0.0   # trecho reto da face do apoio à curva
+    raio_eixo: float = 0.0        # raio da curva no eixo da barra
+    abaixo_da_viga: float = 0.0   # quanto a perna entra abaixo da viga
+    pilar_exigido: float = 0.0    # altura de pilar abaixo da viga que ela pede
+    pilar_informado: float = 0.0  # a do apoio; zero = não informada
+
+
+@dataclass
+class AncoragemTorcao:
+    """Ancoragem de uma barra longitudinal de torção num apoio de extremidade.
+
+    ``posicao`` é a própria posição, para a memória citar o número final.
+    """
+
+    apoio: int
+    posicao: object
+    phi: float                # mm
+    As_calc: float            # cm²
+    As_ef: float              # cm²
+    lb_nec: float             # 9.4.2.5, reta
+    exigido: float            # com os pisos e, havendo gancho, o α = 0,7
+    l_disponivel: float       # cm, da face do apoio à ponta
+    ok: bool
+    solucao: str
+
+
+#: Diâmetro interno de curvatura em nó de pórtico, em Ø (18.2.2).
+DIAMETRO_CURVA_NO_DE_PORTICO = {"CA-25": 10.0, "CA-50": 15.0, "CA-60": 18.0}
+
+
 #: Piso absoluto da ancoragem no apoio, cm (18.3.2.4.1: 60 mm).
 PISO_ANCORAGEM_APOIO = 6.0
 

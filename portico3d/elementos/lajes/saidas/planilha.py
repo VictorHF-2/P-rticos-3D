@@ -74,8 +74,13 @@ def _aba_dados(wb: Workbook, res) -> None:
                  NF["texto"], entrada=True)
     L = grandeza(ws, L, "Projeto =", pav.projeto or "-", "(obra)",
                  NF["texto"], entrada=True)
-    L = grandeza(ws, L, "n de lajes =", len(res.lajes), "(no pavimento)",
-                 NF["inteiro"])
+    L = grandeza(ws, L, "n de lajes =", len(res.lajes), "(maciças, no "
+                 "pavimento)", NF["inteiro"])
+    if res.especiais:
+        L = grandeza(ws, L, "n de lajes especiais =",
+                     sum(len(e.lajes) for e in res.especiais),
+                     "(treliçadas, alveolares e nervuradas atribuídas na "
+                     "planta)", NF["inteiro"])
     L = grandeza(ws, L, "área total =", res.area_total,
                  "(soma das áreas efetivas)", '0.00\\ "m²"')
     L = separador(ws, L)
@@ -231,7 +236,22 @@ def _aba_laje(wb: Workbook, res, rl) -> None:
     L = separador(ws, L)
 
     # -- esforços -----------------------------------------------------------
-    if cls.em_cruz:
+    if cls.em_cruz and esf.metodo == "mef":
+        L = secao(ws, L, "momentos no elu — elementos finitos e wood-armer")
+        L = nota(ws, L, "Valores da análise elástica de placa da R10 (aba "
+                        "MEF): sem fórmulas vivas nesta seção; a flexão abaixo "
+                        "parte do momento adotado.")
+        L = cabecalho(ws, L, ["esforço", "linhas de ruptura",
+                              "MEF elástico", "adotado", "MEF sem Mxy"])
+        for (nome, item, ch, ef, ado, sem, _c) in res.mef.comparativo:
+            if nome != laje.nome:
+                continue
+            L = linha_tabela(ws, L, [item, ch, ef, ado, sem],
+                             [NF["texto"], '0.00\\ "kN·m/m"',
+                              '0.00\\ "kN·m/m"', '0.00\\ "kN·m/m"',
+                              '0.00\\ "kN·m/m"'])
+        L = separador(ws, L)
+    elif cls.em_cruz:
         L = secao(ws, L, "momentos no elu — linhas de ruptura (§3.2)")
         graus = laje.graus
         lin_i = []
@@ -341,8 +361,16 @@ def _aba_laje(wb: Workbook, res, rl) -> None:
     L = grandeza(ws, L, "fyd =", pav.aco.fyd_kNcm2, "(fyk / gamma_s)",
                  NF["kNcm2"])
     lin_xd = L
-    L = grandeza(ws, L, "x/d limite =", pav.concreto.x_sobre_d_limite,
-                 "(regime rígido-plástico)", NF["coef3"],
+    esf_l = rl.esforcos
+    if esf_l.metodo == "mef":
+        limite_xd = pav.concreto.x_sobre_d_limite_redistribuido(
+            esf_l.delta_mef)
+        regime_xd = (f"(análise elástica, redistribuição "
+                     f"δ = {esf_l.delta_mef:g})")
+    else:
+        limite_xd = pav.concreto.x_sobre_d_limite
+        regime_xd = "(regime rígido-plástico)"
+    L = grandeza(ws, L, "x/d limite =", limite_xd, regime_xd, NF["coef3"],
                  referencia="14.6.4.3")
     L = separador(ws, L)
     L = expressao(ws, L, "x =", "(d/lambda) [1 - raiz(1 - 2 md/(alfa_c fcd "
@@ -649,6 +677,187 @@ def _aba_quantitativo(wb: Workbook, res) -> None:
                  '0.0\\ "kg/m³"')
     L = grandeza(ws, L, "peso próprio médio =", q["peso_proprio_medio"],
                  "(volume x peso específico / área)", '0.00\\ "kN/m²"')
+    canto = (q.get("massa_canto_charneiras", 0.0)
+             + q.get("massa_canto_mef", 0.0))
+    if canto > 0.0:
+        L = grandeza(ws, L, "aço de canto =", canto,
+                     "(armadura superior de canto, estimativa)", NF["kg"])
+
+    if q.get("especiais"):
+        L = separador(ws, L)
+        L = secao(ws, L, "lajes especiais (treliçada, alveolar, nervurada)")
+        L = cabecalho(ws, L, ["sistema", "tipo", "perfil", "área (m²)",
+                              "aço (kg)", "concreto no local (m³)",
+                              "pré-moldado (m³)"])
+        for e in q["especiais"]:
+            L = linha_tabela(ws, L, [
+                e["nome"], e["tipo"], e["perfil"], e["area"], e["aco_kg"],
+                e["concreto_m3"], e["premoldado_m3"]],
+                [NF["texto"], NF["texto"], NF["texto"], '0.00\\ "m²"',
+                 NF["kg"], '0.00\\ "m³"', '0.00\\ "m³"'])
+        L = grandeza(ws, L, "aço das lajes especiais =",
+                     q["massa_especiais"], "(sem perdas)", NF["kg"])
+        L = grandeza(ws, L, "aço do pavimento =", q["massa_geral"],
+                     "(maciças + especiais, sem perdas)", NF["kg"])
+        L = grandeza(ws, L, "área do pavimento =", q["area_geral"],
+                     "(maciças pelos vãos efetivos + especiais pelos vãos "
+                     "livres)", '0.00\\ "m²"')
+        L = grandeza(ws, L, "taxa do pavimento =", q["taxa_geral_por_m2"],
+                     "(por metro quadrado)", '0.00\\ "kg/m²"')
+
+
+def _aba_mef(wb: Workbook, res) -> None:
+    """Análise por elementos finitos e Wood-Armer: comparação com as linhas
+    de ruptura e armadura de canto -- valores, sem fórmulas."""
+    mef = res.mef
+    if mef is None:
+        return
+    ws = wb.create_sheet("MEF")
+    preparar_tabela(ws, [8, 36, 16, 16, 16, 16, 16, 12])
+    L = 2
+    L = titulo(ws, L, "ELEMENTOS FINITOS E WOOD-ARMER", 2, 9)
+    L = nota(ws, L, f"{mef.n_elementos} elementos, {mef.n_nos} nós, "
+                    f"elemento de até {mef.tamanho * 100:.0f} cm; K = "
+                    f"{mef.k:g}; δ = {mef.delta:g}; Mxyc "
+                    f"{'descontado' if mef.mxyc else 'não descontado'}"
+                    f"{'; sobrecarga alternada (xadrez)' if mef.cores else ''}",
+             2, 9)
+    L = separador(ws, L)
+    L = secao(ws, L, "comparação com as linhas de ruptura (kN·m/m)", 2, 9)
+    L = cabecalho(ws, L, ["laje", "esforço", "linhas de ruptura",
+                          "MEF elástico", "MEF adotado", "MEF sem Mxy",
+                          "método"])
+    for (nome, item, ch, ef, ado, sem, cruz) in mef.comparativo:
+        L = linha_tabela(ws, L, [nome, item, ch, ef, ado, sem,
+                                 "MEF" if cruz else "faixas"],
+                         [NF["texto"], NF["texto"], NF["kNm"], NF["kNm"],
+                          NF["kNm"], NF["kNm"], NF["texto"]])
+    L = separador(ws, L)
+    L = secao(ws, L, "armadura superior de canto", 2, 9)
+    L = cabecalho(ws, L, ["laje", "canto", "zona (m)", "M* superior",
+                          "M* inferior", "máx |Mxy|", "As (cm²/m)",
+                          "massa (kg)"])
+    for lm in mef.lajes.values():
+        for c in lm.cantos:
+            L = linha_tabela(ws, L, [
+                lm.nome, f"bordos {c.bordos[0]} e {c.bordos[1]}", c.zona,
+                c.m_topo, c.m_base, c.mxy, c.As if c.exige else 0.0,
+                c.massa if c.exige else 0.0],
+                [NF["texto"], NF["texto"], NF["m"], NF["kNm"], NF["kNm"],
+                 NF["kNm"], NF["cm2m"], NF["kg"]])
+
+
+def _aba_concentradas(wb: Workbook, res) -> None:
+    """Cargas concentradas e punção (R11)."""
+    pun = [pu for rl in res.lajes for pu in rl.puncoes]
+    if not pun:
+        return
+    ws = wb.create_sheet("PUNÇÃO")
+    preparar_tabela(ws, [8, 30, 12, 12, 12, 12, 14, 12, 12, 14, 14, 16])
+    L = 2
+    L = titulo(ws, L, "CARGAS CONCENTRADAS E PUNÇÃO", 2, 12)
+    L = nota(ws, L, "NBR 6118:2026, 19.5 -- contorno C (τRd2) e C' a 2d "
+                    "(τRd1), sem armadura de punção", 2, 12)
+    L = separador(ws, L)
+    L = cabecalho(ws, L, ["carga", "P_d (kN)", "c1 (cm)", "c2 (cm)",
+                          "d (cm)", "u0 (cm)", "τSd C", "τRd2", "u1 (cm)",
+                          "τSd C'", "τRd1", "veredito"])
+    for pu in pun:
+        L = linha_tabela(ws, L, [
+            pu.rotulo, pu.P_d, pu.c1, pu.c2, pu.d, pu.u0, pu.tau_sd0,
+            pu.tau_rd2, pu.u1, pu.tau_sd1, pu.tau_rd1,
+            ("OK" if pu.atende else "NÃO OK")
+            + ("" if pu.verificada else " (só C)")],
+            [NF["texto"], '0.0\\ "kN"', '0\\ "cm"', '0\\ "cm"',
+             '0.0\\ "cm"', '0\\ "cm"', '0.00\\ "MPa"', '0.00\\ "MPa"',
+             '0\\ "cm"', '0.00\\ "MPa"', '0.00\\ "MPa"', NF["texto"]])
+
+
+def _aba_cantos(wb: Workbook, res) -> None:
+    """Armadura superior de canto das linhas de ruptura (R11)."""
+    if not res.cantos:
+        return
+    ws = wb.create_sheet("CANTOS")
+    preparar_tabela(ws, [8, 24, 14, 14, 14, 14, 14, 12, 30, 12])
+    L = 2
+    L = titulo(ws, L, "ARMADURA SUPERIOR DE CANTO", 2, 11)
+    L = nota(ws, L, "m' = m·cot²(γ/2) = m; zona = max(0,414·√(6m/p) ; "
+                    "0,2·ℓmenor) -- Souza & Cunha §5.9, NB-1/78", 2, 11)
+    L = separador(ws, L)
+    L = cabecalho(ws, L, ["canto", "m (kN·m/m)", "p_d (kN/m²)",
+                          "0,414√(6m/p)", "0,2 ℓmenor", "zona (m)",
+                          "d (cm)", "armadura", "As (cm²/m)", "massa (kg)"])
+    for c in res.cantos:
+        L = linha_tabela(ws, L, [
+            c.rotulo, c.m_vao, c.p_d, c.zona_charneira, c.zona_nb1, c.zona,
+            c.d, c.armadura, c.As, c.massa],
+            [NF["texto"], NF["kNm"], '0.00\\ "kN/m²"', NF["m"], NF["m"],
+             NF["m"], '0.0\\ "cm"', NF["texto"], NF["cm2m"], NF["kg"]])
+
+
+def _aba_especiais(wb: Workbook, res) -> None:
+    """Lajes treliçadas, alveolares e nervuradas atribuídas na planta:
+    resumo, verificações e posições de cada sistema. Valores, sem fórmula --
+    o cálculo vem dos motores de cada sistema."""
+    if not res.especiais:
+        return
+    from ..core.atribuicao import altura_do_perfil
+    ws = wb.create_sheet("ESPECIAIS")
+    preparar_tabela(ws, [26, 16, 14, 14, 18, 16, 16, 14, 14, 16, 16])
+    L = 2
+    L = titulo(ws, L, "LAJES TRELIÇADAS, ALVEOLARES E NERVURADAS", 2, 12)
+    L = nota(ws, L, "Atribuídas na planta: vão, apoios e cargas vêm da laje; "
+                    "seção, armaduras e critérios vêm do perfil", 2, 12)
+    L = separador(ws, L)
+    L = secao(ws, L, "resumo", 2, 12)
+    L = cabecalho(ws, L, ["sistema", "tipo", "perfil", "lajes", "vãos",
+                          "h (cm)", "situação", "área (m²)", "aço (kg)",
+                          "concreto no local (m³)", "pré-moldado (m³)"])
+    for e in res.especiais:
+        situ = "não calculada" if e.erro else ("fecha" if e.atende
+                                               else "não fecha")
+        L = linha_tabela(ws, L, [
+            e.nome, e.rotulo_tipo, e.perfil, ", ".join(e.lajes),
+            e.vaos_texto,
+            altura_do_perfil(e.tipo, e.modelo) if e.modelo is not None
+            else 0.0, situ, e.area, e.aco_kg, e.concreto_m3,
+            e.premoldado_m3],
+            [NF["texto"]] * 5 + [NF["cm"], NF["texto"], '0.00\\ "m²"',
+                                 NF["kg"], '0.00\\ "m³"', '0.00\\ "m³"'])
+    L = separador(ws, L)
+    L = secao(ws, L, "verificações", 2, 12)
+    L = cabecalho(ws, L, ["sistema", "verificação", "local", "solicitante",
+                          "resistente", "situação", "item"])
+    for e in res.especiais:
+        if e.resultado is None:
+            continue
+        for lin in e.resultado.verificacoes:
+            L = linha_tabela(ws, L, [e.nome] + [str(c) for c in lin],
+                             [NF["texto"]] * 7)
+    L = separador(ws, L)
+    L = secao(ws, L, "armaduras e protensão", 2, 12)
+    L = cabecalho(ws, L, ["sistema", "posição", "descrição", "peças",
+                          "Ø (mm)", "aço", "comprimento (cm)", "massa (kg)",
+                          "observação"])
+    for e in res.especiais:
+        r = e.resultado
+        if r is None:
+            continue
+        if e.tipo == "alveolar":
+            m = r.laje
+            L = linha_tabela(ws, L, [
+                e.nome, "CP", f"{m.n_cordoalhas} cordoalhas por painel "
+                f"({e.n_paineis} painéis)", m.n_cordoalhas * e.n_paineis,
+                m.phi, m.aco, m.vao * 100.0, e.aco_kg, "protensão em pista"],
+                [NF["texto"], NF["texto"], NF["texto"], NF["inteiro"],
+                 NF["mm"], NF["texto"], NF["cm"], NF["kg"], NF["texto"]])
+            continue
+        for p in r.posicoes:
+            L = linha_tabela(ws, L, [
+                e.nome, f"N{p.numero}", p.descricao, p.quantidade, p.phi,
+                p.aco, p.comprimento, p.massa, p.observacao],
+                [NF["texto"], NF["texto"], NF["texto"], NF["inteiro"],
+                 NF["mm"], NF["texto"], NF["cm"], NF["kg"], NF["texto"]])
 
 
 def _aba_verificacoes(wb: Workbook, res) -> None:
@@ -717,6 +926,10 @@ def gerar(res, caminho: str) -> str:
     _aba_detalhamento(wb, res)
     _aba_reacoes(wb, res)
     _aba_quantitativo(wb, res)
+    _aba_cantos(wb, res)
+    _aba_concentradas(wb, res)
+    _aba_mef(wb, res)
+    _aba_especiais(wb, res)
     _aba_verificacoes(wb, res)
     _aba_avisos(wb, res)
     normalizar_alturas(wb)

@@ -37,6 +37,7 @@ esforços e material — o veredito é dele.
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 
 from dataclasses import dataclass, field
 
@@ -239,6 +240,14 @@ class VerificacaoDeViga:
     #: Como o dimensionamento se saiu contra a envoltória do pórtico.
     portico: "ConferenciaDoPortico | None" = None
     avisos: list[str] = field(default_factory=list)
+    #: Vigas em que esta repousa (esta entra como carga nelas)...
+    apoiada_em: list[str] = field(default_factory=list)
+    #: ...e as que repousam nesta (elas entram como carga aqui).
+    recebe_de: list[str] = field(default_factory=list)
+    #: Com que esforços a viga foi armada (``OpcoesDeCalculo.fonte_vigas``):
+    #: ``"portico"``, ``"envolvente"`` ou ``"motor"`` — este também quando
+    #: o pórtico foi pedido mas não havia envoltória.
+    esforcos: str = "motor"
 
     @property
     def passou(self) -> bool:
@@ -359,21 +368,46 @@ def rigidez_dos_pilares(modelo: Modelo, viga, indice: int) -> float:
     return k
 
 
+@dataclass
+class ReacaoRecebida:
+    """O que uma viga que se apoia nesta lhe entrega, em kN (característico).
+
+    ``g`` e ``q`` vêm separados porque o motor de Vigas combina as duas ações
+    com os próprios coeficientes — entregar a reação já majorada seria
+    majorar duas vezes.
+    """
+
+    x: float                  # m, posição na viga que recebe
+    g: float
+    q: float
+    de: str                   # nome da viga apoiada
+    pendurada: bool = False   # face de baixo da apoiada abaixo da de apoio
+
+
 def montar_viga(modelo: Modelo, viga, casos: dict[str, str] | None = None,
                 fck: float | None = None, molas: bool = True,
-                avisos: list | None = None):
+                avisos: list | None = None,
+                reacoes_recebidas: list[ReacaoRecebida] | None = None):
     """Monta a ``Viga`` do outro programa a partir da cadeia detectada.
 
     ``molas`` liga a rigidez dos pilares nos apoios — ver
     :func:`rigidez_dos_pilares`. ``avisos``, quando dado, recebe o que a
-    tradução tem a dizer sem que isso interrompa o lote."""
+    tradução tem a dizer sem que isso interrompa o lote.
+
+    **Viga apoiada em viga.** Onde a cadeia repousa noutra viga (ver
+    ``continuidade.ApoioEmViga``), a de apoio entra aqui como **apoio simples**
+    com a largura da sua seção. E as vigas que repousam *nesta* chegam como
+    ``reacoes_recebidas``: carga concentrada **indireta** (18.3.6), o que faz
+    o motor armar a suspensão — e, se a de baixo for mais alta que esta
+    (``pendurada``), a conta do tirante inteiro."""
     from .elementos.vigas.core import modelo as mv
 
-    if len(viga.apoios) < 2:
+    suportes = viga.suportes
+    if len(suportes) < 2:
         raise ErroDeModelo(
-            f"{viga.nome}: a cadeia tem {len(viga.apoios)} apoio(s) de pilar. "
-            "Sem dois apoios não há viga contínua a dimensionar — é viga "
-            "apoiada em outras vigas, e o pórtico já a resolveu")
+            f"{viga.nome}: a cadeia tem {len(suportes)} apoio(s), entre "
+            "pilares e outras vigas. Sem dois apoios não há viga contínua a "
+            "dimensionar")
 
     if casos is None:
         casos = {nome: ("g" if c.natureza == "permanente" else "q")
@@ -396,21 +430,55 @@ def montar_viga(modelo: Modelo, viga, casos: dict[str, str] | None = None,
     secao_deles = mv.Secao(bw=secao.b * M_PARA_CM, h=secao.h * M_PARA_CM)
 
     tramos, apoios = [], []
-    if viga.balanco_inicial > 1e-9:
-        tramos.append(mv.Tramo(L=viga.balanco_inicial, secao=secao_deles))
+    # Em que posição da lista de apoios do motor cada nó de apoio da cadeia
+    # caiu — é por aí que a reação de uma viga apoiada volta para quem a recebe.
+    apoio_do_no: dict[int, int] = {}
+
+    def apoio_de(indice_no: int):
+        em_viga = viga.apoio_em_viga(indice_no)
+        if em_viga is None:
+            return _apoio_de_pilar(modelo, viga, viga.apoios.index(indice_no),
+                                   molas, secao_deles)
+        if avisos is not None:
+            avisos.append(
+                f"{viga.nome}: apoiada em {em_viga.viga_de_apoio} no nó "
+                f"{em_viga.no} — apoio simples e indeslocável: a flexibilidade "
+                f"e a torção de {em_viga.viga_de_apoio} não entram")
+        return mv.Apoio(tipo="simples",
+                        largura=_largura_da_viga_de_apoio(modelo, em_viga))
+
+    # A seção de cada tramo: retangular, ou T com a mesa colaborante das
+    # lajes ao lado (14.6.2.2). ``x`` acompanha a posição do tramo na cadeia.
+    mesas = _lajes_ao_lado(modelo) if modelo.calculo.mesa_colaborante else {}
+    ini, fim = viga.balanco_inicial > 1e-9, viga.balanco_final > 1e-9
+    n_vaos = len(viga.vaos)
+    x = [0.0]
+
+    def tramo(L: float, momentos: int | None):
+        """``momentos``: quantas pontas do tramo têm momento (0, 1 ou 2);
+        ``None`` no balanço."""
+        a = 2.0 * L if momentos is None else (1.0, 0.75, 0.60)[momentos] * L
+        s = _secao_do_tramo(modelo, viga, x[0], x[0] + L, a, secao_deles,
+                            mesas, avisos)
+        x[0] += L
+        return mv.Tramo(L=L, secao=s)
+
+    if ini:
+        tramos.append(tramo(viga.balanco_inicial, None))
         apoios.append(mv.Apoio(tipo="livre"))
-    # ``i`` conta os apoios **de pilar**, e não as entradas da lista: com
-    # balanço inicial a lista já começa com um "livre", e usar o tamanho dela
-    # como índice pegava a largura do pilar seguinte.
-    for i, vao in enumerate(viga.vaos):
-        tramos.append(mv.Tramo(L=vao, secao=secao_deles))
-        apoios.append(_apoio_de_pilar(modelo, viga, i, molas, secao_deles))
-    if viga.balanco_final > 1e-9:
-        tramos.append(mv.Tramo(L=viga.balanco_final, secao=secao_deles))
+    # Um apoio por nó de apoio da cadeia — de pilar ou de outra viga —, e a
+    # lista do motor só ganha um "livre" por balanço. Usar o tamanho da lista
+    # como índice pegaria o apoio errado quando há balanço inicial.
+    for posicao, indice_no in enumerate(suportes):
+        if posicao > 0:
+            k = posicao - 1
+            momentos = int(k > 0 or ini) + int(k < n_vaos - 1 or fim)
+            tramos.append(tramo(viga.vaos[k], momentos))
+        apoio_do_no[indice_no] = len(apoios)
+        apoios.append(apoio_de(indice_no))
+    if fim:
+        tramos.append(tramo(viga.balanco_final, None))
         apoios.append(mv.Apoio(tipo="livre"))
-    else:
-        apoios.append(_apoio_de_pilar(modelo, viga, len(viga.vaos), molas,
-                                      secao_deles))
 
     # A origem da viga do outro programa é o primeiro apoio, não a ponta do
     # balanço; a coordenada das cargas segue a mesma origem.
@@ -420,8 +488,19 @@ def montar_viga(modelo: Modelo, viga, casos: dict[str, str] | None = None,
         c.x_ini += deslocamento
         c.x_fim += deslocamento
 
+    concentradas = []
+    for r in (reacoes_recebidas or []):
+        for acao, valor in (("g", r.g), ("q", r.q)):
+            if valor > 1e-9:
+                concentradas.append(mv.CargaConcentrada(
+                    P=valor, x=r.x + deslocamento, acao=acao,
+                    descricao=f"{r.de} apoiada em {viga.nome}",
+                    indireta=True, pendurada=r.pendurada))
+
     deles = mv.Viga(nome=viga.nome, tramos=tramos, apoios=apoios,
-                    distribuidas=cargas, concreto=mv.Concreto(fck=classe))
+                    distribuidas=cargas, concentradas=concentradas,
+                    concreto=mv.Concreto(fck=classe))
+    deles.apoio_do_no = apoio_do_no
 
     # **O peso próprio já veio do pórtico.** O motor de Vigas gera o dele
     # sozinho (``Config.peso_proprio``), e como a ponte repassa todas as
@@ -432,7 +511,116 @@ def montar_viga(modelo: Modelo, viga, casos: dict[str, str] | None = None,
     deles.config.peso_proprio = False
     _conferir_peso_proprio(modelo, viga, deles, secao, avisos)
 
+    # **Estribos numa distribuição só por tramo, e não escalonados.** O motor
+    # já tem o botão pronto (item 18.3.3.2): ``uniformizar_estribos`` funde as
+    # faixas do escalonamento na mais conservadora — o menor espaçamento, com
+    # a maior bitola — estendida de ponta a ponta do trecho. Sai mais aço do
+    # que o escalonamento fino, e sai uma peça só para montar e conferir na
+    # obra, que é a troca que o projeto está pedindo aqui.
+    deles.config.uniformizar_estribos = True
+
     return deles
+
+
+def _lajes_ao_lado(modelo: Modelo) -> dict[str, list[tuple]]:
+    """Barra de viga -> ``(laje, lado, b2)`` de cada laje que encosta nela.
+
+    ``lado`` é o sinal do lado da barra em que a laje está (+1 à esquerda de
+    quem anda de ``no_i`` para ``no_j``, em planta); ``b2`` é a distância
+    livre, m, entre esta viga e a viga paralela do outro lado do painel —
+    o ``b2`` da Figura 14.2.
+    """
+    from .core.lajes import arestas_da_laje, retangulo
+
+    mapa: dict[str, list[tuple]] = {}
+    for laje in modelo.lajes.values():
+        try:
+            arestas, lx, ly = arestas_da_laje(modelo, laje)
+        except ErroDeModelo:
+            continue
+        x0, y0, x1, y1, z = retangulo(modelo, laje)
+        centro = np.array([(x0 + x1) / 2.0, (y0 + y1) / 2.0, z])
+        def largura(aresta) -> float:
+            return max(modelo.secoes[modelo.barras[n].secao].b
+                       for n in aresta.barras)
+
+        for k, aresta in enumerate(arestas):
+            if laje.em_balanco:
+                # Figura 14.2: do lado da laje em balanço vale b3 ≤ b4, com
+                # b4 a largura do balanço além da face da alma — e não
+                # 0,5·b2. Passar b2 = 2·b4 faz o mesmo limite de 0,5·b2
+                # dar exatamente b4.
+                b2 = 2.0 * max(laje.balanco - largura(aresta) / 2.0, 0.0)
+            else:
+                oposta = arestas[(k + 2) % 4]
+                entre = ly if k in (0, 2) else lx
+                b2 = max(entre - largura(aresta) / 2.0
+                         - largura(oposta) / 2.0, 0.0)
+            for nome in aresta.barras:
+                b = modelo.barras[nome]
+                pi, pj = modelo.ponto(b.no_i), modelo.ponto(b.no_j)
+                lado = 1 if float(np.cross((pj - pi)[:2],
+                                           (centro - pi)[:2])) > 0.0 else -1
+                mapa.setdefault(nome, []).append((laje, lado, b2))
+    return mapa
+
+
+def _secao_do_tramo(modelo: Modelo, viga, xa: float, xb: float, a: float,
+                    retangular, mesas: dict, avisos: list | None):
+    """A seção do tramo ``[xa, xb]`` da cadeia: T quando há laje ao lado.
+
+    14.6.2.2: ``bf = bw + Σ b1``, com ``b1 ≤ 0,1·a`` e ``b1 ≤ 0,5·b2`` para
+    cada lado da viga em que haja laje colaborante. Um lado só colabora se a
+    laje estiver ao longo do tramo inteiro — nas barras da cadeia que o
+    compõem —, e a espessura da mesa é a menor das lajes ao lado (na
+    treliçada, a capa). O lado sem laje não ganha mesa: o ``b3`` da Figura
+    14.2 é de laje em balanço, que este programa não modela.
+    """
+    from .elementos.vigas.core import modelo as mv
+
+    if not mesas:
+        return retangular
+    posicao = dict(zip(viga.nos, viga.posicoes))
+    direcao = np.array(viga.direcao, dtype=float)[:2]
+    barras = []
+    for nome in viga.barras:
+        b = modelo.barras[nome]
+        x0, x1 = sorted((posicao[b.no_i], posicao[b.no_j]))
+        if min(x1, xb) - max(x0, xa) > 1e-6:
+            barras.append(nome)
+    if not barras:
+        return retangular
+
+    b1_total, hf = 0.0, float("inf")
+    for lado in (1, -1):
+        b2s, hfs = [], []
+        for nome in barras:
+            b = modelo.barras[nome]
+            # o lado é medido no sentido da cadeia, não no da barra
+            sentido = 1 if float(np.dot(modelo.ponto(b.no_j)[:2]
+                                        - modelo.ponto(b.no_i)[:2],
+                                        direcao)) >= 0.0 else -1
+            daqui = [(l, b2) for l, s, b2 in mesas.get(nome, [])
+                     if s * sentido == lado and l.mesa > 0.0]
+            if not daqui:
+                break
+            b2s.append(min(b2 for _, b2 in daqui))
+            hfs.append(min(l.mesa for l, _ in daqui))
+        else:
+            b1_total += min(0.1 * a, 0.5 * min(b2s))
+            hf = min(hf, min(hfs))
+    if b1_total <= 1e-9 or hf == float("inf"):
+        return retangular
+    hf_cm = hf * M_PARA_CM
+    if hf_cm >= retangular.h:
+        return retangular
+    return mv.Secao(bw=retangular.bw, h=retangular.h, tipo="T",
+                    bf=retangular.bw + b1_total * M_PARA_CM, hf=hf_cm)
+
+
+def _largura_da_viga_de_apoio(modelo: Modelo, em_viga) -> float:
+    """Largura, em cm, que a viga de apoio oferece à que repousa nela."""
+    return em_viga.largura_cm if em_viga.largura_cm > 0.0 else 20.0
 
 
 def _apoio_de_pilar(modelo: Modelo, viga, indice: int, molas: bool, secao):
@@ -440,12 +628,43 @@ def _apoio_de_pilar(modelo: Modelo, viga, indice: int, molas: bool, secao):
     from .elementos.vigas.core import modelo as mv
 
     largura = _largura_do_pilar(modelo, viga, indice)
+    abaixo = altura_do_pilar_abaixo(modelo, viga, indice, secao.h)
     if not molas:
-        return mv.Apoio(tipo="simples", largura=largura)
+        return mv.Apoio(tipo="simples", largura=largura,
+                        altura_pilar_abaixo=abaixo)
     k = rigidez_dos_pilares(modelo, viga, indice)
     if k <= 0.0:
-        return mv.Apoio(tipo="simples", largura=largura)
-    return mv.Apoio(tipo="mola", largura=largura, k_mola=k)
+        return mv.Apoio(tipo="simples", largura=largura,
+                        altura_pilar_abaixo=abaixo)
+    return mv.Apoio(tipo="mola", largura=largura, k_mola=k,
+                    altura_pilar_abaixo=abaixo)
+
+
+def altura_do_pilar_abaixo(modelo: Modelo, viga, indice: int,
+                           h_viga_cm: float) -> float:
+    """Altura do pilar abaixo da face inferior da viga naquele apoio, cm.
+
+    É o campo ``altura_pilar_abaixo`` do apoio do Vigas R04: é nele que a
+    negativa do apoio de extremidade desce para ancorar (18.3.2.4-d), e o
+    motor confere se a perna cabe. Vem do lance que **chega** ao nó por baixo
+    — o eixo da viga está no nó, e a face inferior fica meia altura abaixo.
+    Sem lance por baixo (pilar que nasce na viga, ou nó de topo de um pilar
+    que só sobe), é zero: não há onde a barra descer.
+    """
+    from .continuidade import _eh_vertical
+
+    if indice >= len(viga.apoios):
+        return 0.0
+    no = viga.nos[viga.apoios[indice]]
+    z_no = float(modelo.ponto(no)[2])
+    maior = 0.0
+    for nome, barra in modelo.barras.items():
+        if not _eh_vertical(modelo, barra) or no not in (barra.no_i, barra.no_j):
+            continue
+        outro = barra.no_j if barra.no_i == no else barra.no_i
+        if float(modelo.ponto(outro)[2]) < z_no - 1e-6:
+            maior = max(maior, modelo.comprimento(nome) * M_PARA_CM)
+    return max(maior - h_viga_cm / 2.0, 0.0) if maior > 0.0 else 0.0
 
 
 def _conferir_peso_proprio(modelo: Modelo, viga, deles, secao,
@@ -475,17 +694,26 @@ def _conferir_peso_proprio(modelo: Modelo, viga, deles, secao,
 
 
 def _largura_do_pilar(modelo: Modelo, viga, indice: int) -> float:
-    """Largura do pilar que apoia a viga naquele nó, em cm."""
+    """Largura do pilar que apoia a viga naquele nó, em cm, **medida na
+    direção da viga** — é o comprimento de que a armadura da viga dispõe
+    para ancorar dentro do pilar.
+
+    Antes era sempre o lado ``b`` da seção, que na barra vertical mede em X:
+    uma viga em Y sobre um pilar 20×60 com os 60 cm em Y recebia 20 cm de
+    apoio, e a ancoragem saía reprovada (ou a viga em X sobre o pilar
+    virado, aprovada com mais apoio do que tinha).
+    """
+    from .compatibilizacao import largura_do_pilar
     from .continuidade import _eh_vertical
 
     if indice >= len(viga.apoios):
         return 20.0
     no = viga.nos[viga.apoios[indice]]
-    for barra in modelo.barras.values():
+    for nome, barra in modelo.barras.items():
         if _eh_vertical(modelo, barra) and no in (barra.no_i, barra.no_j):
             secao = modelo.secoes[barra.secao]
             if secao.b > 0.0:
-                return secao.b * M_PARA_CM
+                return largura_do_pilar(modelo, nome, viga.direcao)[0]
     return 20.0
 
 
@@ -582,7 +810,143 @@ def envoltoria_da_viga(modelo: Modelo, viga,
             np.array(vn)[ordem], np.array(vx)[ordem])
 
 
-def _As_para(momento: float, deles, resultado) -> float:
+def envoltoria_externa(modelo: Modelo, viga,
+                       envoltorias: dict[str, EnvoltoriaBarra] | None,
+                       fonte: str):
+    """A função que troca a envoltória ELU do motor de Vigas pela do pórtico.
+
+    É o que faz a viga ser armada com os esforços do edifício — vento,
+    desaprumo, a rigidez real dos pilares e, com a grelha, a carga que a laje
+    entrega pela rigidez —, e não com os de uma viga contínua isolada sob g e
+    q. Devolve ``None`` quando não há envoltória ou quando ``fonte`` é
+    ``"motor"``: aí o motor segue sozinho, como antes.
+
+    ``"portico"`` substitui momentos e cortantes; ``"envolvente"`` fica com o
+    pior dos dois em cada seção. A cortante vai em módulo, simétrica: a
+    cadeia pode percorrer uma barra no sentido contrário ao dela, o que troca
+    o sinal de V, e o motor só usa o módulo.
+    """
+    from dataclasses import replace
+
+    if not envoltorias or fonte == "motor":
+        return None
+    x, mn, mx, vn, vx = envoltoria_da_viga(modelo, viga, envoltorias)
+    if len(x) == 0:
+        return None
+    v_abs = np.maximum(np.abs(vn), np.abs(vx))
+    combinacoes = sorted({c for b in viga.barras if b in envoltorias
+                          for c in envoltorias[b].combinacoes})
+
+    def aplicar(env):
+        M_max = np.interp(env.x, x, mx)
+        M_min = np.interp(env.x, x, mn)
+        V = np.interp(env.x, x, v_abs)
+        if fonte == "envolvente":
+            M_max = np.maximum(M_max, env.M_max)
+            M_min = np.minimum(M_min, env.M_min)
+            V = np.maximum(V, env.V_abs)
+            nomes = list(env.combinacoes) + combinacoes
+        else:
+            nomes = combinacoes
+        return replace(env, M_max=M_max, M_min=M_min, V_max=V, V_min=-V,
+                       combinacoes=nomes)
+
+    return aplicar
+
+
+def dimensionar_com_envoltoria(deles, externa=None):
+    """Roda o motor de Vigas, trocando a envoltória ELU dele por ``externa``.
+
+    O motor é cópia byte a byte do programa de Vigas, e há conferência para
+    isso — a troca não pode ser feita editando a cópia. Ela é feita por
+    fora: durante a chamada, o ``combinacoes`` que o ``dimensionar`` do motor
+    enxerga é um representante que devolve tudo igual, menos a envoltória
+    ELU, que passa por ``externa``. O ELS (``envoltoria_servico``) não passa
+    por ali e continua sendo o da viga contínua.
+    """
+    from .elementos.vigas.core import dimensionar as motor
+
+    with _no_monolitico_na_ancoragem(motor):
+        return _dimensionar_com_envoltoria(motor, deles, externa)
+
+
+@contextmanager
+def _no_monolitico_na_ancoragem(motor):
+    """Na ancoragem da negativa de extremidade, o apoio com pilar embaixo é
+    um nó monolítico — que é o que ele é no pórtico.
+
+    O Vigas R04 confere a ancoragem da armadura negativa nos apoios de
+    extremidade (18.3.2.4-d, a partir da face). Quando o trecho reto não
+    basta, a barra desce no pilar — mas o motor só admite isso no apoio do
+    tipo ``engaste``, e a ponte representa o pilar como ``mola`` (a rigidez
+    dos lances) ou ``simples``: para esses, o motor conclui que "não há onde
+    a barra descer", e o pilar está lá. Trocar o tipo do apoio de vez mudaria
+    a análise da viga isolada (flecha, reações); por isso a troca vale **só
+    durante a verificação de ancoragem**, e só onde há lance de pilar abaixo
+    da viga (``altura_pilar_abaixo`` > 0, que o motor usa para conferir se a
+    perna cabe). Como a envoltória, é feita por fora: a cópia do motor não é
+    editada.
+    """
+    original = motor._ancorar_negativa_nos_extremos
+
+    def ancorar(viga, *args, **kwargs):
+        trocados = []
+        for k in {0, len(viga.apoios) - 1}:
+            ap = viga.apoios[k]
+            if ap.tipo in ("simples", "mola") and ap.altura_pilar_abaixo > 0.0:
+                trocados.append((ap, ap.tipo))
+                ap.tipo = "engaste"
+        try:
+            return original(viga, *args, **kwargs)
+        finally:
+            for ap, tipo in trocados:
+                ap.tipo = tipo
+
+    motor._ancorar_negativa_nos_extremos = ancorar
+    try:
+        yield
+    finally:
+        motor._ancorar_negativa_nos_extremos = original
+
+
+def _dimensionar_com_envoltoria(motor, deles, externa):
+    if externa is None:
+        return motor.dimensionar(deles)
+
+    # Com a envoltória do pórtico, o momento negativo não é reduzido sobre o
+    # apoio pelo motor: o pórtico já é a autoridade sobre onde o momento é
+    # lido. Quem quer considerar a largura do apoio modela o trecho rígido do
+    # nó viga-pilar (``Barra.offset_i/offset_j``, 14.6.2.1), e aí a
+    # envoltória já chega com ele. Reduzir de novo aqui deixaria a armadura
+    # abaixo do que o pórtico exige — a conferência contra o pórtico acusava
+    # isso. No Vigas R03 a redução era "à face" (``momento_face_apoio``); no
+    # R04 virou o arredondamento R·t/8 do 14.6.3 (``arredondar_momento_apoio``),
+    # que ainda por cima tira o R do modelo isolado da viga, e não do pórtico.
+    deles.config.arredondar_momento_apoio = False
+
+    original = motor.cb
+
+    class _Representante:
+        def __getattr__(self, nome):
+            return getattr(original, nome)
+
+        @staticmethod
+        def calcular(*args, **kwargs):
+            env, solicitacoes = original.calcular(*args, **kwargs)
+            tipos = kwargs.get("tipos", args[2] if len(args) > 2 else ("ELU",))
+            if tuple(tipos) == ("ELU",):
+                env = externa(env)
+            return env, solicitacoes
+
+    motor.cb = _Representante()
+    try:
+        return motor.dimensionar(deles)
+    finally:
+        motor.cb = original
+
+
+def _As_para(momento: float, deles, resultado, x: float | None = None
+             ) -> float:
     """Área de aço para o momento dado, pela flexão do próprio motor.
 
     Usa a mesma função, a mesma seção e o mesmo ``d`` do dimensionamento, de
@@ -592,15 +956,23 @@ def _As_para(momento: float, deles, resultado) -> float:
 
     if abs(momento) < 1e-9:
         return 0.0
-    secao = deles.tramos[0].secao
+    secao = deles.secao_em(x) if x is not None else deles.tramos[0].secao
     cob = deles.ambiente.cobrimento_nominal
     d_linha = cob + deles.config.phi_estribo / 10.0 + 1.0
+    # O momento vai com sinal: é o sinal que diz ao motor qual face está
+    # tracionada, e na seção T isso decide se a mesa trabalha (positivo) ou
+    # não (negativo). Em módulo, o negativo seria calculado com a mesa
+    # comprimida — contra a segurança.
     try:
-        res = fl.dimensionar(secao, deles.concreto, deles.aco, abs(momento),
+        res = fl.dimensionar(secao, deles.concreto, deles.aco, momento,
                              d_linha, d_linha, delta=1.0)
     except (ValueError, ZeroDivisionError):
         return float("inf")
-    return float(res.As_adotado + max(getattr(res, "As_linha", 0.0), 0.0))
+    # A exigência do pórtico é o As de **cálculo**, sem a armadura mínima: o
+    # mínimo é regra de detalhamento, que o motor já aplica no vão. Com o
+    # mínimo dentro, a seção T (mínimo sobre a área da mesa) acusava falta
+    # de aço junto ao apoio por um momento de 1 kN·m.
+    return float(res.As + max(getattr(res, "As_linha", 0.0), 0.0))
 
 
 def As_detalhado(resultado, x_m: float, face: str) -> float:
@@ -638,7 +1010,7 @@ def conferir_contra_o_portico(modelo: Modelo, viga, resultado, deles,
                               ("inferior", max(float(mx[k]), 0.0))):
             if abs(exigido) < 1e-9:
                 continue
-            As_e = _As_para(exigido, deles, resultado)
+            As_e = _As_para(exigido, deles, resultado, float(xi))
             As_o = As_detalhado(resultado, float(xi), face)
             razao = float("inf") if As_o <= 1e-9 else As_e / As_o
             if razao > pior:
@@ -684,49 +1056,209 @@ def verificar_vigas(modelo: Modelo, pasta_desenhos=None,
     ponto. É essa conferência que responde se a armadura cobre o que o
     edifício pede — e é o que faltava: o vento produzia 63 kN·m na viga do
     exemplo, mais que o peso permanente, e não chegava à armadura.
+
+    **O desenho, quando pedido, sai num DXF só — todas as vigas lado a
+    lado**, e sem PNG. Antes eram um par de imagens (elevação e seções) mais
+    um DXF por viga; num edifício com vinte vigas contínuas isso é sessenta
+    arquivos, a metade deles imagem que ninguém abre fora do programa. Uma
+    prancha só é o que se leva para a obra, e pular o render em matplotlib do
+    par de imagens é o que mais barateia o tempo desta chamada.
     """
     from .continuidade import vigas_continuas
-    from .elementos.vigas.core.dimensionar import dimensionar
 
-    saida = []
-    for viga in vigas_continuas(modelo):
-        if len(viga.apoios) < 2:
-            continue
-        avisos: list[str] = []
+    cadeias = [v for v in vigas_continuas(modelo) if len(v.suportes) >= 2]
+    saida = dimensionar_cadeias(modelo, cadeias, fck=fck,
+                                envoltorias=envoltorias)
+    if pasta_desenhos is not None:
+        gravar_pranchas_de_vigas(saida, pasta_desenhos)
+    return saida
+
+
+def _reacao_no_apoio(resultado, indice_apoio: int) -> tuple[float, float]:
+    """Reação característica, em kN, que a viga entrega num apoio: ``(g, q)``.
+
+    A permanente é a soma de todos os casos-base de ``g`` (a viga inteira
+    carregada). A variável soma só as parcelas **positivas** dos casos-base de
+    ``q`` — a reação máxima possível, que é a que a viga de apoio tem de
+    aguentar —, e não o valor da viga toda carregada, que pode ser menor num
+    apoio de extremidade quando um vão vizinho alivia.
+    """
+    g = q = 0.0
+    for r in resultado.estrutura.respostas:
+        valor = float(r.reacoes[indice_apoio])
+        if r.acao == "g":
+            g += valor
+        else:
+            q += max(valor, 0.0)
+    return max(g, 0.0), q
+
+
+def dimensionar_cadeias(modelo: Modelo, cadeias: list,
+                        fck: float | None = None,
+                        envoltorias: dict[str, EnvoltoriaBarra] | None = None,
+                        conferir_aviso_de_envoltoria: bool = True
+                        ) -> list[VerificacaoDeViga]:
+    """Dimensiona as vigas dadas, na ordem em que uma recebe da outra.
+
+    **Viga apoiada em viga.** Se V1 se apoia em V2, em V1 a V2 entra como
+    apoio, e em V2 a V1 entra como carga concentrada — a reação de V1 naquele
+    nó, que só se conhece depois de V1 dimensionada. Por isso a ordem não é
+    qualquer uma: as de menor prioridade (as que repousam nas outras) vão
+    primeiro, e cada reação é guardada para a viga que a recebe. A ordem de
+    prioridade vem de ``continuidade`` e não dá ciclo.
+
+    O resultado volta na ordem em que as cadeias foram dadas.
+    """
+
+    recebidas: dict[str, list[ReacaoRecebida]] = {}
+    falhas: dict[str, list[str]] = {}
+    feitas: dict[str, VerificacaoDeViga] = {}
+
+    for viga in _ordem_de_projeto(cadeias):
+        avisos: list[str] = list(falhas.get(viga.nome, []))
+        for no, outra in viga.encontros_sem_apoio:
+            avisos.append(
+                f"{viga.nome}: a ponta em {no} encontra {outra}, mas {outra} "
+                "não está apoiada ali (é balanço, ou o nó fica fora dos vãos "
+                "dela) — as duas pontas seguem em balanço, sem apoio mútuo")
+        for a in viga.apoios_em_viga:
+            if a.na_ponta_de_balanco:
+                avisos.append(
+                    f"{viga.nome}: sem pilar, apoia-se em {a.no} na ponta do "
+                    f"balanço de {a.viga_de_apoio} — apoio deslocável; os "
+                    "esforços do pórtico já levam isso em conta, o modelo "
+                    "isolado da viga o trata como fixo")
+        recebe = recebidas.get(viga.nome, [])
         try:
-            deles = montar_viga(modelo, viga, fck=fck, avisos=avisos)
-            resultado = dimensionar(deles)
-        except (ErroDeModelo, ValueError, ZeroDivisionError, IndexError) as e:
-            saida.append(VerificacaoDeViga(viga.nome, list(viga.barras),
-                                           list(viga.vaos), erro=str(e),
-                                           avisos=avisos))
+            deles = montar_viga(modelo, viga, fck=fck, avisos=avisos,
+                                reacoes_recebidas=recebe)
+            externa = envoltoria_externa(modelo, viga, envoltorias,
+                                         modelo.calculo.fonte_vigas)
+            resultado = dimensionar_com_envoltoria(deles, externa)
+        except (ErroDeModelo, ValueError, ZeroDivisionError, IndexError,
+                KeyError) as e:
+            feitas[viga.nome] = VerificacaoDeViga(
+                viga.nome, list(viga.barras), list(viga.vaos), erro=str(e),
+                avisos=avisos,
+                apoiada_em=sorted({a.viga_de_apoio
+                                   for a in viga.apoios_em_viga}))
+            for a in viga.apoios_em_viga:
+                falhas.setdefault(a.viga_de_apoio, []).append(
+                    f"{viga.nome} se apoia nesta viga e não pôde ser "
+                    "dimensionada: a reação dela NÃO entrou como carga aqui")
             continue
+
+        for r in recebe:
+            avisos.append(
+                f"{viga.nome}: recebe de {r.de} uma reação de g = {r.g:.1f} e "
+                f"q = {r.q:.1f} kN em x = {r.x:.2f} m (carga indireta, "
+                "18.3.6" + (", viga pendurada" if r.pendurada else "") + ")")
+
+        # A reação de cada apoio em viga vira carga na viga que a recebe.
+        h_propria = _altura_da_cadeia(modelo, viga)
+        for a in viga.apoios_em_viga:
+            g, q = _reacao_no_apoio(resultado, deles.apoio_do_no[a.indice_no])
+            recebidas.setdefault(a.viga_de_apoio, []).append(ReacaoRecebida(
+                x=a.posicao_na_de_apoio, g=g, q=q, de=viga.nome,
+                pendurada=h_propria > a.altura_cm + 1e-6))
 
         conferencia = None
         if envoltorias:
             conferencia = conferir_contra_o_portico(
                 modelo, viga, resultado, deles, envoltorias)
-        else:
+        elif conferir_aviso_de_envoltoria:
             avisos.append(
                 f"{viga.nome}: dimensionada sem a envoltória do pórtico — o "
                 "efeito das ações laterais não entrou. Rode as combinações "
                 "antes, ou use 'Dimensionar vigas', que já as monta")
 
-        v = VerificacaoDeViga(viga.nome, list(viga.barras), list(viga.vaos),
-                              resultado=resultado, viga=deles,
-                              portico=conferencia, avisos=avisos)
-        if pasta_desenhos is not None:
-            v.desenhos = gravar_desenhos(resultado, viga.nome, pasta_desenhos)
-        saida.append(v)
-    return saida
+        feitas[viga.nome] = VerificacaoDeViga(
+            viga.nome, list(viga.barras), list(viga.vaos),
+            resultado=resultado, viga=deles, portico=conferencia,
+            avisos=avisos,
+            esforcos=(modelo.calculo.fonte_vigas if externa is not None
+                      else "motor"),
+            apoiada_em=sorted({a.viga_de_apoio for a in viga.apoios_em_viga}),
+            recebe_de=sorted({r.de for r in recebe}))
+
+    return [feitas[v.nome] for v in cadeias]
+
+
+def _ordem_de_projeto(cadeias: list) -> list:
+    """As vigas na ordem em que uma recebe da outra.
+
+    Uma viga só pode ser dimensionada depois de todas as que repousam nela,
+    porque é a reação delas que vira a sua carga. Não é a ordem de prioridade:
+    quem apoia quem sai de onde o nó cai (dentro dos vãos de quem), e não de
+    um ranking. Havendo ciclo — já desfeito em ``continuidade`` —, o resto
+    segue na ordem dada em vez de travar.
+    """
+    nomes = {v.nome for v in cadeias}
+    apoiadas_nela: dict[str, set[str]] = {v.nome: set() for v in cadeias}
+    for v in cadeias:
+        for a in v.apoios_em_viga:
+            if a.viga_de_apoio in nomes:
+                apoiadas_nela[a.viga_de_apoio].add(v.nome)
+
+    ordem, feitas, restantes = [], set(), list(cadeias)
+    while restantes:
+        proximas = [v for v in restantes if apoiadas_nela[v.nome] <= feitas]
+        if not proximas:
+            ordem.extend(restantes)
+            break
+        for v in proximas:
+            ordem.append(v)
+            feitas.add(v.nome)
+            restantes.remove(v)
+    return ordem
+
+
+def _altura_da_cadeia(modelo: Modelo, viga) -> float:
+    secao = modelo.secoes.get(modelo.barras[viga.barras[0]].secao)
+    return float(secao.h) * M_PARA_CM if secao is not None else 0.0
+
+
+def gravar_pranchas_de_vigas(verificacoes: list[VerificacaoDeViga],
+                             pasta) -> str | None:
+    """Grava o DXF único das vigas dimensionadas — todas lado a lado.
+
+    Separado do cálculo de propósito: dimensionar atualiza os modelos, e
+    **imprimir** a prancha é uma decisão à parte. Devolve o caminho, ou
+    ``None`` se nenhuma viga passou. Aponta ``desenhos`` de cada viga para o
+    arquivo — é uma prancha só, e não um desenho por viga.
+    """
+    from pathlib import Path
+
+    from .saidas.desenho_unico import montar_dxf_de_vigas
+
+    aprovadas = [v for v in verificacoes if v.passou]
+    if not aprovadas:
+        return None
+    caminho = Path(pasta) / "vigas — desenhos.dxf"
+    try:
+        montar_dxf_de_vigas([(v.nome, v.resultado) for v in aprovadas],
+                            caminho)
+    except Exception as erro:                            # noqa: BLE001
+        for v in aprovadas:
+            v.avisos.append(f"{v.nome}: DXF não gerado ({erro})")
+        return None
+    for v in aprovadas:
+        v.desenhos = [str(caminho)]
+    return str(caminho)
 
 
 def gravar_desenhos(resultado, nome: str, pasta,
-                    com_dxf: bool = True) -> list[str]:
+                    com_dxf: bool = True, com_png: bool = True) -> list[str]:
     """Grava a elevação e as seções da viga dimensionada, em PNG e em DXF.
 
     O desenho é o do programa de Vigas — armadura, estribos, cotas e todo o
     detalhamento que ele produz. Aqui só se escolhe onde gravar.
+
+    ``com_png=False`` pula os dois ``savefig`` — que é o render inteiro em
+    matplotlib de uma elevação com estribos, cotas e cada barra desenhada — e
+    grava só o DXF. Vale para quem consome o desenho como CAD e nunca abre o
+    PNG: a prancha única e a ação "Dimensionar vigas" fazem isso, e é a maior
+    fatia do tempo que se ganha ao não gerar imagem que ninguém vê.
 
     **DXF, e não DWG.** O DWG é formato proprietário e fechado da Autodesk; a
     biblioteca que escreve CAD aqui (ezdxf) grava DXF, que é o formato de
@@ -736,17 +1268,20 @@ def gravar_desenhos(resultado, nome: str, pasta,
     """
     from pathlib import Path
 
-    from .elementos.vigas.saidas import desenho
-
     destino = Path(pasta)
     destino.mkdir(parents=True, exist_ok=True)
     arquivos = []
-    for figura, sufixo in ((desenho.figura_elevacao(resultado), "elevacao"),
-                           (desenho.figura_secoes(resultado), "secoes")):
-        caminho = destino / f"{nome} - {sufixo}.png"
-        figura.savefig(caminho, dpi=150, facecolor="white",
-                       bbox_inches="tight")
-        arquivos.append(str(caminho))
+
+    if com_png:
+        from .elementos.vigas.saidas import desenho
+
+        for figura, sufixo in ((desenho.figura_elevacao(resultado),
+                                "elevacao"),
+                               (desenho.figura_secoes(resultado), "secoes")):
+            caminho = destino / f"{nome} - {sufixo}.png"
+            figura.savefig(caminho, dpi=150, facecolor="white",
+                          bbox_inches="tight")
+            arquivos.append(str(caminho))
 
     if com_dxf:
         from .elementos.vigas.saidas import dxf
@@ -757,6 +1292,15 @@ def gravar_desenhos(resultado, nome: str, pasta,
         except Exception as erro:                    # noqa: BLE001
             arquivos.append(f"(DXF não gerado: {erro})")
     return arquivos
+
+
+#: Como cada fonte de esforços aparece nos relatórios.
+DESCRICAO_DA_FONTE = {
+    "portico": "a envoltória ELU do pórtico (o ELS segue da viga contínua "
+               "com g e q)",
+    "envolvente": "o pior entre a envoltória do pórtico e a viga contínua",
+    "motor": "a viga contínua com g e q (o pórtico só confere)",
+}
 
 
 def resumo_de_vigas(verificacoes: list[VerificacaoDeViga]) -> str:
@@ -778,13 +1322,22 @@ def resumo_de_vigas(verificacoes: list[VerificacaoDeViga]) -> str:
               f"contínuas: {len(aprovadas)} aprovadas, "
               f"{len(reprovadas)} reprovadas, "
               f"{len(sem_veredito)} sem veredito"]
+    fontes = {v.esforcos for v in verificacoes if v.passou}
+    if fontes:
+        linhas.append("  armadas com: " + ", ".join(
+            DESCRICAO_DA_FONTE[f] for f in sorted(fontes)))
     for v in verificacoes:
         if not v.passou:
             linhas.append(f"  {v.nome}: {v.erro}")
             continue
         vaos = " + ".join(f"{x:.2f}" for x in v.vaos)
         aco = v.resultado.quantitativo.get("massa_total", 0.0)
-        linhas.append(f"  {v.nome}: vãos {vaos} m, {aco:.1f} kg de aço"
+        relacao = ""
+        if v.apoiada_em:
+            relacao += f", apoiada em {', '.join(v.apoiada_em)}"
+        if v.recebe_de:
+            relacao += f", recebe {', '.join(v.recebe_de)}"
+        linhas.append(f"  {v.nome}: vãos {vaos} m{relacao}, {aco:.1f} kg de aço"
                       + ("" if v.aprovado else "  — REPROVADA"))
         if not getattr(v.resultado, "ok", True):
             for erro in list(getattr(v.resultado, "avisos", []))[:1]:
@@ -798,8 +1351,33 @@ def resumo_de_vigas(verificacoes: list[VerificacaoDeViga]) -> str:
 
 
 @dataclass
+class FaixaTrelicada:
+    """Uma faixa de laje treliçada: os painéis encadeados na direção das
+    nervuras, de viga a viga, e o veredito do motor de Lajes para ela."""
+
+    nome: str
+    paineis: list[str]
+    laje: object = None              # LajeTrelicada do programa de Lajes
+    resultado: object = None         # ResultadoTrelicada
+    erro: str = ""
+
+    @property
+    def passou(self) -> bool:
+        return self.erro == "" and self.resultado is not None
+
+    @property
+    def atende(self) -> bool:
+        return self.passou and bool(getattr(self.resultado, "atende", False))
+
+
+@dataclass
 class VerificacaoDePavimento:
-    """O veredito do programa de Lajes para um pavimento inteiro."""
+    """O veredito do programa de Lajes para um pavimento inteiro.
+
+    ``resultado`` é o das lajes **maciças** (o ``ResultadoPavimento``), ou
+    ``None`` quando o pavimento só tem treliçada; ``trelicadas`` traz as
+    faixas treliçadas, cada uma com o seu veredito.
+    """
 
     cota: float
     paineis: list[str]
@@ -808,10 +1386,31 @@ class VerificacaoDePavimento:
     continuidades: int = 0
     erro: str = ""
     desenhos: list[str] = field(default_factory=list)
+    trelicadas: list[FaixaTrelicada] = field(default_factory=list)
 
     @property
     def passou(self) -> bool:
-        return self.erro == "" and self.resultado is not None
+        return self.erro == "" and (self.resultado is not None
+                                    or bool(self.trelicadas))
+
+    @property
+    def erros(self) -> list:
+        """Os erros do pavimento: os das maciças e os das faixas treliçadas.
+        O ``ResultadoPavimento`` não tem ``ok`` — o veredito é a lista
+        vazia."""
+        saida = list(self.resultado.erros) if self.resultado is not None \
+            else []
+        for f in self.trelicadas:
+            if not f.passou:
+                saida.append(f"treliçada {f.nome}: {f.erro}")
+            else:
+                saida += [f"treliçada {f.nome}: {t}"
+                          for c, t in f.resultado.avisos if c == "erro"]
+        return saida
+
+    @property
+    def aprovado(self) -> bool:
+        return self.passou and not self.erros
 
 
 def _largura_das_vigas(modelo: Modelo, laje) -> list[float]:
@@ -821,8 +1420,9 @@ def _largura_das_vigas(modelo: Modelo, laje) -> list[float]:
     arestas, _, _ = arestas_da_laje(modelo, laje)
     larguras = []
     for aresta in arestas:
-        secao = modelo.secoes[modelo.barras[aresta.barra].secao]
-        larguras.append(secao.b * M_PARA_CM if secao.b > 0.0 else 20.0)
+        bs = [modelo.secoes[modelo.barras[n].secao].b for n in aresta.barras]
+        b = max(bs)
+        larguras.append(b * M_PARA_CM if b > 0.0 else 20.0)
     return larguras
 
 
@@ -845,14 +1445,22 @@ def montar_pavimento(modelo: Modelo, cota: float, fck: float | None = None):
     from .core.lajes import _cantos
     from .elementos.lajes.core import modelo as ml
 
+    # Só as maciças: a treliçada vai por faixa (``faixas_trelicadas``).
     paineis = [l for l in modelo.lajes.values()
-               if abs(modelo.ponto(l.no_a)[2] - cota) < 1e-6]
+               if abs(modelo.ponto(l.no_a)[2] - cota) < 1e-6
+               and not l.trelicada]
     if not paineis:
-        raise ErroDeModelo(f"não há laje na cota {cota:.3f} m")
+        raise ErroDeModelo(f"não há laje maciça na cota {cota:.3f} m")
 
     classe = fck
     lajes = []
     for laje in paineis:
+        material = modelo.materiais.get(laje.material)
+        if classe is None and material is not None and material.fck > 0.0:
+            classe = material.fck
+        if laje.em_balanco:
+            lajes.append(_laje_em_balanco(modelo, laje, ml))
+            continue
         cantos, lx, ly = _cantos(modelo, laje)
         larguras = _largura_das_vigas(modelo, laje)
         # Bordos 1 e 3 correm ao longo de X; 2 e 4 ao longo de Y. O vão livre
@@ -861,19 +1469,24 @@ def montar_pavimento(modelo: Modelo, cota: float, fck: float | None = None):
         livre_y = ly - (larguras[0] + larguras[2]) / 2.0 / M_PARA_CM
         canto = modelo.ponto(cantos[0])
 
-        material = modelo.materiais.get(laje.material)
-        if classe is None and material is not None and material.fck > 0.0:
-            classe = material.fck
-
-        bordos = [ml.Bordo(vinculo="apoiado", t=t) for t in larguras]
-        lajes.append(ml.Laje(
+        deles = ml.Laje(
             nome=laje.nome, a=livre_x, b=livre_y,
             h=max(laje.espessura, 0.01) * M_PARA_CM,
             x=float(canto[0]) + larguras[3] / 2.0 / M_PARA_CM,
             y=float(canto[1]) + larguras[0] / 2.0 / M_PARA_CM,
             orientacao="X" if livre_x >= livre_y else "Y",
-            bordos=bordos, permanente_extra=laje.permanente,
-            variavel=laje.acidental))
+            bordos=[ml.Bordo(vinculo="apoiado") for _ in range(4)],
+            permanente_extra=laje.permanente, variavel=laje.acidental)
+        # A largura de cada bordo vai **pela face que ele ocupa**. As
+        # larguras saem na ordem das arestas (embaixo, à direita, em cima, à
+        # esquerda), e o programa de Lajes numera os bordos pela orientação
+        # da laje — na orientação Y o bordo 2 é a esquerda. Passar a lista
+        # na ordem das arestas punha a viga da direita no bordo da esquerda.
+        por_face = {"baixo": larguras[0], "direita": larguras[1],
+                    "cima": larguras[2], "esquerda": larguras[3]}
+        for k, bordo in enumerate(deles.bordos, start=1):
+            bordo.t = por_face[deles.face_do_bordo(k)]
+        lajes.append(deles)
 
     if classe is None or classe <= 0.0:
         raise ErroDeModelo(
@@ -886,8 +1499,227 @@ def montar_pavimento(modelo: Modelo, cota: float, fck: float | None = None):
     # e anota a vizinha, que é do que o cálculo por tabelas precisa. Só
     # detectar deixaria os bordos apoiados, e o próprio programa de Lajes
     # acusa a incoerência — foi assim que este passo apareceu.
-    pav.aplicar_continuidades(pav.detectar_continuidades())
+    # A laje em balanço só se engasta pelo lado apoiado. Duas em balanço lado
+    # a lado — a sacada partida onde uma viga chega por dentro — encostam
+    # pela borda lateral, que é livre: a placa é contínua ali, mas cada uma
+    # trabalha em balanço na direção do vão, e essa continuidade não é
+    # engaste para ela. Engastada também pelo lado, ela deixaria de ser
+    # balanço para o programa de Lajes (dois bordos engastados e dois
+    # livres), e sairia calculada como laje de canto.
+    apoiado = {"+y": "baixo", "-y": "cima", "+x": "esquerda",
+               "-x": "direita"}
+    sentidos = {l.nome: l.sentido for l in paineis if l.em_balanco}
+
+    def pelo_lado_apoiado(c) -> bool:
+        for nome, bordo in ((c.laje_a, c.bordo_a), (c.laje_b, c.bordo_b)):
+            if nome in sentidos and pav.laje(nome).face_do_bordo(bordo) \
+                    != apoiado[sentidos[nome]]:
+                return False
+        return True
+
+    pav.aplicar_continuidades([c for c in pav.detectar_continuidades()
+                               if pelo_lado_apoiado(c)])
+    # A laje em balanço só existe engastada na laje de dentro: é ali que o
+    # momento dela se equilibra (o pórtico não põe torção na viga — ver
+    # ``core.lajes._distribuir_balanco``). Sem vizinha contínua, ou com uma
+    # que não fecha engaste (espessuras diferentes demais, contato parcial),
+    # o balanço ficaria sem engaste nenhum.
+    for laje in paineis:
+        if not laje.em_balanco:
+            continue
+        deles = pav.laje(laje.nome)
+        if deles is None or not deles.em_balanco:
+            raise ErroDeModelo(
+                f"laje {laje.nome}: em balanço sem laje contínua do outro "
+                "lado da viga de apoio — o engaste dela dependeria da torção "
+                "da viga, que este programa ainda não carrega. Lance a laje "
+                "de dentro com a mesma espessura (até 2 cm de diferença) ao "
+                "longo de pelo menos 2/3 do lado apoiado")
     return pav
+
+
+def _laje_em_balanco(modelo: Modelo, laje, ml):
+    """A laje em balanço no formato do programa de Lajes.
+
+    O retângulo é o dos **vãos livres**, como nas outras: do balanço sai
+    meia largura da viga de apoio (o vão livre vai da face da viga à borda;
+    o programa de Lajes soma 0,3·h no engaste, 14.7.2.2), e ao longo do lado
+    apoiado sai meia largura das vigas que chegam nas duas pontas — as
+    mesmas que limitam a laje de dentro, para que a borda comum coincida e a
+    continuidade seja detectada. Os quatro bordos entram livres; o do lado
+    apoiado vira engastado na continuidade com a laje de dentro.
+    """
+    from .core.lajes import arestas_da_laje, retangulo
+
+    arestas, _, _ = arestas_da_laje(modelo, laje)
+    t = max(modelo.secoes[modelo.barras[n].secao].b
+            for n in arestas[0].barras) * M_PARA_CM
+    t = t if t > 0.0 else 20.0
+    x0, y0, x1, y1, _ = retangulo(modelo, laje)
+    em_x = laje.sentido[1] == "y"      # o lado apoiado corre em X
+
+    def meia_perpendicular(no: str) -> float:
+        """Meia largura, m, da viga que chega à ponta do lado apoiado
+        perpendicular a ele (a que fecha a laje de dentro)."""
+        from .continuidade import _eh_vertical
+        maior = 0.0
+        p = modelo.ponto(no)
+        for nome, b in modelo.barras.items():
+            if no not in (b.no_i, b.no_j) or _eh_vertical(modelo, b):
+                continue
+            outro = modelo.ponto(b.no_j if b.no_i == no else b.no_i)
+            d = outro - p
+            ao_longo = abs(d[0]) if em_x else abs(d[1])
+            if ao_longo < 1e-6:            # perpendicular ao lado apoiado
+                maior = max(maior, modelo.secoes[b.secao].b / 2.0)
+        return maior
+
+    a, c = modelo.ponto(laje.no_a), modelo.ponto(laje.no_c)
+    (n0, n1) = ((laje.no_a, laje.no_c) if (a[0] if em_x else a[1])
+                <= (c[0] if em_x else c[1]) else (laje.no_c, laje.no_a))
+    meia_t = t / 2.0 / M_PARA_CM
+    if em_x:
+        x0, x1 = x0 + meia_perpendicular(n0), x1 - meia_perpendicular(n1)
+        if laje.sentido == "+y":
+            y0 += meia_t
+        else:
+            y1 -= meia_t
+    else:
+        y0, y1 = y0 + meia_perpendicular(n0), y1 - meia_perpendicular(n1)
+        if laje.sentido == "+x":
+            x0 += meia_t
+        else:
+            x1 -= meia_t
+    livre_x, livre_y = x1 - x0, y1 - y0
+    if livre_x <= 0.0 or livre_y <= 0.0:
+        raise ErroDeModelo(
+            f"laje {laje.nome}: o balanço de {laje.balanco:g} m não passa da "
+            f"face da viga de apoio ({t:g} cm de largura)")
+    # ``destino = "balanco"`` não é só rótulo no programa de Lajes: é por ele
+    # que a negativa da borda comum vai até a ponta livre (a única armadura
+    # do balanço, ``compatibilizacao._extensao``) e que vale o h mínimo de
+    # 10 cm do 13.2.4.1. Os vínculos sozinhos não bastam — sem o destino, a
+    # negativa parava a um quarto do vão, antes da borda.
+    return ml.Laje(
+        nome=laje.nome, a=livre_x, b=livre_y, destino="balanco",
+        h=max(laje.espessura, 0.01) * M_PARA_CM, x=x0, y=y0,
+        orientacao="X" if livre_x >= livre_y else "Y",
+        bordos=[ml.Bordo(vinculo="livre", t=t) for _ in range(4)],
+        permanente_extra=laje.permanente, variavel=laje.acidental)
+
+
+def faixas_trelicadas(modelo: Modelo, cota: float, fck: float | None = None
+                      ) -> list[FaixaTrelicada]:
+    """As faixas treliçadas de uma cota, montadas para o programa de Lajes.
+
+    Uma faixa é a nervura contínua: os painéis treliçados com a mesma
+    direção de nervura, a mesma seção (treliça, enchimento, capa, bloco e
+    base) e a mesma largura transversal, encostados um no outro na direção
+    das nervuras — cada encontro é uma viga, que vira apoio intermediário.
+    Os vãos são de eixo a eixo das vigas, como o programa de Lajes pede, e a
+    largura de cada apoio é a da viga que o forma.
+    """
+    from .core.lajes import arestas_da_laje
+    from .elementos.lajes.core import trelicada_modelo as tm
+
+    paineis = [l for l in modelo.lajes.values()
+               if l.trelicada and abs(modelo.ponto(l.no_a)[2] - cota) < 1e-6]
+    grupos: dict[tuple, list] = {}
+    for laje in paineis:
+        a, c = modelo.ponto(laje.no_a), modelo.ponto(laje.no_c)
+        x0, x1 = sorted((float(a[0]), float(c[0])))
+        y0, y1 = sorted((float(a[1]), float(c[1])))
+        ao_longo, transversal = ((x0, x1), (y0, y1)) if laje.direcao == "x" \
+            else ((y0, y1), (x0, x1))
+        chave = (laje.direcao, round(transversal[0], 6),
+                 round(transversal[1], 6), laje.trelica, laje.enchimento,
+                 round(laje.altura_enchimento, 6), round(laje.capa, 6),
+                 round(laje.largura_bloco, 6), round(laje.base_vigota, 6),
+                 laje.material)
+        grupos.setdefault(chave, []).append((ao_longo, laje))
+
+    def largura_da_viga(aresta) -> float:
+        """A largura do apoio, cm: a menor das barras do lado — é por ela que
+        a vigota ancora."""
+        b = min(modelo.secoes[modelo.barras[n].secao].b
+                for n in aresta.barras)
+        return b * M_PARA_CM if b > 0.0 else 20.0
+
+    faixas = []
+    for chave, lista in grupos.items():
+        lista.sort(key=lambda par: par[0][0])
+        cadeias, atual = [], [lista[0]]
+        for par in lista[1:]:
+            if abs(par[0][0] - atual[-1][0][1]) < 1e-6:
+                atual.append(par)
+            else:
+                cadeias.append(atual)
+                atual = [par]
+        cadeias.append(atual)
+
+        direcao, t0, t1 = chave[0], chave[1], chave[2]
+        for cadeia in cadeias:
+            lajes = [l for _, l in cadeia]
+            nome = "+".join(l.nome for l in lajes)
+            try:
+                # arestas: 0 embaixo, 1 à direita, 2 em cima, 3 à esquerda
+                ini, fim = (3, 1) if direcao == "x" else (0, 2)
+                apoios_t = [largura_da_viga(
+                    arestas_da_laje(modelo, lajes[0])[0][ini])]
+                for l in lajes:
+                    apoios_t.append(largura_da_viga(
+                        arestas_da_laje(modelo, l)[0][fim]))
+                primeira = lajes[0]
+                material = modelo.materiais.get(primeira.material)
+                lt = tm.LajeTrelicada(
+                    nome=nome,
+                    base=primeira.base_vigota * M_PARA_CM,
+                    largura_bloco=primeira.largura_bloco * M_PARA_CM,
+                    altura_enchimento=primeira.altura_enchimento * M_PARA_CM,
+                    capa=primeira.capa * M_PARA_CM,
+                    enchimento=primeira.enchimento,
+                    trelica=primeira.trelica,
+                    # A vigota entra na viga o que a viga dá: a largura dela
+                    # menos o cobrimento do outro lado (o padrão do motor,
+                    # 5 cm, fica como piso). É a entrada que ancora o
+                    # positivo no apoio.
+                    apoio_vigota=max(5.0, min(apoios_t) - 3.0),
+                    largura_laje=t1 - t0,
+                    vaos=[tm.VaoTrelicado(L=(fim_ - ini_) * M_PARA_CM,
+                                          g=l.permanente, q=l.acidental)
+                          for (ini_, fim_), l in cadeia],
+                    apoios=[tm.ApoioTrelicado(t=t) for t in apoios_t])
+                faixas.append(FaixaTrelicada(nome, [l.nome for l in lajes],
+                                             laje=lt))
+                faixas[-1].fck = (fck if fck is not None else
+                                  (material.fck if material else 0.0))
+                faixas[-1].peso_especifico = (material.peso_especifico
+                                              if material else 25.0)
+            except (ErroDeModelo, ValueError, KeyError) as erro:
+                faixas.append(FaixaTrelicada(nome, [l.nome for l in lajes],
+                                             erro=str(erro)))
+    return faixas
+
+
+def dimensionar_faixa(faixa: FaixaTrelicada) -> FaixaTrelicada:
+    """Roda o motor de laje treliçada do programa de Lajes na faixa."""
+    from .elementos.lajes.core.materiais import Ambiente, Concreto
+    from .elementos.lajes.core.trelicada import dimensionar_trelicada
+
+    if faixa.erro or faixa.laje is None:
+        return faixa
+    fck = getattr(faixa, "fck", 0.0)
+    if fck <= 0.0:
+        faixa.erro = "o material da laje não declara fck"
+        return faixa
+    try:
+        concreto = Concreto(fck=fck, peso_especifico=getattr(
+            faixa, "peso_especifico", 25.0))
+        faixa.resultado = dimensionar_trelicada(faixa.laje, concreto,
+                                                Ambiente())
+    except (ValueError, ZeroDivisionError, KeyError, IndexError) as erro:
+        faixa.erro = str(erro)
+    return faixa
 
 
 def cotas_com_laje(modelo: Modelo) -> list[float]:
@@ -902,23 +1734,46 @@ def verificar_lajes(modelo: Modelo, pasta_desenhos=None,
 
     saida = []
     for cota in cotas_com_laje(modelo):
-        paineis = [l.nome for l in modelo.lajes.values()
-                   if abs(modelo.ponto(l.no_a)[2] - cota) < 1e-6]
+        no_nivel = [l for l in modelo.lajes.values()
+                    if abs(modelo.ponto(l.no_a)[2] - cota) < 1e-6]
+        paineis = [l.nome for l in no_nivel]
+        faixas = [dimensionar_faixa(f)
+                  for f in faixas_trelicadas(modelo, cota, fck)]
+        if not any(not l.trelicada for l in no_nivel):
+            saida.append(VerificacaoDePavimento(cota, paineis,
+                                                trelicadas=faixas))
+            continue
         try:
             pav = montar_pavimento(modelo, cota, fck)
             resultado = dimensionar(pav)
         except (ErroDeModelo, ValueError, ZeroDivisionError, KeyError) as e:
-            saida.append(VerificacaoDePavimento(cota, paineis, erro=str(e)))
+            saida.append(VerificacaoDePavimento(cota, paineis, erro=str(e),
+                                                trelicadas=faixas))
             continue
 
         v = VerificacaoDePavimento(cota, paineis, resultado=resultado,
                                    pavimento=pav,
-                                   continuidades=len(pav.continuidades))
-        if pasta_desenhos is not None:
-            v.desenhos = gravar_desenhos_de_laje(resultado, cota,
-                                                 pasta_desenhos)
+                                   continuidades=len(pav.continuidades),
+                                   trelicadas=faixas)
         saida.append(v)
+    if pasta_desenhos is not None:
+        gravar_pranchas_de_lajes(saida, pasta_desenhos)
     return saida
+
+
+def gravar_pranchas_de_lajes(verificacoes: list[VerificacaoDePavimento],
+                             pasta) -> list[str]:
+    """Grava as plantas de armação dos pavimentos já dimensionados.
+
+    Dimensionar atualiza os modelos; imprimir é uma decisão à parte, e é aqui.
+    """
+    arquivos = []
+    for v in verificacoes:
+        if not v.passou or v.resultado is None:
+            continue
+        v.desenhos = gravar_desenhos_de_laje(v.resultado, v.cota, pasta)
+        arquivos.extend(v.desenhos)
+    return arquivos
 
 
 def gravar_desenhos_de_laje(resultado, cota: float, pasta,
@@ -960,8 +1815,24 @@ def resumo_de_lajes(verificacoes: list[VerificacaoDePavimento]) -> str:
 
     linhas = [f"Dimensionamento de lajes — {len(verificacoes)} pavimentos"]
     for v in verificacoes:
+        for f in v.trelicadas:
+            if not f.passou:
+                linhas.append(f"  cota {v.cota:g} m, treliçada {f.nome}: "
+                              f"{f.erro}")
+                continue
+            q = f.resultado.quantitativo or {}
+            erros = [t for c, t in f.resultado.avisos if c == "erro"]
+            linhas.append(
+                f"  cota {v.cota:g} m, treliçada {f.nome}: "
+                f"{len(f.laje.vaos)} vão(s), {f.laje.trelica}, h = "
+                f"{f.laje.h:.0f} cm, {q.get('aco_kg', 0.0):.1f} kg de aço"
+                f" — {'OK' if f.atende else f'{len(erros)} erro(s)'}")
+            for erro in erros[:2]:
+                linhas.append(f"    erro: {erro}")
         if not v.passou:
             linhas.append(f"  cota {v.cota:g} m: {v.erro}")
+            continue
+        if v.resultado is None:
             continue
         # O ``ResultadoPavimento`` não tem um ``ok``: o veredito é a lista de
         # erros estar vazia. Perguntar por um campo que não existe devolveria

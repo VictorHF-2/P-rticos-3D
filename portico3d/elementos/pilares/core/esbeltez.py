@@ -17,6 +17,7 @@ from . import avisos as av
 from .materiais import (ESBELTEZ_FLUENCIA, ESBELTEZ_MAXIMA,
                         ESBELTEZ_METODO_EXATO, gamma_n1)
 from .modelo import Pilar
+from .formato import num
 
 #: Limites do item 15.8.2 para a esbeltez limite.
 LAMBDA_1_MINIMO = 35.0
@@ -41,12 +42,17 @@ class Esbeltez:
     M1d_B: float                 # kN·cm
     M1d_min: float               # kN·cm
     gamma_n1: float = 1.0
+    #: sentido físico de M1d,A (+1/-1); ``e1`` e ``M1d_A`` são em módulo
+    sinal_A: float = 1.0
+    #: 2ª ordem imposta pelo critério de projeto (``Config.sempre_2a_ordem``)
+    imposta: bool = False
     avisos: list[str] = field(default_factory=list)
 
     @property
     def considerar_2a_ordem(self) -> bool:
-        """A segunda ordem local é obrigatória nesta direção (15.8.2)."""
-        return self.lam > self.lam_1
+        """A segunda ordem local entra nesta direção: obrigatória pelo item
+        15.8.2 (lambda > lambda_1) ou imposta pelo critério de projeto."""
+        return self.lam > self.lam_1 or self.imposta
 
     @property
     def fluencia_obrigatoria(self) -> bool:
@@ -58,6 +64,8 @@ class Esbeltez:
 
     @property
     def veredito(self) -> str:
+        if self.lam <= self.lam_1 and self.imposta:
+            return "Considerar 2ª ordem (imposta pelo projetista)"
         return ("Considerar 2ª ordem" if self.considerar_2a_ordem
                 else "2ª ordem é desprezível")
 
@@ -130,11 +138,18 @@ def esbeltez_limite(e1: float, h: float, ab: float) -> tuple[float, list[str]]:
     valor = min(max(bruto, LAMBDA_1_MINIMO), LAMBDA_1_MAXIMO)
     if bruto > LAMBDA_1_MAXIMO:
         avisos.append(av.construtivo(
-            f"Esbeltez limite calculada em {bruto:.1f}, acima do teto de "
-            f"{LAMBDA_1_MAXIMO:g} do item 15.8.2; adotado o teto. A "
-            f"excentricidade relativa e1/h = {e1 / h:.2f} é o que a empurra "
+            f"Esbeltez limite calculada em {num(bruto, 1)}, acima do teto de "
+            f"{num(LAMBDA_1_MAXIMO)} do item 15.8.2; adotado o teto. A "
+            f"excentricidade relativa e1/h = {num(e1 / h, 2)} é o que a empurra "
             f"para cima."))
     return valor, avisos
+
+
+def pilar_pouco_comprimido(pilar: Pilar) -> bool:
+    """Elemento pouco comprimido do item 15.8.1: ``Nd < 0,10 fcd Ac`` -- o
+    único caso em que a norma admite lambda > 200 (tração inclusa)."""
+    Ac = pilar.secao.propriedades().area
+    return pilar.Nd < 0.10 * pilar.concreto.fcd_kNcm2 * Ac
 
 
 def analisar(pilar: Pilar, direcao: str) -> Esbeltez:
@@ -165,44 +180,64 @@ def analisar(pilar: Pilar, direcao: str) -> Esbeltez:
     if not prop.simetrica:
         avisos.append(av.construtivo(
             f"A seção {pilar.secao.tipo} tem produto de inércia não nulo "
-            f"(Ixy = {prop.Ixy:.0f} cm⁴): os eixos x e y não são principais. "
+            f"(Ixy = {num(prop.Ixy, 0)} cm⁴): os eixos x e y não são principais. "
             f"A esbeltez em {direcao} foi calculada com o raio de giração "
             f"desses eixos, que é o que casa com a direção dos momentos de "
             f"entrada, mas a flambagem real se dá segundo os eixos "
             f"principais. Confira se o comprimento equivalente informado "
             f"corresponde a essa direção."))
 
-    if lam > ESBELTEZ_MAXIMA:
+    metodo = pilar.config.metodo_2a_ordem
+    pouco_comprimido = pilar_pouco_comprimido(pilar)
+    if lam > ESBELTEZ_MAXIMA and pouco_comprimido:
+        avisos.append(av.construtivo(
+            f"Esbeltez em {direcao} = {num(lam, 0)}, acima de "
+            f"{num(ESBELTEZ_MAXIMA)}: o item 15.8.1 só a admite em elemento pouco "
+            f"comprimido, com Nd < 0,10 fcd Ac -- é o caso. O método geral "
+            f"continua obrigatório (λ > 140)."))
+    if lam > ESBELTEZ_MAXIMA and not pouco_comprimido:
         avisos.append(av.erro(
-            f"Esbeltez em {direcao} = {lam:.0f}, acima do limite de "
-            f"{ESBELTEZ_MAXIMA:g} do item 15.8.1. A norma não admite o pilar; "
+            f"Esbeltez em {direcao} = {num(lam, 0)}, acima do limite de "
+            f"{num(ESBELTEZ_MAXIMA)} do item 15.8.1. A norma só admite o pilar "
+            f"se ele for pouco comprimido (Nd < 0,10 fcd Ac), e não é; "
             f"aumente a seção ou reduza o comprimento de flambagem."))
-    elif lam > ESBELTEZ_METODO_EXATO:
+    elif lam > ESBELTEZ_METODO_EXATO and metodo != "geral":
         avisos.append(av.erro(
-            f"Esbeltez em {direcao} = {lam:.0f}, acima de "
-            f"{ESBELTEZ_METODO_EXATO:g}: o item 15.8.3.2 torna o **método "
-            f"exato** obrigatório, com análise não linear de 2ª ordem e "
-            f"relação momento-curvatura real. Os métodos aproximados do "
-            f"pilar-padrão, que é o que este programa calcula, não são "
-            f"permitidos nessa faixa. O resultado abaixo é indicativo."))
-    elif lam > ESBELTEZ_FLUENCIA:
+            f"Esbeltez em {direcao} = {num(lam, 0)}, acima de "
+            f"{num(ESBELTEZ_METODO_EXATO)}: o item 15.8.3.2 torna o **método "
+            f"geral** obrigatório, com análise não linear de 2ª ordem e "
+            f"relação momento-curvatura real. Os métodos do pilar-padrão não "
+            f"são permitidos nessa faixa: escolha o método geral nos "
+            f"critérios de cálculo. O resultado abaixo é indicativo."))
+    elif lam > ESBELTEZ_FLUENCIA and metodo in ("curvatura", "rigidez",
+                                                "menor"):
         avisos.append(av.erro(
-            f"Esbeltez em {direcao} = {lam:.0f}, acima de "
-            f"{ESBELTEZ_FLUENCIA:g}: o item 15.8.4 torna a consideração da "
-            f"**fluência** obrigatória, e os métodos do pilar-padrão com "
+            f"Esbeltez em {direcao} = {num(lam, 0)}, acima de "
+            f"{num(ESBELTEZ_FLUENCIA)}: os métodos do pilar-padrão com "
             f"curvatura e com rigidez aproximadas ficam restritos a "
-            f"lambda <= 90 (itens 15.8.3.3.2 e 15.8.3.3.3)."))
+            f"λ <= 90 (itens 15.8.3.3.2 e 15.8.3.3.3) -- use o "
+            f"pilar-padrão acoplado a diagramas M, N, 1/r ou o método "
+            f"geral; e o item 15.8.4 torna a **fluência** obrigatória."))
+
+    imposta = pilar.config.sempre_2a_ordem
+    if imposta and lam <= lam_1 and Nd > 0.0:
+        avisos.append(av.construtivo(
+            f"Esbeltez em {direcao} = {num(lam, 1)} <= λ₁ = {num(lam_1, 1)}: o "
+            f"item 15.8.2 dispensaria a 2ª ordem, mas o critério de projeto "
+            f"manda considerá-la sempre (a favor da segurança)."))
 
     g1 = gamma_n1(lam) if pilar.config.aplicar_gamma_n1 else 1.0
     if g1 > 1.0:
         avisos.append(av.construtivo(
-            f"Esbeltez em {direcao} = {lam:.0f} > 140: os esforços finais "
-            f"foram majorados por gamma_n1 = {g1:.3f} (item 15.8.1)."))
+            f"Esbeltez em {direcao} = {num(lam, 0)} > 140: os efeitos locais de "
+            f"2ª ordem foram majorados por γn1 = {num(g1, 3)} (item "
+            f"15.8.1)."))
 
     return Esbeltez(direcao=direcao, h=h, i=i, le=le, lam=lam, lam_1=lam_1,
                     alfa_b=ab, vinculo=pilar.lance.vinculo(direcao), e1=e1,
                     e1_min=e1_min, M1d_A=M1d_A, M1d_B=M1d_B, M1d_min=M1d_min,
-                    gamma_n1=g1, avisos=avisos)
+                    gamma_n1=g1, sinal_A=pilar.sinal_A(direcao),
+                    imposta=imposta, avisos=avisos)
 
 
 def lambda_retangular(le: float, h: float) -> float:

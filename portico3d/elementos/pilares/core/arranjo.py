@@ -19,9 +19,11 @@ from dataclasses import dataclass, field
 from . import avisos as av
 from . import geometria as geo
 from .materiais import (ESPACAMENTO_EIXOS_MAXIMO, ESPACAMENTO_LIVRE_MINIMO,
-                        RHO_MAXIMO, area_barra, massa_linear, rho_minimo)
+                        RHO_MAXIMO, RHO_MAXIMO_CORRENTE, RHO_MAXIMO_EMENDA,
+                        area_barra, massa_linear, rho_minimo)
 from .modelo import Pilar, SecaoPilar
 from .seccional import Barra
+from .formato import num
 
 #: Número mínimo de barras em seção circular (item 18.4.2.2).
 BARRAS_MINIMAS_CIRCULAR = 6
@@ -50,6 +52,9 @@ class Arranjo:
     #: ordem das barras. Vazia na seção retangular e na circular, onde o
     #: espaçamento é uniforme por construção.
     passos_contorno: list[float] = field(default_factory=list)
+    #: Barras da camada interna (seção vazada), as últimas da lista.
+    n_internas: int = 0
+    phi_interna: float = 0.0
     cabe: bool = True
     avisos: list[str] = field(default_factory=list)
 
@@ -66,6 +71,28 @@ class Arranjo:
         return sum(massa_linear(b.phi) for b in self.barras) \
             * comprimento_cm / 100.0
 
+    @property
+    def simetrico(self) -> bool:
+        """As barras são invariantes a ``x -> -x`` e a ``y -> -y`` (com a
+        mesma bitola)? É a "armadura simétrica" que os itens 15.8.3.3.2 e
+        15.8.3.3.3 exigem dos métodos aproximados."""
+        return barras_simetricas(self.barras)
+
+    def por_bitola(self) -> dict[float, int]:
+        """Quantidade de barras por bitola, da maior para a menor."""
+        cont: dict[float, int] = {}
+        for b in self.barras:
+            cont[b.phi] = cont.get(b.phi, 0) + 1
+        return dict(sorted(cont.items(), key=lambda kv: -kv[0]))
+
+    def descricao_bitolas(self) -> str:
+        """``12 ø20`` ou, com bitolas misturadas, ``3 ø20 + 2 ø12.5``."""
+        return " + ".join(f"{n} ø{num(f)}" for f, n in self.por_bitola().items())
+
+    @property
+    def phi_min(self) -> float:
+        return min((b.phi for b in self.barras), default=self.phi)
+
     def barras_por_camada(self, direcao: str) -> int:
         """Barras na camada extrema da direção pedida.
 
@@ -77,12 +104,143 @@ class Arranjo:
         return self.ny if direcao == "x" else self.nx
 
     def descricao(self) -> str:
-        return f"{self.n_barras} ø{self.phi:g} mm ({self.As:.2f} cm²)"
+        return f"{self.descricao_bitolas()} mm ({num(self.As, 2)} cm²)"
 
 
 # ---------------------------------------------------------------------------
 # Recuo do contorno até o eixo da barra
 # ---------------------------------------------------------------------------
+
+def barras_simetricas(barras, tol: float = 1e-6) -> bool:
+    """Conjunto de barras simétrico em relação aos dois eixos (posição e
+    bitola)."""
+    conj = {(round(b.x / tol), round(b.y / tol), round(b.phi * 1000))
+            for b in barras}
+    return all((-x, y, f) in conj and (x, -y, f) in conj for x, y, f in conj)
+
+
+def montar_lista(secao: SecaoPilar, lista, cobrimento: float,
+                 phi_estribo: float) -> Arranjo:
+    """Arranjo a partir de uma lista explícita ``(x, y, ø)`` (cm, mm; x e y
+    a partir do CG da seção bruta).
+
+    Confere se cada barra fica dentro do concreto com o recuo do item 7.4.7
+    (cobrimento + estribo + ø/2), e mede os espaçamentos do item 18.4.2.2
+    entre vizinhas.
+    """
+    barras = [Barra(float(x), float(y), area_barra(float(f)), float(f))
+              for x, y, f in lista]
+    # Ordem ao longo do perímetro, para a regra do 18.2.4 e o vão do 18.4.2.2
+    # caminharem de barra em barra. Pela posição projetada no contorno
+    # externo -- o ângulo em torno do CG, que se usava antes, zigue-zagueava
+    # numa L, onde o CG cai na reentrância, fora do concreto.
+    externo = secao.contornos()[0]
+    barras.sort(key=lambda b: _abscissa_no_contorno(b.x, b.y, externo))
+    phi = max((b.phi for b in barras), default=0.0)
+    arr = Arranjo(barras=barras, phi=phi, cobrimento=cobrimento,
+                  phi_estribo=phi_estribo)
+    if not barras:
+        arr.cabe = False
+        return arr
+    contornos = secao.contornos()
+    externo, furos = contornos[0], contornos[1:]
+    recuo_max = 0.0
+    fora = []
+    for b in barras:
+        r = recuo_da_barra(cobrimento, phi_estribo, b.phi)
+        recuo_max = max(recuo_max, r)
+        dentro = geo.ponto_no_poligono(b.x, b.y, externo) and not any(
+            geo.ponto_no_poligono(b.x, b.y, f) for f in furos)
+        dist = min(geo.distancia_ao_contorno(b.x, b.y, c) for c in contornos)
+        if not dentro or dist < r - 1e-6:
+            fora.append((b, dist, r))
+    for b, dist, r in fora:
+        arr.avisos.append(av.erro(
+            f"Barra ø{num(b.phi)} em ({num(b.x, 1)}; {num(b.y, 1)}) cm a {num(dist, 2)} cm do "
+            f"contorno, abaixo do recuo de {num(r, 2)} cm (cobrimento + estribo + "
+            f"ø/2, item 7.4.7) -- ou fora do concreto."))
+    arr.cabe = not fora
+    arr.recuo = recuo_max
+    if furos and secao.tipo in SECOES_VAZADAS:
+        # junto ao furo = mais perto dele que do contorno externo
+        arr.n_internas = sum(
+            1 for b in barras
+            if min(geo.distancia_ao_contorno(b.x, b.y, f) for f in furos)
+            < geo.distancia_ao_contorno(b.x, b.y, externo))
+    # d' em cada direção: da face mais próxima à barra mais externa
+    u_min_x = min(x for pol in contornos[:1] for x, _ in pol)
+    u_max_x = max(x for pol in contornos[:1] for x, _ in pol)
+    u_min_y = min(y for pol in contornos[:1] for _, y in pol)
+    u_max_y = max(y for pol in contornos[:1] for _, y in pol)
+    arr.d_linha_x = min(u_max_x - max(b.x for b in barras),
+                        min(b.x for b in barras) - u_min_x)
+    arr.d_linha_y = min(u_max_y - max(b.y for b in barras),
+                        min(b.y for b in barras) - u_min_y)
+    # espaçamento livre: o mínimo entre quaisquer duas barras
+    livre = float("inf")
+    for i, a in enumerate(barras):
+        for j in range(i + 1, len(barras)):
+            c = barras[j]
+            d = math.hypot(a.x - c.x, a.y - c.y)
+            livre = min(livre, d - (a.phi + c.phi) / 20.0)
+    arr.espacamento_livre = livre if math.isfinite(livre) else 0.0
+    n = len(barras)
+    if n >= 3:
+        arr.passos_contorno = [math.hypot(barras[(i + 1) % n].x - barras[i].x,
+                                          barras[(i + 1) % n].y - barras[i].y)
+                               for i in range(n)]
+        arr.indices_vertices = _vertices_convexos(barras)
+        # entre eixos: o maior vão entre barras consecutivas no contorno --
+        # o vizinho mais próximo, que se usava antes, achava os 12 cm do lado
+        # curto de uma 20x60 com quatro barras e perdia os 51 cm do lado longo
+        arr.espacamento_eixos = max(arr.passos_contorno)
+    elif n == 2:
+        arr.espacamento_eixos = math.hypot(barras[1].x - barras[0].x,
+                                           barras[1].y - barras[0].y)
+    return arr
+
+
+def _abscissa_no_contorno(x: float, y: float, contorno) -> float:
+    """Posição, ao longo do perímetro, do ponto do contorno mais próximo de
+    ``(x, y)``, cm a partir do primeiro vértice."""
+    melhor, abscissa, acumulado = float("inf"), 0.0, 0.0
+    n = len(contorno)
+    for i in range(n):
+        x0, y0 = contorno[i]
+        x1, y1 = contorno[(i + 1) % n]
+        dx, dy = x1 - x0, y1 - y0
+        comp2 = dx * dx + dy * dy
+        t = 0.0 if comp2 <= 0 else max(0.0, min(1.0, ((x - x0) * dx
+                                                    + (y - y0) * dy) / comp2))
+        px, py = x0 + t * dx, y0 + t * dy
+        dist = math.hypot(x - px, y - py)
+        comp = math.sqrt(comp2)
+        if dist < melhor - 1e-9:
+            melhor, abscissa = dist, acumulado + t * comp
+        acumulado += comp
+    return abscissa
+
+
+def _vertices_convexos(barras) -> list[int]:
+    """Índices das barras que são vértices do contorno convexo (as de canto,
+    que o estribo abraça); colineares ficam de fora."""
+    pts = sorted(range(len(barras)), key=lambda i: (barras[i].x, barras[i].y))
+
+    def cruz(o, a, b):
+        return ((barras[a].x - barras[o].x) * (barras[b].y - barras[o].y)
+                - (barras[a].y - barras[o].y) * (barras[b].x - barras[o].x))
+
+    baixo, cima = [], []
+    for i in pts:
+        while len(baixo) >= 2 and cruz(baixo[-2], baixo[-1], i) <= 1e-9:
+            baixo.pop()
+        baixo.append(i)
+    for i in reversed(pts):
+        while len(cima) >= 2 and cruz(cima[-2], cima[-1], i) <= 1e-9:
+            cima.pop()
+        cima.append(i)
+    return sorted(set(baixo[:-1] + cima[:-1]))
+
 
 def recuo_da_barra(cobrimento: float, phi_estribo: float,
                    phi: float) -> float:
@@ -99,12 +257,18 @@ def recuo_da_barra(cobrimento: float, phi_estribo: float,
 # Montagem por tipo de seção
 # ---------------------------------------------------------------------------
 
+SECOES_VAZADAS = ("circular vazada", "retangular vazada")
+
+
 def montar(secao: SecaoPilar, cobrimento: float, phi_estribo: float,
-           phi: float, nx: int = 0, ny: int = 0, n: int = 0) -> Arranjo:
+           phi: float, nx: int = 0, ny: int = 0, n: int = 0,
+           n_internas: int = 0, phi_interna: float = 0.0) -> Arranjo:
     """Monta o arranjo de barras da seção.
 
     ``nx`` e ``ny`` valem na seção retangular -- barras por face horizontal e
-    por face vertical, cantos incluídos. Nas demais vale ``n``, o total.
+    por face vertical, cantos incluídos. Nas demais vale ``n``, o total da
+    camada externa. ``n_internas`` acrescenta, nas seções vazadas, uma
+    camada junto ao furo (bitola ``phi_interna``, 0 = a mesma).
     """
     recuo = recuo_da_barra(cobrimento, phi_estribo, phi)
     a = area_barra(phi)
@@ -116,7 +280,61 @@ def montar(secao: SecaoPilar, cobrimento: float, phi_estribo: float,
         arr = _montar_contorno(secao, recuo, phi, a, n)
     arr.cobrimento = cobrimento
     arr.phi_estribo = phi_estribo
+    if n_internas > 0 and secao.tipo in SECOES_VAZADAS and arr.cabe:
+        _camada_interna(arr, secao, cobrimento, phi_estribo,
+                        phi_interna or phi, int(n_internas), recuo)
     return arr
+
+
+def linha_do_furo(secao: SecaoPilar, recuo: float):
+    """Linha a ``recuo`` do furo, para dentro da parede: ``("circulo",
+    diâmetro)`` ou ``("poligono", vértices anti-horários)``, centrada no CG
+    (as duas seções vazadas são duplamente simétricas)."""
+    if secao.tipo == "circular vazada":
+        return "circulo", secao.Di + 2.0 * recuo
+    wx = secao.hx - 2.0 * secao.e1 + 2.0 * recuo
+    wy = secao.hy - 2.0 * secao.e2 + 2.0 * recuo
+    return "poligono", geo.retangulo(wx, wy, 0.0, 0.0)
+
+
+#: Mínimo de barras na camada interna: uma por canto do furo retangular, seis
+#: no furo circular (o mesmo do item 18.4.2.2 para o contorno circular).
+BARRAS_MINIMAS_INTERNAS = {"retangular vazada": 4, "circular vazada": 6}
+
+
+def _camada_interna(arr: Arranjo, secao: SecaoPilar, cobrimento: float,
+                    phi_estribo: float, phi_i: float, n_i: int,
+                    recuo_ext: float) -> None:
+    """Acrescenta a camada junto ao furo ao arranjo já montado."""
+    n_i = max(n_i, BARRAS_MINIMAS_INTERNAS[secao.tipo])
+    recuo_i = recuo_da_barra(cobrimento, phi_estribo, phi_i)
+    tipo, linha = linha_do_furo(secao, recuo_i)
+    if tipo == "circulo":
+        pontos = geo.distribuir_na_circunferencia(linha, n_i, math.pi / 2.0)
+        passo = linha * math.sin(math.pi / n_i)
+        passos = [passo] * n_i
+    else:
+        pontos = geo.distribuir_no_contorno(linha, n_i)
+        passos = [math.hypot(pontos[(k + 1) % n_i][0] - pontos[k][0],
+                             pontos[(k + 1) % n_i][1] - pontos[k][1])
+                  for k in range(n_i)]
+    # parede: as duas camadas e o espaço livre entre elas
+    parede = secao.menor_dimensao
+    livre_radial = parede - recuo_ext - recuo_i - (arr.phi + phi_i) / 20.0
+    if livre_radial <= 0.0:
+        arr.cabe = False
+        arr.avisos.append(av.erro(
+            f"A parede de {num(parede)} cm não comporta as duas camadas de "
+            f"armadura: com o recuo de {num(recuo_ext, 2)} cm de fora e "
+            f"{num(recuo_i, 2)} cm do furo, as barras se sobrepõem."))
+        return
+    a_i = area_barra(phi_i)
+    arr.barras += [Barra(x, y, a_i, phi_i) for x, y in pontos]
+    arr.n_internas = n_i
+    arr.phi_interna = phi_i
+    arr.espacamento_eixos = max(arr.espacamento_eixos, max(passos))
+    arr.espacamento_livre = min(arr.espacamento_livre,
+                                min(passos) - phi_i / 10.0, livre_radial)
 
 
 def _montar_retangular(secao: SecaoPilar, recuo: float, phi: float,
@@ -127,7 +345,7 @@ def _montar_retangular(secao: SecaoPilar, recuo: float, phi: float,
     if lx <= 0 or ly <= 0:
         return Arranjo(phi=phi, nx=nx, ny=ny, recuo=recuo, cabe=False,
                        avisos=[av.erro(
-                           f"O recuo de {recuo:.2f} cm consome a seção "
+                           f"O recuo de {num(recuo, 2)} cm consome a seção "
                            f"{secao.descricao()}: não sobra linha de armadura. "
                            f"Reduza o cobrimento, o estribo ou a bitola.")])
     pontos = geo.distribuir_no_perimetro(lx, ly, nx, ny)
@@ -147,8 +365,8 @@ def _montar_circular(secao: SecaoPilar, recuo: float, phi: float,
     d = secao.diametro - 2.0 * recuo
     if d <= 0:
         return Arranjo(phi=phi, recuo=recuo, cabe=False, avisos=[av.erro(
-            f"O recuo de {recuo:.2f} cm consome a seção circular de "
-            f"ø{secao.diametro:g} cm.")])
+            f"O recuo de {num(recuo, 2)} cm consome a seção circular de "
+            f"ø{num(secao.diametro)} cm.")])
     pontos = geo.distribuir_na_circunferencia(d, n, math.pi / 2.0)
     barras = [Barra(x, y, area, phi) for x, y in pontos]
     arr = Arranjo(barras=barras, phi=phi, recuo=recuo, d_linha_x=recuo,
@@ -168,7 +386,7 @@ def _montar_contorno(secao: SecaoPilar, recuo: float, phi: float,
     linha = geo.deslocar_para_dentro(contorno, recuo)
     if geo.area_poligono(linha) <= 0:
         return Arranjo(phi=phi, recuo=recuo, cabe=False, avisos=[av.erro(
-            f"O recuo de {recuo:.2f} cm consome a seção "
+            f"O recuo de {num(recuo, 2)} cm consome a seção "
             f"{secao.descricao()}.")])
     n = max(int(n), len(linha))
     pontos = geo.distribuir_no_contorno(linha, n)
@@ -176,8 +394,19 @@ def _montar_contorno(secao: SecaoPilar, recuo: float, phi: float,
     arr = Arranjo(barras=barras, phi=phi, recuo=recuo, d_linha_x=recuo,
                   d_linha_y=recuo)
 
-    # Quais barras caem em vértice: são as barras de canto do item 18.2.4.
-    vertices = {(round(x, 6), round(y, 6)) for x, y in linha}
+    # Quais barras caem em vértice **convexo**: são as barras de canto do
+    # item 18.2.4. A do vértice reentrante de uma L não conta -- ali o
+    # estribo externo não abraça a barra, que flamba para a abertura do
+    # "V"; é o mesmo critério do fecho convexo do modo lista de barras.
+    orient = 1.0 if geo.area_poligono(linha) > 0 else -1.0
+    m_l = len(linha)
+    vertices = set()
+    for i, (x, y) in enumerate(linha):
+        xa, ya = linha[i - 1]
+        xb, yb = linha[(i + 1) % m_l]
+        cruz = (x - xa) * (yb - y) - (y - ya) * (xb - x)
+        if cruz * orient > 1e-9:
+            vertices.add((round(x, 6), round(y, 6)))
     arr.indices_vertices = [i for i, (x, y) in enumerate(pontos)
                             if (round(x, 6), round(y, 6)) in vertices]
 
@@ -224,9 +453,10 @@ def espacamento_livre_minimo(phi: float, dmax_agregado: float) -> float:
 def espacamento_eixos_maximo(secao: SecaoPilar) -> float:
     """Espaçamento máximo entre eixos de barras, cm (item 18.4.2.2).
 
-    Duas vezes a menor dimensão do trecho, limitado a 40 cm.
+    Duas vezes a menor dimensão **do trecho**, limitado a 40 cm -- numa L,
+    T, U ou vazada, a espessura da parede, não a caixa envolvente.
     """
-    return min(2.0 * min(secao.hx, secao.hy), ESPACAMENTO_EIXOS_MAXIMO)
+    return min(2.0 * secao.menor_dimensao, ESPACAMENTO_EIXOS_MAXIMO)
 
 
 def verificar(arr: Arranjo, pilar: Pilar, nu: float,
@@ -238,61 +468,59 @@ def verificar(arr: Arranjo, pilar: Pilar, nu: float,
     rho = arr.As / Ac if Ac > 0 else 0.0
     rho_min = rho_minimo(nu, pilar.concreto, pilar.aco)
 
-    if arr.phi < 10.0 - 1e-9:
+    if arr.phi_min < 10.0 - 1e-9:
         saida.append(av.erro(
-            f"Bitola longitudinal ø{arr.phi:g} mm abaixo dos 10 mm que o item "
-            f"18.4.2.1 exige em pilar."))
+            f"Bitola longitudinal ø{num(arr.phi_min)} mm abaixo dos 10 mm que o "
+            f"item 18.4.2.1 exige em pilar."))
     phi_max = bitola_maxima(secao)
     if arr.phi > phi_max + 1e-9:
         saida.append(av.erro(
-            f"Bitola longitudinal ø{arr.phi:g} mm acima de 1/8 da menor "
-            f"dimensão transversal ({phi_max:.1f} mm), contra o item "
+            f"Bitola longitudinal ø{num(arr.phi)} mm acima de 1/8 da menor "
+            f"dimensão transversal ({num(phi_max, 1)} mm), contra o item "
             f"18.4.2.1."))
 
     if rho < rho_min - 1e-9:
         saida.append(av.erro(
-            f"Taxa de armadura rho = {rho * 100:.3f} % abaixo da mínima de "
-            f"{rho_min * 100:.3f} % do item 17.3.5.3.1 "
-            f"(0,15 nu fcd/fyd >= 0,4 %, com nu = {nu:.3f})."))
-    if rho > RHO_MAXIMO + 1e-9:
+            f"Taxa de armadura ρ = {num(rho * 100, 3)} % abaixo da mínima de "
+            f"{num(rho_min * 100, 3)} % do item 17.3.5.3.1 "
+            f"(0,15 ν fcd/fyd >= 0,4 %, com ν = {num(nu, 3)})."))
+    if rho > RHO_MAXIMO_CORRENTE + 1e-9:
         saida.append(av.erro(
-            f"Taxa de armadura rho = {rho * 100:.2f} % acima dos "
-            f"{RHO_MAXIMO * 100:g} % do item 17.3.5.3.2. O limite vale para a "
-            f"seção real e **inclui a sobreposição na região de emenda**, de "
-            f"modo que na prática o lance deve ficar bem abaixo dele."))
-    elif rho > RHO_MAXIMO / 2.0:
-        saida.append(av.construtivo(
-            f"Taxa de armadura rho = {rho * 100:.2f} %: na emenda por "
-            f"traspasse ela dobra para {rho * 200:.2f} %, e o item 17.3.5.3.2 "
-            f"conta a emenda dentro dos {RHO_MAXIMO * 100:g} %. Verifique o "
-            f"escalonamento das emendas ou aumente a seção."))
+            f"Taxa de armadura ρ = {num(rho * 100, 2)} % acima dos "
+            f"{num(RHO_MAXIMO_CORRENTE * 100)} % da seção corrente (item "
+            f"17.3.5.3.2). Aumente a seção ou a classe do concreto."))
+    if 2.0 * rho > RHO_MAXIMO_EMENDA + 1e-9:
+        saida.append(av.erro(
+            f"Na região de emenda por traspasse, com todas as barras emendadas "
+            f"no mesmo nível, a taxa dobra para {num(rho * 200, 2)} %, acima "
+            f"dos {num(RHO_MAXIMO_EMENDA * 100)} % do item 17.3.5.3.2."))
 
     if arr.As < As_necessaria - 1e-6:
         saida.append(av.erro(
-            f"Armadura efetiva de {arr.As:.2f} cm² abaixo da necessária, "
-            f"{As_necessaria:.2f} cm²."))
+            f"Armadura efetiva de {num(arr.As, 2)} cm² abaixo da necessária, "
+            f"{num(As_necessaria, 2)} cm²."))
 
     s_min = espacamento_livre_minimo(arr.phi, pilar.ambiente.dmax_agregado)
     if arr.espacamento_livre < s_min - 1e-6:
         saida.append(av.erro(
             f"Espaçamento livre entre barras de "
-            f"{arr.espacamento_livre:.1f} cm, abaixo do mínimo de "
-            f"{s_min:.1f} cm do item 18.4.2.2 (o maior entre 2 cm, a bitola "
-            f"ø{arr.phi:g} mm e 1,2 vez o agregado de "
-            f"{pilar.ambiente.dmax_agregado:g} cm)."))
+            f"{num(arr.espacamento_livre, 1)} cm, abaixo do mínimo de "
+            f"{num(s_min, 1)} cm do item 18.4.2.2 (o maior entre 2 cm, a bitola "
+            f"ø{num(arr.phi)} mm e 1,2 vez o agregado de "
+            f"{num(pilar.ambiente.dmax_agregado)} cm)."))
     s_max = espacamento_eixos_maximo(secao)
     if arr.espacamento_eixos > s_max + 1e-6:
         saida.append(av.erro(
             f"Espaçamento entre eixos de barras de "
-            f"{arr.espacamento_eixos:.1f} cm, acima do máximo de "
-            f"{s_max:.1f} cm do item 18.4.2.2 (duas vezes a menor dimensão, "
+            f"{num(arr.espacamento_eixos, 1)} cm, acima do máximo de "
+            f"{num(s_max, 1)} cm do item 18.4.2.2 (duas vezes a menor dimensão, "
             f"no máximo 40 cm). Acrescente barras nas faces."))
 
     c_min = pilar.ambiente.cobrimento_minimo(arr.phi, arr.phi_estribo)
     if arr.cobrimento < c_min - 1e-9:
         saida.append(av.erro(
-            f"Cobrimento de {arr.cobrimento:g} cm abaixo do mínimo de "
-            f"{c_min:.2f} cm exigido pelo item 7.4.7: governa "
+            f"Cobrimento de {num(arr.cobrimento)} cm abaixo do mínimo de "
+            f"{num(c_min, 2)} cm exigido pelo item 7.4.7: governa "
             f"{pilar.ambiente.governante(arr.phi, arr.phi_estribo)}."))
 
     if secao.tipo in ("circular", "circular vazada"):

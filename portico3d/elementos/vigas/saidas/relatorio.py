@@ -11,14 +11,19 @@ A conversão para PDF é feita pelo próprio Word, via COM, quando disponível.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
+from datetime import datetime
 
 from docx import Document
 from docx.enum.section import WD_ORIENT
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from .. import __norma__, __version__
 from . import auditoria
 from ..core import alinhamento as al
 from ..core.dimensionar import ResultadoViga
@@ -48,10 +53,22 @@ def _configurar(doc: Document) -> None:
     sec.orientation = WD_ORIENT.PORTRAIT
     sec.left_margin = sec.right_margin = Cm(2.0)
     sec.top_margin = sec.bottom_margin = Cm(2.0)
+    # a memória de várias vigas põe cada viga sob um título de nível 1, e os
+    # capítulos dela descem um degrau: o nível 4 só existe aí
+    h4 = doc.styles["Heading 4"]
+    h4.font.name = "Aptos"
+    h4.font.size = Pt(10.5)
+    h4.font.color.rgb = AZUL
 
 
 def _titulo(doc: Document, texto: str, nivel: int = 1) -> None:
-    doc.add_heading(texto, level=nivel)
+    """Título; ``doc._nivel_extra`` desce o nível quando há uma viga por cima."""
+    extra = getattr(doc, "_nivel_extra", 0)
+    if extra:
+        # sob uma viga a numeração é "2.1", "2.8.1": sem o ponto final que os
+        # capítulos de uma viga só levam ("8.", "8.1.")
+        texto = re.sub(r"^(\d+(?:\.\d+)+)\. ", r"\1 ", texto)
+    doc.add_heading(texto, level=nivel + extra)
 
 
 def _paragrafo(doc: Document, texto: str, italico: bool = False,
@@ -123,7 +140,6 @@ def _n(valor, casas: int = 2) -> str:
 # ---------------------------------------------------------------------------
 
 def _capa(doc: Document, res: ResultadoViga) -> None:
-    viga = res.viga
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = p.add_run("MEMÓRIA DE CÁLCULO\nDIMENSIONAMENTO DE VIGA DE CONCRETO "
@@ -137,6 +153,14 @@ def _capa(doc: Document, res: ResultadoViga) -> None:
     r.italic = True
     r.font.color.rgb = CINZA
     doc.add_paragraph()
+    _tabela(doc, ["Emissão", "Descrição"], _identificacao_da_emissao(doc),
+            [5.0, 11.0])
+    _ficha(doc, res)
+
+
+def _ficha(doc: Document, res: ResultadoViga) -> None:
+    """A tabela de identificação de uma viga (capa, ou abertura da viga)."""
+    viga = res.viga
     _tabela(doc, ["Item", "Descrição"], [
         ["Viga", viga.nome],
         ["Projeto", viga.projeto or "-"],
@@ -151,24 +175,136 @@ def _capa(doc: Document, res: ResultadoViga) -> None:
         ["Situação geral", "TODAS AS VERIFICAÇÕES ATENDIDAS" if res.ok
          else "HÁ VERIFICAÇÕES NÃO ATENDIDAS — VER O ROTEIRO DE "
               "VERIFICAÇÕES E AS OBSERVAÇÕES"],
-    ] + ([["Observações", viga.observacoes]] if viga.observacoes else []),
+    ] + ([["Observações", viga.observacoes]] if viga.observacoes else [])
+      + [["Dados de entrada (identificação)", viga.impressao_digital()]],
         [5.0, 11.0])
 
 
-def _metodologia(doc: Document, res: ResultadoViga, n: int) -> None:
+def _carimbo(emitido_em: datetime) -> str:
+    return emitido_em.strftime("%d/%m/%Y %H:%M")
+
+
+def _identificacao_da_emissao(doc: Document) -> list[list]:
+    """Linhas de identificação da emissão: quando, por qual programa, de quê."""
+    ident = getattr(doc, "_identificacao", None) or {}
+    emitido = ident.get("emitido_em")
+    return ([["Emitida em", _carimbo(emitido)]] if emitido else []) + [
+        ["Programa", f"Vigas {__version__} — {__norma__}"],
+        ["Arquivo de entrada", ident.get("arquivo") or
+         "projeto ainda não salvo em arquivo"]]
+
+
+def _rodape(doc: Document, emitido_em: datetime) -> None:
+    """Rodapé de todas as páginas: programa, norma, data e número da página."""
+    par = doc.sections[0].footer.paragraphs[0]
+    par.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = par.add_run(f"Vigas {__version__} — {__norma__} — emitida em "
+                    f"{_carimbo(emitido_em)} — página ")
+    r.font.size = Pt(8)
+    r.font.color.rgb = CINZA
+    campo = OxmlElement("w:fldSimple")
+    campo.set(qn("w:instr"), "PAGE")
+    r_campo = OxmlElement("w:r")
+    texto = OxmlElement("w:t")
+    texto.text = "1"
+    r_campo.append(texto)
+    campo.append(r_campo)
+    par._p.append(campo)
+
+
+def _bloco_de_conferencia(doc: Document) -> None:
+    """Última página: quem elaborou, quem conferiu e o responsável técnico.
+
+    O programa é ferramenta de cálculo, e a responsabilidade pelo projeto é de
+    quem assina. O bloco fica em branco para ser preenchido e assinado; o texto
+    acima dele diz o que a assinatura cobre.
+    """
+    doc.add_page_break()
+    _titulo(doc, "Conferência e responsabilidade técnica", 1)
+    _paragrafo(doc,
+               "Esta memória foi gerada por programa de cálculo a partir dos "
+               "dados de entrada identificados na capa. Os resultados devem "
+               "ser conferidos por engenheiro habilitado, responsável técnico "
+               "pelo projeto, que responde pela adoção dos dados, pelos "
+               "critérios de projeto e pelos itens que o roteiro de "
+               "verificações marca como “Não verificado”, os quais o programa "
+               "não cobre.")
+    doc.add_paragraph()
+    _tabela(doc, ["Papel", "Nome", "Data", "Assinatura"], [
+        ["Elaborado por", "", "", ""],
+        ["Conferido por", "", "", ""],
+        ["Responsável técnico", "", "", ""],
+    ], [4.0, 6.0, 2.6, 3.4])
+    _tabela(doc, ["Registro profissional", "Número"], [
+        ["CREA / CAU", ""],
+        ["ART / RRT", ""],
+    ], [6.0, 10.0])
+    _paragrafo(doc, "Itens conferidos fora do programa e observações da "
+                    "conferência:", cor=CINZA)
+    for _ in range(4):
+        doc.add_paragraph("_" * 86)
+
+
+#: critérios de cálculo que a metodologia cita com número, e que podem diferir
+#: de uma viga para outra: (rótulo da tabela, atributo de ``Config``)
+_CRITERIOS_CITADOS = (("γg", "gamma_g"), ("γq", "gamma_q"), ("ψ1", "psi1"),
+                      ("ψ2", "psi2"), ("Alternância", "alternancia"),
+                      ("Modelo de cisalhamento", "modelo_cisalhamento"))
+
+
+def _metodologia(doc: Document, resultados, n: int) -> None:
     """Como o cálculo foi feito, e o que ficou fora dele.
 
     Este capítulo existe para a memória se sustentar sozinha: quem a lê depois
     tem de saber com que modelo, com que combinações e com que simplificações
     os números foram obtidos -- e, sobretudo, o que **não** foi verificado.
+
+    ``resultados`` é a lista das vigas da memória. Num documento de várias
+    vigas a metodologia sai **uma vez só**: os critérios que as vigas
+    compartilham vão no texto; os que variam de uma para outra são remetidos a
+    uma tabela no fim do capítulo, e nunca se escolhe o de uma delas em
+    silêncio.
     """
-    viga, cfg = res.viga, res.viga.config
+    if isinstance(resultados, ResultadoViga):
+        resultados = [resultados]
+    varias = len(resultados) > 1
+    res = resultados[0]
+    viga = res.viga
+    tabela_ref = f"na tabela {n}.5"
+
+    def valor(atributo: str, formato=lambda v: v) -> str:
+        """O valor do critério, ou a remissão à tabela se as vigas divergem."""
+        valores = {getattr(r.viga.config, atributo) for r in resultados}
+        if len(valores) == 1:
+            return str(formato(next(iter(valores))))
+        return f"o de cada viga ({tabela_ref})"
+
+    alternancias = {r.viga.config.alternancia for r in resultados}
+    if alternancias == {True}:
+        texto_alternancia = (
+            ", varrida de forma exaustiva em todos os tramos de cada viga."
+            if varias else
+            f", varrida de forma exaustiva nos {len(viga.tramos)} tramos.")
+    elif alternancias == {False}:
+        texto_alternancia = (", que está desligada nos critérios — todos os "
+                             "tramos são carregados simultaneamente.")
+    else:
+        texto_alternancia = (", ligada ou desligada nos critérios de cada "
+                             f"viga ({tabela_ref}).")
+
     _titulo(doc, f"{n}. Metodologia", 1)
     _paragrafo(doc, "O dimensionamento segue a ABNT NBR 6118 — Projeto de "
                     "estruturas de concreto. Cada resultado deste documento "
-                    "cita o item da norma que o gerou, e o capítulo final "
-                    "traz o roteiro completo das verificações, com a situação "
-                    "de cada uma.")
+                    "cita o item da norma que o gerou, e "
+                    + ("o roteiro de verificações de cada viga traz as "
+                       "verificações completas, com a situação de cada uma."
+                       if varias else
+                       "o capítulo final traz o roteiro completo das "
+                       "verificações, com a situação de cada uma.")
+               + (f" Esta metodologia vale para as {len(resultados)} vigas "
+                  f"e não se repete: a partir do capítulo seguinte, os "
+                  f"resultados, os gráficos e o detalhamento vêm agrupados "
+                  f"viga a viga." if varias else ""))
 
     _titulo(doc, f"{n}.1 Modelo de análise", 2)
     _paragrafo(doc,
@@ -190,23 +326,24 @@ def _metodologia(doc: Document, res: ResultadoViga, n: int) -> None:
     _titulo(doc, f"{n}.2 Ações e combinações", 2)
     _paragrafo(doc,
                f"As ações permanentes recebem o mesmo coeficiente em toda a "
-               f"viga (γg = {_n(cfg.gamma_g, 1)}), como exige o item 11.7.1 — "
+               f"viga (γg = {valor('gamma_g', lambda v: _n(v, 1))}), como "
+               f"exige o item 11.7.1 — "
                f"ações de mesma origem não se fracionam. O que varia de tramo "
                f"para tramo é apenas a ação variável "
-               f"(γq = {_n(cfg.gamma_q, 1)}), pela alternância de "
-               f"carregamento do item 14.6.7"
-               + (f", varrida de forma exaustiva nos {len(viga.tramos)} "
-                  f"tramos." if cfg.alternancia else
-                  ", que está desligada nos critérios — todos os tramos são "
-                  "carregados simultaneamente."))
+               f"(γq = {valor('gamma_q', lambda v: _n(v, 1))}), pela "
+               f"alternância de carregamento do item 14.6.7"
+               + texto_alternancia)
     _paragrafo(doc,
                f"As envoltórias de esforços vêm de todas as combinações "
                f"últimas normais da Tabela 11.3. As verificações de serviço "
                f"usam a combinação quase permanente (ψ2 = "
-               f"{_n(cfg.psi2, 1)}) para a flecha e a frequente (ψ1 = "
-               f"{_n(cfg.psi1, 1)}) para a abertura de fissuras, conforme "
-               f"11.8.3. O anexo final lista todas as combinações "
-               f"consideradas.")
+               f"{valor('psi2', lambda v: _n(v, 1))}) para a flecha e a "
+               f"frequente (ψ1 = {valor('psi1', lambda v: _n(v, 1))}) para a "
+               f"abertura de fissuras, conforme "
+               f"11.8.3. "
+               + ("A lista de todas as combinações consideradas fecha o "
+                  "capítulo de cada viga." if varias else
+                  "O anexo final lista todas as combinações consideradas."))
 
     _titulo(doc, f"{n}.3 Sequência do dimensionamento", 2)
     _paragrafo(doc,
@@ -214,7 +351,7 @@ def _metodologia(doc: Document, res: ResultadoViga, n: int) -> None:
                "(17.2.2), com a altura útil iterada até fechar com o "
                "centróide das barras adotadas — trocar a bitola muda o "
                "centróide, que muda a armadura necessária. 2) Cortante pelo "
-               f"Modelo de Cálculo {cfg.modelo_cisalhamento} (17.4.2), com a "
+               f"Modelo de Cálculo {valor('modelo_cisalhamento')} (17.4.2), com a "
                "redução junto ao apoio do item 17.4.1.2.1. 3) Torção, quando "
                "há torçor, pela treliça espacial generalizada (17.5), somada "
                "à armadura de flexão e à transversal. 4) Serviço: flecha por "
@@ -252,9 +389,23 @@ def _metodologia(doc: Document, res: ResultadoViga, n: int) -> None:
         ["Aberturas e furos", "não modelados (13.2.5 e 21.3)"],
         ["Pilares", "não dimensionados; entram como largura de apoio"],
     ], [4.5, 11.5])
-    _paragrafo(doc, "O capítulo seguinte de roteiro marca cada um destes "
-                    "pontos como “Não verificado”, para que nenhuma omissão "
-                    "fique implícita.", cor=CINZA)
+    _paragrafo(doc, ("O roteiro de verificações de cada viga marca cada um "
+                     "destes pontos como “Não verificado”, para que nenhuma "
+                     "omissão fique implícita." if varias else
+                     "O capítulo seguinte de roteiro marca cada um destes "
+                     "pontos como “Não verificado”, para que nenhuma omissão "
+                     "fique implícita."), cor=CINZA)
+
+    if varias:
+        _titulo(doc, f"{n}.5 Critérios adotados em cada viga", 2)
+        _paragrafo(doc, "Os critérios de cálculo que o texto acima cita com "
+                        "número, viga a viga:", cor=CINZA)
+        _tabela(doc, ["Viga"] + [rotulo for rotulo, _ in _CRITERIOS_CITADOS],
+                [[r.viga.nome] + [
+                    _n(getattr(r.viga.config, a), 1)
+                    if isinstance(getattr(r.viga.config, a), float)
+                    else _n(getattr(r.viga.config, a))
+                    for _, a in _CRITERIOS_CITADOS] for r in resultados])
 
 
 def _dados(doc: Document, res: ResultadoViga, n: int) -> None:
@@ -270,12 +421,29 @@ def _dados(doc: Document, res: ResultadoViga, n: int) -> None:
                        f"{_n(viga.vao_efetivo(i))} m"])
     _tabela(doc, ["Tramo", "Vão de cálculo", "Seção", "Vão livre",
                   "Vão efetivo (14.6.2.4)"], linhas)
-    _paragrafo(doc, "O vão de cálculo adotado no modelo de rigidez é a "
-                    "distância entre eixos de apoio. O vão efetivo do item "
-                    "14.6.2.4 (lef = l0 + a1 + a2, com ai = min(t/2; 0,3h)) é "
-                    "listado apenas para conferência: como lef <= distância "
-                    "entre eixos, calcular entre eixos é a favor da "
-                    "segurança.", cor=CINZA)
+
+    # a largura colaborante é dado do projetista, mas o teto que sai dos
+    # vínculos é conta do programa, e só aparecia quando estourava: a memória
+    # não mostrava por que bf = 100 cm tinha sido aceita
+    mesas = [(i, t) for i, t in enumerate(viga.tramos)
+             if t.secao.tipo != "retangular" and t.secao.bf > t.secao.bw + 1e-9]
+    if mesas:
+        _paragrafo(doc, "Largura colaborante da mesa (14.6.2.2): bf = bw + b1 + "
+                        "b3, com b1 ≤ 0,1·a e b3 ≤ 0,1·a, sendo a a distância "
+                        "entre pontos de momento nulo, tomada pelos vínculos "
+                        "de cada tramo. Os limites b1 ≤ 0,5·b2 e b3 ≤ b4 "
+                        "dependem do espaçamento entre as vigas e da laje em "
+                        "balanço, que o programa não conhece, e ficam com o "
+                        "projetista.")
+        linhas = []
+        for i, t in mesas:
+            fator, caso, a_cm, teto = viga.teto_da_mesa(i)
+            linhas.append([f"Tramo {i + 1}", caso,
+                           f"{_n(fator, 2)}·l = {_n(a_cm, 0)} cm",
+                           f"{_n(teto, 0)} cm", f"{_n(t.secao.bf, 0)} cm",
+                           "OK" if t.secao.bf <= teto + 1e-6 else "NÃO OK"])
+        _tabela(doc, ["Tramo", "Vínculos", "a", "bw + 2·0,1·a",
+                      "bf adotada", "Situação"], linhas)
 
     linhas = [[f"Apoio {i + 1}", a.tipo, f"{_n(a.largura, 0)} cm",
                f"{_n(viga.x_apoios[i])} m"]
@@ -321,9 +489,16 @@ def _dados(doc: Document, res: ResultadoViga, n: int) -> None:
                        "permanente" if mo.acao == "g" else "variável",
                        f"{_n(mo.M)} kN·m", f"x = {_n(mo.x)} m"])
     for tq in viga.torcores:
+        # distribuído é kN·m/m num trecho; concentrado é kN·m num ponto. A
+        # tabela imprimia os dois como concentrados em x, e um torçor de
+        # 6 kN·m/m ao longo de 4,5 m lia-se como 6 kN·m na ponta da viga
+        distribuido = tq.x_fim is not None
         linhas.append([tq.descricao or "torçor",
                        "permanente" if tq.acao == "g" else "variável",
-                       f"{_n(tq.T)} kN·m", f"x = {_n(tq.x)} m"])
+                       f"{_n(tq.T)} kN·m/m" if distribuido
+                       else f"{_n(tq.T)} kN·m",
+                       f"{_n(tq.x)} a {_n(tq.x_fim)} m (distribuído)"
+                       if distribuido else f"x = {_n(tq.x)} m"])
     _tabela(doc, ["Carga", "Ação", "Valor", "Trecho"], linhas)
 
     _titulo(doc, f"{n}.4 Critérios adotados", 2)
@@ -339,28 +514,14 @@ def _dados(doc: Document, res: ResultadoViga, n: int) -> None:
          "17.4.2"],
         ["Inclinação dos estribos", f"{_n(cfg.alpha_estribo, 0)}°", "17.4.1.1"],
         ["Redistribuição δ", _n(cfg.redistribuicao, 2), "14.6.4.3"],
-        ["Momento reduzido à face do apoio", cfg.momento_face_apoio,
-         "14.6.2.1"],
+        ["Diagrama arredondado sobre o apoio (ΔM = R·t/8)",
+         cfg.arredondar_momento_apoio, "14.6.3"],
         ["Redução do cortante junto ao apoio", cfg.reducao_apoio,
          "17.4.1.2.1"],
         ["Peso próprio considerado", cfg.peso_proprio,
          f"γconc = {_n(viga.concreto.peso_especifico, 0)} kN/m³"],
     ], [6.5, 4.5, 5.0])
 
-
-    impostas = dict(cfg.bitolas_flexao or {})
-    if impostas:
-        _paragrafo(doc, "Bitolas impostas pelo projetista, em vez da escolha "
-                        "automática: "
-                        + "; ".join(f"{k} — Ø{float(v):g} mm"
-                                    for k, v in sorted(impostas.items()))
-                        + ".", cor=CINZA)
-    est = dict(cfg.bitolas_estribo or {})
-    if est:
-        _paragrafo(doc, "Bitolas de estribo impostas pelo projetista: "
-                        + "; ".join(f"tramo {int(k) + 1} — Ø{float(v):g} mm"
-                                    for k, v in sorted(est.items()))
-                        + ".", cor=CINZA)
 
 def _analise(doc: Document, res: ResultadoViga, n: int) -> None:
     _titulo(doc, f"{n}. Análise estrutural", 1)
@@ -401,26 +562,35 @@ def _flexao(doc: Document, res: ResultadoViga, n: int) -> None:
     for r in res.regioes:
         f = r.flexao
         if r.construtiva:
-            linha = [r.nome, "-", "-", "-", "-", "construtiva"]
+            linha = [r.nome, "-", "-", "-", "-", "-", "construtiva"]
             if com_torcao:
                 linha.append("-")
             linhas.append(linha + [r.arranjo.descricao,
                                    _n(r.arranjo.As_ef)])
             continue
-        linha = [r.nome, _n(r.M), _n(r.d, 1), _n(f.x_d, 3), f.dominio,
-                 _n(max(f.As, f.As_min))]
+        linha = [r.nome, _n(r.M), _n(r.d, 1), _n(f.x_d, 3),
+                 _n(r.x_d_adotada, 3), f.dominio, _n(max(f.As, f.As_min))]
         if com_torcao:
             linha.append(_n(r.As_torcao))
         linhas.append(linha + [r.arranjo.descricao, _n(r.arranjo.As_ef)])
-    cabecalho = ["Região", "Md (kN·m)", "d (cm)", "x/d", "Domínio",
-                 "As flexão (cm²)"]
-    larguras = [2.4, 2.0, 1.5, 1.4, 1.5, 1.9]
+    cabecalho = ["Região", "Md (kN·m)", "d (cm)", "x/d", "x/d adotada",
+                 "Domínio", "As flexão (cm²)"]
+    larguras = [2.4, 2.0, 1.5, 1.4, 1.5, 1.5, 1.9]
     if com_torcao:
         cabecalho.append("+ As torção (cm²)")
         larguras.append(1.9)
     cabecalho += ["Adotado", "As,ef (cm²)"]
     larguras += [2.4, 1.8]
     _tabela(doc, cabecalho, linhas, larguras)
+    # o limite do 14.6.4.3 vale para a seção que vai na peça: a coluna
+    # "x/d" é a do As necessário, a "x/d adotada" a das barras adotadas com a
+    # armadura comprimida que atravessa a seção ancorada dos dois lados
+    _paragrafo(doc, "x/d é a posição da linha neutra com a armadura "
+                    "necessária; x/d adotada, com a armadura adotada e as "
+                    "barras da face oposta que atravessam a seção ancoradas "
+                    "por lb (9.4.2.5) dos dois lados, trabalhando comprimidas. "
+                    "É esta que o limite de ductilidade do item 14.6.4.3 "
+                    "verifica.", italico=True)
     if com_torcao:
         _paragrafo(doc, "A coluna de torção é a parcela da armadura "
                         "longitudinal Asl que cabe àquela face na distribuição "
@@ -588,7 +758,7 @@ def _servico(doc: Document, res: ResultadoViga, n: int) -> None:
                    _n(r.fissuracao.wk, 3), _n(r.fissuracao.wk_limite, 2),
                    r.fissuracao.veredito] for r in fiss]
         _tabela(doc, ["Região", "M serv. (kN·m)", "xII (cm)", "σs (kN/cm²)",
-                      "ρri", "Acri (cm²)", "wk1 (mm)", "wk2 (mm)", "wk (mm)", "limite",
+                      "Acri (cm²)", "ρri", "wk1 (mm)", "wk2 (mm)", "wk (mm)", "limite",
                       "Situação"], linhas)
 
 
@@ -615,6 +785,9 @@ def _detalhamento(doc: Document, res: ResultadoViga, n: int,
     sub = 2
     if res.apoios_extremos:
         _apoios_extremos(doc, res, f"{n}.{sub}")
+        sub += 1
+    if res.ancoragens_negativas or res.ancoragens_torcao:
+        _ancoragens_nos_extremos(doc, res, f"{n}.{sub}")
         sub += 1
     if res.grampos:
         _grampos(doc, res, f"{n}.{sub}")
@@ -647,9 +820,7 @@ def _detalhamento(doc: Document, res: ResultadoViga, n: int,
                   "Forma (m²)"], linhas)
     _paragrafo(
         doc,
-        f"A medição é feita trecho a trecho, porque é o trecho que tem seção "
-        f"constante. Indicadores de consumo: taxa de aço de "
-        f"{_n(q['taxa_aco'], 1)} kg/m³ e "
+        f"Taxa de aço: {_n(q['taxa_aco'], 1)} kg/m³. "
         f"{_n(q['forma_m2'] / q['concreto_m3'], 1) if q['concreto_m3'] > 0 else '-'}"
         f" m² de forma por m³ de concreto.")
 
@@ -659,8 +830,8 @@ def _fadiga(doc: Document, res: ResultadoViga, n: int) -> None:
     _titulo(doc, f"{n}. Estado-limite último de fadiga", 1)
     _paragrafo(doc, "Item 23.5 da NBR 6118. A solicitação é a da combinação "
                     "frequente (23.5.2) e as tensões são calculadas no Estádio "
-                    "II com alpha_e = 10, gamma_f = 1,0, gamma_c = 1,4 e "
-                    "gamma_s = 1,0 (23.5.3). A variação de tensão é medida "
+                    "II com αe = 10, γf = 1,0, γc = 1,4 e "
+                    "γs = 1,0 (23.5.3). A variação de tensão é medida "
                     "entre a combinação frequente e a parcela permanente. No "
                     "cortante, a contribuição do concreto é reduzida à metade "
                     "no Modelo I; no Modelo II corrige-se a inclinação da "
@@ -807,6 +978,80 @@ def _juntas(doc: Document, res: ResultadoViga, sub: str) -> None:
                "quando aquela face é tracionada por cálculo.", cor=CINZA)
 
 
+def _ancoragens_nos_extremos(doc: Document, res: ResultadoViga,
+                             sub: str) -> None:
+    """Ancoragem da negativa e da longitudinal de torção nos extremos.
+
+    O 18.3.2.4-d manda ancorar a armadura negativa dos apoios extremos pelo
+    18.3.2.4.1, e a barra de torção tem de ancorar pelo 9.4.1. Nenhuma das
+    duas aparecia na memória: a tabela de apoios extremos é só a da positiva.
+    """
+    _titulo(doc, f"{sub} Ancoragem da armadura negativa e da longitudinal de "
+                 f"torção nos apoios de extremidade", 2)
+    if res.ancoragens_negativas:
+        _paragrafo(doc, "Armadura negativa (18.3.2.4-d e 18.3.2.4.1): "
+                        "ancoragem a partir da face do apoio, com o maior "
+                        "entre lb,nec (9.4.2.5, barra em má aderência), "
+                        "(r + 5,5 Ø) e 60 mm. Quando o trecho reto não basta "
+                        "num engaste, a barra desce no elemento de apoio: "
+                        "contam os trechos retos (o horizontal até a curva e "
+                        "a perna depois dela), sem o arco e sem o α = 0,7 do "
+                        "gancho, e a curva, num nó de pórtico, tem o diâmetro "
+                        "do 18.2.2 reduzido pela tensão no início dela.",
+                   cor=CINZA)
+        _tabela(doc, ["Apoio", "Barra", "As calc / ef (cm²)", "lb,nec (cm)",
+                      "exigido (cm)", "face à ponta (cm)", "Solução",
+                      "Situação"],
+                [[f"Apoio {a.apoio}", f"Ø{a.phi:g}",
+                  f"{_n(a.As_calc)} / {_n(a.As_ef)}", _n(a.lb_nec, 1),
+                  _n(a.exigido, 1), _n(a.l_reto, 1), a.solucao,
+                  "OK" if a.ok else "NÃO OK"]
+                 for a in res.ancoragens_negativas])
+        # a geometria da descida, para a solução poder ser conferida no nó: o
+        # comprimento "da face à ponta" inclui a curva, e lido como reto ele
+        # fazia parecer que a dobra não cabia no apoio
+        descem = [a for a in res.ancoragens_negativas if a.raio_eixo > 0]
+        if descem:
+            _paragrafo(doc, "Geometria da barra que desce no engaste: o "
+                            "comprimento da face à ponta inclui a curva; o "
+                            "trecho reto é o que sobra antes dela. A perna é "
+                            "a dimensão externa, medida do topo da barra, e "
+                            "o pilar tem de comportar o que ela entra abaixo "
+                            "da viga, mais o cobrimento na ponta. A "
+                            "interferência com a armadura do pilar não é "
+                            "verificada.", cor=CINZA)
+            _tabela(doc, ["Apoio", "Barra", "pino D (18.2.2)",
+                          "raio no eixo", "reto até a curva", "perna",
+                          "ancorado (retos)", "abaixo da viga",
+                          "pilar exigido", "pilar informado"],
+                    [[f"Apoio {a.apoio}", f"Ø{a.phi:g}",
+                      f"{_n(a.diametro_curva, 1)} cm",
+                      f"{_n(a.raio_eixo, 1)} cm",
+                      f"{_n(a.reto_ate_curva, 1)} cm",
+                      f"{_n(a.perna, 1)} cm", f"{_n(a.desenvolvido, 1)} cm",
+                      f"{_n(a.abaixo_da_viga, 1)} cm",
+                      f"{_n(a.pilar_exigido, 1)} cm",
+                      f"{_n(a.pilar_informado, 0)} cm"
+                      if a.pilar_informado > 0 else "não informado"]
+                     for a in descem])
+    if res.ancoragens_torcao:
+        _paragrafo(doc, "Armadura longitudinal de torção (17.5.1.6): a NBR "
+                        "não tem item próprio, e vale o 9.4.1 -- a força da "
+                        "barra tem de passar ao concreto. Mede-se como no "
+                        "18.3.2.4.1, a partir da face do apoio, com a barra em "
+                        "má aderência; o gancho admite α = 0,7 (9.4.2.5) "
+                        "quando o cobrimento normal ao seu plano dá 3 Ø.",
+                   cor=CINZA)
+        _tabela(doc, ["Apoio", "Posição", "As calc / ef (cm²)",
+                      "lb,nec reta (cm)", "exigido (cm)", "disponível (cm)",
+                      "Solução", "Situação"],
+                [[f"Apoio {a.apoio}", f"N{a.posicao.numero} Ø{a.phi:g}",
+                  f"{_n(a.As_calc)} / {_n(a.As_ef)}", _n(a.lb_nec, 1),
+                  _n(a.exigido, 1), _n(a.l_disponivel, 1), a.solucao,
+                  "OK" if a.ok else "NÃO OK"]
+                 for a in res.ancoragens_torcao])
+
+
 def _apoios_extremos(doc: Document, res: ResultadoViga, sub: str) -> None:
     """Ancoragem da armadura positiva nos apoios de extremidade (18.3.2.4.1).
 
@@ -859,8 +1104,6 @@ def _roteiro(doc: Document, res: ResultadoViga, n: int) -> None:
     verificacoes = auditoria.roteiro(res)
     contagem = auditoria.resumo(verificacoes)
     _paragrafo(doc,
-               "Cada linha é montada a partir do resultado deste cálculo, não "
-               "de texto fixo. As situações têm significado distinto: "
                "**Atendido** é verificação com aprovação; **Aplicado** é "
                "prescrição imposta por construção, que o cálculo não pode "
                "violar (uma armadura mínima, um espaçamento máximo); **Não "
@@ -926,8 +1169,9 @@ def _pendencias(doc: Document, res: ResultadoViga, n: int) -> None:
         r.font.color.rgb = CINZA
 
 
-def _combinacoes(doc: Document, res: ResultadoViga) -> None:
-    _titulo(doc, "Anexo A — Combinações consideradas", 1)
+def _combinacoes(doc: Document, res: ResultadoViga,
+                 titulo: str = "Anexo A — Combinações consideradas") -> None:
+    _titulo(doc, titulo, 1)
     elu = [c.nome for c in res.combinacoes if c.tipo == "ELU"]
     _paragrafo(doc, f"Foram varridas {len(res.combinacoes)} combinações, "
                     f"sendo {len(elu)} últimas. As demais são de serviço "
@@ -943,28 +1187,142 @@ def _combinacoes(doc: Document, res: ResultadoViga) -> None:
 # Interface pública
 # ---------------------------------------------------------------------------
 
-def gerar(res: ResultadoViga, caminho: str, secoes_m=None) -> str:
+def _capitulos_da_viga(doc: Document, res: ResultadoViga, secoes_m,
+                      primeiro: int = 1, prefixo: str = "") -> None:
+    """Os capítulos de resultado de uma viga, do dado de entrada ao roteiro.
+
+    Numa memória de uma viga só os capítulos são ``2``, ``3``... (o 1 é a
+    metodologia) e ``prefixo`` fica vazio; numa de várias, ``prefixo="3."`` os
+    faz ``3.1``, ``3.2``... sob o título da viga. Os capítulos usam o número só
+    dentro de texto, então o inteiro e o texto servem.
+    """
+    k = primeiro
+
+    def numero():
+        return f"{prefixo}{k}" if prefixo else k
+
+    _dados(doc, res, numero()); k += 1
+    _analise(doc, res, numero()); k += 1
+    _flexao(doc, res, numero()); k += 1
+    _cisalhamento(doc, res, numero()); k += 1
+    if res.torcoes:
+        _torcao(doc, res, numero()); k += 1
+    _servico(doc, res, numero()); k += 1
+    _detalhamento(doc, res, numero(), secoes_m); k += 1
+    if res.fadigas or res.fadigas_estribo:
+        _fadiga(doc, res, numero())
+        k += 1
+    _roteiro(doc, res, numero()); k += 1
+    _pendencias(doc, res, numero()); k += 1
+    _combinacoes(doc, res, f"{prefixo}{k} Combinações consideradas"
+                 if prefixo else "Anexo A — Combinações consideradas")
+
+
+def gerar(res: ResultadoViga, caminho: str, secoes_m=None, arquivo: str = "",
+          emitido_em: datetime | None = None) -> str:
     """Gera a memória de cálculo em .docx e devolve o caminho do arquivo."""
+    return gerar_varias([(res, secoes_m)], caminho, arquivo=arquivo,
+                        emitido_em=emitido_em)
+
+
+def _capa_projeto(doc: Document, resultados, nome: str) -> None:
+    """Capa da memória de várias vigas: o conjunto, e uma linha por viga."""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run("MEMÓRIA DE CÁLCULO\nDIMENSIONAMENTO DE VIGAS DE CONCRETO "
+                  "ARMADO")
+    r.bold = True
+    r.font.size = Pt(16)
+    r.font.color.rgb = AZUL
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run("ABNT NBR 6118 — Projeto de estruturas de concreto")
+    r.italic = True
+    r.font.color.rgb = CINZA
+    doc.add_paragraph()
+    obras = sorted({r.viga.projeto for r in resultados if r.viga.projeto})
+    aco = sum(r.quantitativo["massa_total"] for r in resultados)
+    aco_perdas = sum(r.quantitativo["massa_com_perdas"] for r in resultados)
+    concreto = sum(r.quantitativo["concreto_m3"] for r in resultados)
+    _tabela(doc, ["Item", "Descrição"], [
+        ["Projeto", nome or " / ".join(obras) or "-"],
+    ] + _identificacao_da_emissao(doc) + [
+        ["Nº de vigas", len(resultados)],
+        ["Aço total", f"{_n(aco, 1)} kg ({_n(aco_perdas, 1)} kg com 10 % "
+                      f"de perdas)"],
+        ["Concreto total", f"{_n(concreto, 3)} m³"],
+        ["Situação geral", "TODAS AS VERIFICAÇÕES ATENDIDAS EM TODAS AS VIGAS"
+         if all(r.ok for r in resultados)
+         else "HÁ VERIFICAÇÕES NÃO ATENDIDAS — VER O ROTEIRO DE CADA VIGA"],
+    ], [5.0, 11.0])
+    _titulo(doc, "Vigas desta memória", 2)
+    _tabela(doc, ["Capítulo", "Viga", "Tramos", "Comprimento (m)",
+                  "Concreto", "Aço (kg)", "Situação", "Dados (identif.)"],
+            [[f"{k + 2}", r.viga.nome, len(r.viga.tramos),
+              _n(r.viga.comprimento), r.viga.concreto.classe,
+              _n(r.quantitativo["massa_total"], 1),
+              "Atende" if r.ok else "Não atende", r.viga.impressao_digital()]
+             for k, r in enumerate(resultados)],
+            [1.6, 2.6, 1.4, 2.2, 1.6, 1.8, 2.0, 3.0])
+    _paragrafo(doc, "O capítulo 1 traz a metodologia, que vale para todas as "
+                    "vigas. Cada viga tem em seguida o seu capítulo, com dados "
+                    "de entrada, esforços, dimensionamento, verificações, "
+                    "detalhamento e roteiro.", cor=CINZA)
+
+
+def gerar_varias(itens, caminho: str, nome_projeto: str = "",
+                 arquivo: str = "", emitido_em: datetime | None = None) -> str:
+    """Gera uma memória de cálculo de uma ou várias vigas em .docx.
+
+    ``itens`` é uma lista de ``(res, secoes_m)``. Com uma viga o documento é o
+    de sempre. Com várias, a **metodologia aparece uma vez** (capítulo 1) e os
+    resultados vêm **agrupados por viga**: o capítulo 2 é todo da primeira
+    viga -- dados, esforços, flexão, cisalhamento, serviço, detalhamento,
+    roteiro, combinações --, o 3 é todo da segunda, e assim por diante. Nada
+    de uma viga se mistura com o da seguinte.
+
+    ``arquivo`` é o nome do arquivo de projeto de onde vêm os dados, e
+    ``emitido_em`` a data da emissão (agora, se omitida). Os dois, mais a versão
+    do programa e a impressão digital dos dados de cada viga, identificam o
+    documento na capa; o rodapé repete o programa e a data, e a última página
+    traz o bloco de conferência e responsabilidade técnica.
+    """
+    itens = list(itens)
+    if not itens:
+        raise ValueError("Nenhuma viga para a memória de cálculo.")
+    resultados = [res for res, _ in itens]
+    emitido_em = emitido_em or datetime.now()
     doc = Document()
     _configurar(doc)
-    _capa(doc, res)
+    doc._identificacao = {"emitido_em": emitido_em, "arquivo": arquivo}
+    _rodape(doc, emitido_em)
+    doc.core_properties.author = f"Vigas {__version__}"
+    doc.core_properties.created = emitido_em
+    doc.core_properties.title = "Memória de cálculo de vigas de concreto armado"
+    if len(itens) == 1:
+        res, secoes_m = itens[0]
+        _capa(doc, res)
+        doc.add_page_break()
+        _metodologia(doc, res, 1)
+        _capitulos_da_viga(doc, res, secoes_m, primeiro=2)
+        _bloco_de_conferencia(doc)
+        doc.save(caminho)
+        return caminho
+
+    _capa_projeto(doc, resultados, nome_projeto)
     doc.add_page_break()
-    n = 1
-    _metodologia(doc, res, n); n += 1
-    _dados(doc, res, n); n += 1
-    _analise(doc, res, n); n += 1
-    _flexao(doc, res, n); n += 1
-    _cisalhamento(doc, res, n); n += 1
-    if res.torcoes:
-        _torcao(doc, res, n); n += 1
-    _servico(doc, res, n); n += 1
-    _detalhamento(doc, res, n, secoes_m); n += 1
-    if res.fadigas or res.fadigas_estribo:
-        _fadiga(doc, res, n)
-        n += 1
-    _roteiro(doc, res, n); n += 1
-    _pendencias(doc, res, n)
-    _combinacoes(doc, res)
+    _metodologia(doc, resultados, 1)
+    for k, (res, secoes_m) in enumerate(itens):
+        doc.add_page_break()
+        numero = k + 2
+        _titulo(doc, f"{numero}. Viga {res.viga.nome}", 1)
+        _ficha(doc, res)
+        doc._nivel_extra = 1               # os capítulos descem sob a viga
+        try:
+            _capitulos_da_viga(doc, res, secoes_m, prefixo=f"{numero}.")
+        finally:
+            doc._nivel_extra = 0
+    _bloco_de_conferencia(doc)
     doc.save(caminho)
     return caminho
 

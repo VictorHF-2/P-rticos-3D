@@ -267,6 +267,9 @@ class ZonaEstribo:
     #: dela sai da seção: uma faixa que atravessasse uma mudança de seção
     #: especificaria um estribo de 206 cm numa seção de 60 cm de altura
     trecho: int = 0
+    #: faixa adensada para costurar uma emenda (9.5.2.4.1), embutida na
+    #: distribuição. O espaçamento dela vem da emenda, e não do cortante
+    costura: bool = False
 
     @property
     def comprimento(self) -> float:
@@ -589,6 +592,15 @@ class Posicao:
     #: o U abre para a face do apoio: no apoio da direita ele é o espelho do
     #: da esquerda, e desenhar os dois iguais punha a dobra do lado errado
     espelhado: bool = False
+    #: armadura longitudinal de torção que esta barra leva, cm² (17.5.1.6):
+    #: a barra lateral de torção e o porta-estribo de uma face sem momento que
+    #: recebeu a parcela da face. É por ela que a ancoragem da barra nos apoios
+    #: de extremidade é verificada
+    As_torcao: float = 0.0
+    #: raio de dobramento no eixo da barra, cm, quando não é o da Tabela 9.1:
+    #: a negativa que desce no engaste dobra num nó de pórtico, e o 18.2.2
+    #: pede ali um pino maior que o do gancho. Zero = o da Tabela 9.1
+    raio_dobra: float = 0.0
     #: ramos do estribo, para o agrupamento não juntar um estribo de 2 ramos
     #: com um de 4 que calhe de ter o mesmo comprimento desenvolvido
     n_ramos_efetivo: int = 0
@@ -655,6 +667,10 @@ class Posicao:
     def massa(self) -> float:
         """Massa da posição, kg."""
         return self.comprimento_total * massa_linear(self.phi)
+
+    def raio_da_dobra(self, aco) -> float:
+        """Raio de dobramento no eixo, cm: o próprio ou o da Tabela 9.1."""
+        return self.raio_dobra or aco.raio_dobramento_eixo(self.phi)
 
     @property
     def texto_quantidade(self) -> str:

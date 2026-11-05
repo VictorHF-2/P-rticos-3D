@@ -22,7 +22,7 @@ ou, direto no Python:
 ```
 py main.py                             abre a janela
 py main.py modelo.json --janela        abre a janela já com um modelo
-py main.py --autoteste                 roda as 421 conferências de referência
+py main.py --autoteste                 roda as 740 conferências de referência
 py main.py modelo.json [caso]          resolve um caso e imprime o resumo
 py main.py modelo.json --envoltoria    gera as combinações da NBR 6118,
                                        resolve todas e imprime a envoltória
@@ -30,18 +30,20 @@ py main.py modelo.json --estabilidade  γz por combinação, classificação de
                                        nós fixos ou móveis, e flambagem
 ```
 
-Dependências: `py -m pip install -r requirements.txt` — numpy, scipy, PySide6 e
-matplotlib para calcular e desenhar, mais **python-docx, openpyxl e ezdxf**
-para emitir. Estas três não são opcionais: são elas que gravam a memória de
-cálculo, o quadro de quantidades e o CAD. Faltavam no arquivo, e numa
-instalação limpa o programa subia e quebrava na primeira exportação.
+Dependências: `py -m pip install -r requirements.txt` — numpy, scipy e PySide6
+para calcular e montar a janela, **pyvista** e **pyvistaqt** para o motor de
+desenho 3D (ver "O motor de desenho virou PyVista/VTK", mais abaixo), mais
+**python-docx, openpyxl e ezdxf** para emitir. Estas três últimas não são
+opcionais: são elas que gravam a memória de cálculo, o quadro de
+quantidades e o CAD. Faltavam no arquivo, e numa instalação limpa o programa
+subia e quebrava na primeira exportação.
 
 ## A janela
 
 Tabelas à esquerda, desenho à direita, relatório embaixo. O caminho é montar,
 analisar e ler o resultado, e a interface existe só para encurtá-lo: não há
 uma linha de mecânica nela, e é de propósito — tudo continua no `core`, que é
-o que as 421 conferências cobrem.
+o que as 740 conferências cobrem.
 
 **A janela cabe em qualquer tela.** O tamanho de abertura sai da área útil
 da tela desta máquina — já sem a barra de tarefas —, a janela é centrada nela,
@@ -64,13 +66,111 @@ Hoje o conteúdo cabe em **334×275 px**, e o piso declarado é 800×520 — o m
 do programa de Pilares. Há conferência medindo isso: se algum widget novo
 voltar a empurrar o mínimo acima do piso, o autoteste reprova.
 
+**As doze tabelas do painel de entrada vêm em três abas, não uma fileira.**
+`Inicial` (Materiais, Seções, Casos de carga, Carga nas lajes), `Geometria`
+(Nós, Barras, Apoios, Molas, Lajes) e `Cargas` (Cargas nodais, Cargas
+distribuídas, Recalques) — a ordem é a de preencher um modelo do zero: o que
+não depende de geometria primeiro, a geometria depois, e por último as cargas
+que a usam. Doze abas soltas lado a lado já truncava o rótulo por volta da
+sétima; agrupadas por assunto, cada aba principal cabe com folga, e
+`self.dados.tabelas` continua um dicionário achatado por chave — o
+agrupamento é só de apresentação, ninguém que já lia ou escrevia ali precisou
+mudar.
+
+**"Carga nas lajes" nomeia um uso e aplica em lote.** Em vez de digitar
+revestimento e acidental painel a painel, o projetista cria um tipo — "corredor",
+"biblioteca", "lavanderia" — com os dois valores, na sub-aba `Carga nas lajes`
+de `Inicial`; na aba `Lajes`, cada painel escolhe o tipo numa lista suspensa,
+e Revestimento/Acidental saem calculados e travados dali, exatamente como a
+seção sai calculada dos lados. O tipo fica gravado na laje mesmo depois de
+resolvido (`Laje.tipo_carga`), então mudar um valor no tipo e mandar
+"Aplicar tabelas" de novo atualiza **todos** os painéis daquele uso de uma
+vez — é o que faz a setorização baixar de custo. Deixar o campo em branco
+continua aceitando o revestimento e o acidental digitados à mão, como sempre.
+
 **A barra principal agrupa por assunto.** Dezesseis ações lado a lado pediam
 3 322 px e transbordavam **até num monitor de 1920**, deixando metade do
-programa a dois cliques em qualquer tela. Agrupadas em `Análise ▾`,
-`Dimensionar ▾`, `Emitir ▾` e `Relatório ▾`, cabem inteiras. Os atalhos não
-mudaram — e como menu que não está aberto só responde ao atalho se a ação
-estiver na cadeia da janela, cada ação com atalho é registrada nela; há
-conferência exigindo que os oito, de F2 a F9, continuem alcançáveis.
+programa a dois cliques em qualquer tela. Agrupadas em `Dimensionar ▾`,
+`Emitir ▾` e `Relatório ▾`, cabem inteiras. Os atalhos não mudaram — e como
+menu que não está aberto só responde ao atalho se a ação estiver na cadeia da
+janela, cada ação com atalho é registrada nela; há conferência exigindo que os
+oito, de F2 a F9, continuem alcançáveis.
+
+**Um botão só roda as análises, e uma lista escolhe qual olhar.** O botão
+`Análise` (F9) substituiu o "Analisar caso" e o menu `Análise ▾`: um clique
+resolve **tudo** — 1ª e 2ª ordem de cada caso de carga, as combinações da NBR
+com a envoltória, a estabilidade global, a flambagem de cada caso e o modal.
+Uma análise que não se aplica ao modelo (a flambagem de um caso sem carga
+vertical, uma 2ª ordem que não converge) é anotada no relatório e não derruba
+as outras. Na barra de desenho, a lista **Análise** — ao lado de Vista e Caso —
+escolhe qual está na tela: `Modelo`, `1ª ordem`, `2ª ordem`, `Combinações`,
+`Estabilidade`, `Flambagem` ou `Modal`.
+
+**Cada análise oferece só as vistas que fazem sentido para ela.** O modal não
+tem armadura, e a flambagem não tem diagrama de momento: o modal mostra o modo
+de vibração, a flambagem o modo de flambagem, a 1ª e a 2ª ordem a deformada e
+os diagramas de esforço, e a armadura fica no desenho do modelo e na
+envoltória das combinações, onde há dimensionamento por trás. A caixa Caso
+lista só os casos que **aquela** análise resolveu, e fica apagada onde não há
+caso (o modal é vibração livre). Os controles que não valem para a vista na
+tela (escala, nível, rótulos, forma do diagrama) ficam apagados. Escolher uma
+análise escreve no relatório o resumo dela — o detalhe que o botão não despeja
+de uma vez. A 2ª ordem e a 1ª ordem do mesmo caso ficam guardadas **à parte**:
+antes, rodar uma apagava a outra.
+
+Rodar `Dimensionar` não apaga a análise que está na tela quando as tabelas não
+mudaram — só uma edição nelas descarta os resultados.
+
+**Ler o esforço com o clique.** Nos diagramas de esforço, clicar numa barra ou na
+área do diagrama mostra o valor naquele ponto — com a posição, os valores nos
+dois nós e o máximo e o mínimo da barra —, **sem mover a câmera** (o padrão do
+PyVista é recentrar a vista a cada malha acrescentada, e era isso que a
+devolvia ao início a cada clique), e o valor também aparece **ao lado do
+ponto**, no próprio 3D, numa etiqueta que se lê de relance. O texto de detalhe
+fica abaixo da legenda da vista, e não por cima dela. Girar o desenho não lê
+nada: só vale o clique, apertar e soltar quase no mesmo lugar.
+
+**Vista de cargas.** A lista Análise ganhou `Cargas`, com a vista `Cargas`: as
+cargas de um caso — ou de uma **combinação**, já ponderada pelos fatores dela,
+que é o que de fato é aplicado — desenhadas como setas: força nodal em
+vermelho, momento em roxo, carga distribuída em azul (fileira de setas com a
+linha que une as caudas, que é o diagrama da carga) e recalque como um cubo
+laranja no nó. O comprimento da seta é proporcional à intensidade, e a escala
+fica na legenda. É uma vista **à parte da dos esforços**, e funciona antes de
+qualquer análise: mostra o que as tabelas aplicam.
+
+Ela foi pensada para ser **auditada**. O título traz a **resultante** do caso —
+a soma das forças no sistema global —, que é a primeira linha a conferir: num
+caso de peso próprio tem de bater com o peso da estrutura, e num de vento com a
+força horizontal total. Clicar numa seta mostra a carga inteira (intensidade nas
+duas pontas, sistema de eixos, trecho do vão e total global), clicar numa barra
+lista as cargas que caem nela, e clicar num nó traz as nodais e os recalques
+dele; o relatório recebe o mesmo texto ao escolher a análise. Tudo sai de
+`core/auditoria_cargas.py`, de modo que o desenho e o texto são a mesma conta —
+e há conferência para ela (uniforme é q·L, trapézio é a média das pontas, carga
+em eixo local é girada para o global pela matriz da montagem, e a combinação
+soma os casos vezes os fatores).
+
+**Várias cargas na mesma barra ficam em camadas.** Peso próprio, o quinhão de
+cada laje e a parede atuam na mesma viga, e desenhadas todas a partir do eixo
+se sobrepunham. Agora as que atuam do mesmo lado se **empilham para fora** a
+partir da barra — a primeira encostada nela, a seguinte depois do fim das
+setas da anterior —, e a escala das setas sai da pilha mais alta, para as
+camadas não passarem do pavimento de cima. A carga que atua para o outro lado
+não disputa lugar, e a que atua **ao longo** da barra (o peso próprio de um
+pilar) sai ao lado dela, e não sobre ela. A entrada `todos os casos` da lista
+Caso junta o permanente, o variável e o vento de uma vez, cada um com a sua
+cor e o nome do caso na etiqueta — é onde se vê tudo o que o modelo aplica, e
+onde o vento (cargas nodais horizontais, setas vermelhas) aparece junto da
+gravidade. As setas de força nodal também ficaram maiores.
+
+**A laje do modelo 3D fica com o topo no topo das vigas.** O plano dos nós passa
+pelo eixo das vigas e a laje era desenhada centrada nele, atravessada pelas
+vigas ao meio; agora o plano médio dela sobe `h_viga/2 − e/2`
+(`core.lajes.deslocamento_do_centro`). É geometria de desenho e de posição da
+armadura — a armadura de laje e a fôrma do DXF acompanham —, nenhum cálculo
+depende disso. As lajes também ficaram opacas, com uma caixa "lajes" para
+escondê-las sem redesenhar.
 
 **O assistente é o que resolve o caso comum.** Um edifício de quatro
 pavimentos com seis prumadas tem umas cem barras; digitá-las uma a uma seria
@@ -226,25 +326,112 @@ se vê por que ele não coube, e apagá-lo esconderia o problema. O que não dá
 para desenhar é o lance para o qual nenhum arranjo foi achado, e esse vira
 aviso em vez de sumir calado.
 
-O visualizador é matplotlib, e não uma biblioteca 3D dedicada, para não
-acrescentar dependência ao que os outros programas da pasta já usam. O preço é
-a rotação ficar lenta em modelo muito grande; é a peça mais isolada do
-programa, e trocá-la um dia não mexe em mais nada.
+### O motor de desenho virou PyVista/VTK (2026-09-30)
+
+Era matplotlib; agora as sete vistas — Modelo, Sólido, Laje, Armadura,
+Deformada, os seis diagramas de esforço e Modo de flambagem — usam
+PyVista/VTK, o mesmo caminho que Consolos R03 e Lajes R06 já tinham
+percorrido. Nada mudou no `core`: a geometria pura (`perfil_da_secao`,
+`faces_da_barra`, `faces_da_laje`, `_forma_deformada`, `pontos_do_diagrama`)
+é a mesma de sempre, só a representação final trocou de
+`Poly3DCollection`/`Line3DCollection` para `PolyData`.
+
+**"Modelo" e "Sólido" ganharam picking** — passe o mouse ou clique num nó ou
+numa barra, e ela acende em âmbar enquanto o resto apaga a opacidade; um texto
+no canto mostra material, seção e comprimento (ou, para um nó, as coordenadas
+e o apoio/mola, se houver). É picking só nessas duas, por enquanto: são as
+vistas de conferência de entrada de dados, onde faz sentido perguntar "que
+barra é essa"; Deformada e Modo de flambagem continuam esqueleto de linhas,
+sem picking, no mesmo estilo visual de antes.
+
+**A seleção sincroniza com a tabela que estiver em foco.** Clicar uma barra
+com a sub-aba "Seções" aberta destaca ali a seção daquela barra; com "Barras"
+aberta, destaca a própria barra; com "Materiais", o material dela; um nó
+sincroniza com "Nós", "Apoios" ou "Molas", o que estiver visível. Sem
+correlação (ou nenhuma tabela em foco), só o 3D destaca e mostra o texto — o
+que sempre acontece, tabela ou não. Tudo passa por um único método central em
+`janela.py` (`_ao_selecionar_elemento`), que decide olhando
+`PainelDeDados.subabas`; a lógica de picking em si mora só em `vista3d.py`,
+uma vez.
+
+**"Diagrama de esforços" ganhou um botão de representação**: "barras" é o
+esqueleto de sempre (linha/tubo escalado pelo valor); "3D" desenha o sólido
+extrudado da seção real, com o diagrama traçado ao redor dele — fica óbvio
+quando um elemento muito solicitado tem seção pequena. Sem picking em nenhuma
+das duas: aqui o assunto é o valor do esforço, não a entrada de dados.
+
+**"Armadura" é a única vista que abre como janela nativa separada do VTK**
+(`abrir_vista_interativa_armadura`, botão "Abrir vista 3D da armadura" — só
+habilitado com um nível escolhido), não o widget embutido nas outras seis. É
+onde o número de segmentos cresce de verdade — um pavimento inteiro de aço —,
+e a janela nativa mede ~2 ms por evento de mouse contra ~16 ms do widget Qt
+embutido; a mesma medição já feita em Consolos R03 e Lajes R06. O destaque ali
+é por **família** de armadura (pilar longitudinal, viga estribo, laje
+positiva…), não por barra individual — um pavimento tem milhares de barras, e
+detalhar cada uma criaria atores demais para o VTK segurar.
+
+**O `--autoteste` não confere mais um PNG do matplotlib.** Sob
+`QT_QPA_PLATFORM=offscreen`, o widget embutido monta a cena inteira sem
+problema (`add_mesh`, `reset_camera`, `add_text`, os observadores de picking),
+mas `render()`/`screenshot()` não têm janela real para desenhar
+(`RenderWindowUnavailable`). A conferência passou a olhar o **conteúdo** da
+cena — quantos atores foram desenhados, quantas famílias de armadura foram
+identificadas — em vez do pixel renderizado; a janela nativa da armadura é
+conferida chamando `construir_cena_armadura` direto, com um `pv.Plotter`
+fora de tela, sem nunca chamar `.show()` (que bloquearia o autoteste
+esperando um clique que nunca vem).
 
 ## O que já faz, e o que ainda não faz
 
-Hoje o programa vai da geometria à envoltória: monta e resolve o pórtico
-espacial para cada caso de carga, gera as combinações últimas e de serviço da
-NBR 6118, superpõe os resultados e devolve, por barra, os extremos de esforço
-com os valores concomitantes e a combinação que os governou.
+O programa vai da geometria ao detalhamento:
 
-| Fora do escopo desta revisão | Fase prevista |
+* monta e resolve o pórtico espacial (1ª e 2ª ordem, estabilidade, flambagem
+  e modal), com a laje como carga, como diafragma ou como grelha;
+* gera as combinações da NBR 6118 e a envoltória com os esforços
+  concomitantes;
+* dimensiona pilares, vigas e lajes pelos motores copiados;
+* emite pranchas DXF, memória em Word e quantitativos em Excel.
+
+Os efeitos locais de 2ª ordem dos pilares são do motor de Pilares (curvatura
+aproximada, 15.8.3.3.2).
+
+| Pendência ou expansão futura | Situação |
 |---|---|
-| Ponte com Vigas e com Fundações | 4 |
-| Efeitos locais de 2ª ordem nos elementos | 4 |
+| Lançamento: mover elemento com o mouse, copiar/espelhar, desfazer, cotas no desenho | pendente; hoje se edita a coordenada no painel de propriedades |
+| Lançamento: excentricidade viga–pilar, rebaixo, viga invertida, laje não retangular, abertura, parede sobre laje | pendente; hoje são recusados com o motivo |
+| Ponte com Fundações (sapatas, blocos, estacas) | pendente; as reações já saem por apoio |
+| **Laje em casca** (elemento finito de placa/membrana no lugar da grelha) | expansão futura — ver abaixo |
+| Pilar-parede e núcleo rígido em casca | expansão futura; hoje barra equivalente |
+| Espectro de resposta e massa sísmica (NBR 15421) | expansão futura; a modal já existe |
 | Edição por clique no desenho 3D | — |
-| Saídas em DXF, Word e Excel | 4 |
-| Análise inelástica e dinâmica | 6 |
+| Análise inelástica e dinâmica no tempo | 6 |
+
+**Laje em casca — expansão futura (registrada em 2026-10-16).** Hoje a laje
+entra como carga, diafragma ou grelha de barras. A casca é para os casos em
+que a barra não descreve bem a peça:
+
+* laje lisa ou cogumelo, com Mx, My e Mxy diretos e base para a punção;
+* rigidez de membrana real, sem o artefato do diafragma rígido, que impede o
+  banzo de treliça no plano da laje de alongar (ver a passarela do DNIT);
+* ligações largas e curtas, que a ligação pontual barra–grelha subestima (ver
+  o TCC do prédio com NDV).
+
+O caminho previsto não substitui o motor de barras, que está validado e é o
+que as pontes de dimensionamento entendem. A casca acrescenta um elemento
+novo, só na laje, pelo mesmo mecanismo da grelha: um modelo de cálculo
+derivado, com o resultado remontado no modelo do usuário. As etapas:
+
+1. Elemento quadrilátero plano de placa e membrana (MITC4 ou DKMQ, com
+   rotação no plano), sem travamento em placa fina.
+2. Malha regular por painel retangular — os painéis já são retângulos, o que
+   dispensa malhador.
+3. Ligação com viga e pilar, incluindo a excentricidade laje–viga.
+4. Saída para o programa de Lajes (momentos por faixa) e para a punção.
+5. Bateria de validação: patch tests, placa de Navier, placa engastada,
+   Scordelis-Lo e o confronto com a grelha.
+
+O custo maior está nas etapas 3 e 4, não no elemento. Uma biblioteca pronta
+(o `ShellMITC4` do OpenSeesPy, ou scikit-fem) encurta só a etapa 1.
 
 ## Segunda ordem e estabilidade global
 
@@ -254,6 +441,27 @@ rigidez elástica, o que dá o efeito de segunda ordem **dentro** da barra e nã
 apenas o P-Δ dos nós — mas exige malha para convergir: uma barra por pilar
 erra a carga crítica de Euler em cerca de 0,8 %, e duas reduzem isso a menos
 de 0,1 %.
+
+**Confrontado com o PyNiteFEA**, biblioteca de elementos finitos
+independente, no caso clássico da viga-coluna em balanço (carga axial a 50 %
+da crítica) — e foi esse confronto que achou um defeito de verdade, não só
+uma diferença de malha. O deslocamento do topo já batia a treze algarismos
+com uma barra só (a montagem de `Ke + Kg` e a iteração de Newton estavam
+corretas), mas o **momento recuperado na extremidade** errava a solução
+fechada em **+6,6 %**, contra 0,15 % do PyNiteFEA na mesma malha grosseira.
+
+A causa não era falta de malha: `_esforcos_das_barras` recuperava o esforço
+só com a rigidez **elástica** (`Ke·D`), sem somar a **geométrica** que tinha
+corrigido o deslocamento — o `Kg` entrava na montagem e sumia na volta.
+Somando-o (`(Ke + Kg)·D`), o erro já cai para 0,13 % **sem tocar em malha
+nenhuma**. O resíduo que sobra, esse sim de malha, tem correção própria:
+`elemento.rigidez_geometrica_refinada` subdivide a barra só por dentro do
+cálculo — condensação estática (Guyan) de sub-elementos, sem nó nenhum que o
+usuário veja —, e entra tanto na montagem quanto na recuperação. As duas
+correções juntas deixam o caso de referência a **-0,0007 %** do fechado, com
+uma barra só — a malha que o assistente usa, um lance por pavimento. A
+conferência trava os números de agora, não mais os de antes de corrigir
+(`validacao.p_delta_confrontado_com_pynite`).
 
 **A superposição deixa de valer.** Na análise linear dá no mesmo somar as
 cargas antes ou as respostas depois; com P-Δ não dá, porque o efeito de uma
@@ -273,6 +481,576 @@ numeração desta edição, e há conferência exigindo que classifiquem igual u
 mesma estrutura. O γ_z é ainda cruzado contra o P-Δ: numa estrutura com
 γ_z = 1,307 a amplificação do deslocamento de topo pelo P-Δ dá 1,338, 2,4 % de
 diferença entre duas formulações que não compartilham nada.
+
+## Bateria cruzada contra o PyNiteFEA, e análise modal (2026-10-01)
+
+**Dez cenários, cada um cruzando o que existir de solução fechada, motor
+próprio e PyNiteFEA** (`validacao.py`, seção "Bateria cruzada contra o
+PyNiteFEA"): viga biapoiada com carga uniforme e com carga concentrada,
+balanço vertical, pórtico plano com travessa flexível, grelha ortogonal com
+acoplamento flexão-torção, barra com seção girada, flambagem de Euler
+(engastado-livre e biapoiado), apoio elástico, trecho rígido numa ponta, e o
+pórtico espacial completo (quatro pilares, quatro vigas e duas barras
+inclinadas). O tradutor comum `_pynite_do_modelo` monta o `FEModel3D` a
+partir do mesmo `Modelo` desta casa, uma vez só para os dez cenários.
+
+**OpenSeesPy não entrou nesta primeira rodada.** Não por falta de tentativa:
+o pacote está instalado (`pip show openseespy` mostra 3.8.0.0), mas o
+`opensees.pyd` do `openseespywin` (a dependência Windows) foi compilado
+contra `python312.dll` — confirmado abrindo o binário com `pefile` e lendo a
+tabela de importação — e esta máquina só tinha Python 3.14. O import falha
+com "DLL load failed" antes de montar modelo nenhum; é incompatibilidade de
+ABI entre interpretadores, não erro de uso. **Fechado no mesmo dia, numa
+segunda passada** (ver a entrada "O terceiro motor — OpenSeesPy, entre
+processos" logo abaixo): o usuário instalou um Python 3.12 ao lado, e a
+suíte passou a chamá-lo por `subprocess`.
+
+**A armadilha confirmada, e documentada para não se repetir**: o PyNiteFEA
+usa, para barra **vertical**, uma convenção de eixos locais y/z trocada em
+relação à desta casa. Alimentando a seção do PyNiteFEA com o mesmo par
+`Iy`/`Iz` deste programa, a flecha de um balanço vertical sob carga lateral
+saía errada por um fator `Iy/Iz` certinho — achado comparando contra a
+solução fechada `PL³/3EI`, não só contra o PyNiteFEA. Invertendo os dois na
+seção do PyNiteFEA, bateu a treze algarismos. A troca não para na rigidez:
+o momento que esta casa chama `Mz` (plano x–y, inércia `Iz`) sai do
+PyNiteFEA rotulado `"My"` para barra vertical, e vice-versa — os dois
+planos trocam de rótulo inteiro. `_pynite_do_modelo`/`_momento_pynite` já
+escondem essa troca do chamador.
+
+O décimo cenário do roteiro original pedia um apoio inclinado (eixo de
+restrição rotacionado); nem esta casa nem o PyNiteFEA têm essa primitiva —
+implementá-la seria uma funcionalidade nova no solver (a partição de graus
+de liberdade teria que ganhar um eixo de restrição não ortogonal ao
+global), fora do escopo desta bateria. Foi substituído pelo pórtico espacial
+completo, que é mais exigente do que parece: mistura barra vertical,
+horizontal e oblíqua, carga nodal, distribuída local e global, e momento
+concentrado, tudo no mesmo modelo.
+
+**Análise modal — frequências e modos de vibração livre**
+(`core/dinamica.py`), a mesma mecânica de autovalor que
+`segunda_ordem.flambagem` já usa, com a matriz de massa consistente no lugar
+da geométrica: `Ke·φ = ω²·M·φ`, resolvido direto por
+`scipy.linalg.eigh(Ke, M)` — sem a troca de sinal que a flambagem precisa,
+porque aqui `M` já nasce positiva definida (massa não é negativa nunca).
+
+A matriz de massa local 12×12 segue a mesma decomposição por família de
+graus de liberdade que `elemento.rigidez_local` já usa — axial, torção,
+flexão x–y (`Iz`), flexão x–z (`Iy`) —, massa consistente de
+Euler-Bernoulli (McGuire/Logan, *A First Course in the Finite Element
+Method*, cap. 16.6), com a mesma troca de sinal entre os dois planos de
+flexão que a rigidez elástica e a geométrica já fazem.
+
+Três simplificações assumidas nesta rodada, documentadas no próprio módulo
+e não escondidas:
+
+* **massa sem Timoshenko** — a matriz consistente é só a de Euler-Bernoulli,
+  mesmo quando a seção declara área de cisalhamento e a rigidez elástica já
+  tem a correção;
+* **só massa própria** — nenhuma carga permanente ou acidental vira massa
+  sísmica nesta rodada; a NBR 15421 teria regra própria para isso, que fica
+  para quando houver espectro de resposta;
+* **sem trecho rígido pesado** — a massa é calculada sobre o vão flexível,
+  do mesmo jeito que a rigidez; a massa que fisicamente estaria no trecho
+  rígido não entra à parte.
+
+**Confrontada contra a fórmula fechada de viga em balanço**
+(`ωn = (βnL)²·√(EI/(ρAL⁴))`, três primeiras raízes de
+`cos(βL)·cosh(βL) = -1`): os três primeiros modos de flexão no plano
+conferido batem dentro de 5·10⁻⁴ com 16 barras de malha — o terceiro modo
+de flexão exige essa malha mais fina para convergir, o mesmo efeito que já
+aparece na flambagem, só que aqui sem uma versão "refinada" por dentro do
+cálculo. O confronto contra `ops.eigen()` do OpenSeesPy, pedido no roteiro
+original, fechou na segunda passada do mesmo dia — ver abaixo.
+
+A interface ganhou "Análise ▾ → Modal", ao lado de "Flambagem", desenhando o
+modo de vibração escolhido em "Modo de vibração" (lista `VISTAS`) com o
+mesmo esqueleto de linhas de "Modo de flambagem" — o título mostra
+frequência e período em vez de fator crítico.
+
+### O terceiro motor — OpenSeesPy, entre processos (2026-10-01, segunda passada)
+
+O Python 3.12 que faltava acima entrou na mesma máquina, ao lado do 3.14
+principal, e o `openseespy` (3.8.0.0) importa nele sem problema
+(`py -3.12 -c "import openseespy.opensees as ops; ops.wipe()"` funciona).
+Como o `openseespy` continua incompatível com o Python 3.14 deste programa,
+a integração é **entre processos**, não um import direto: um script
+autocontido, `portico3d/core/opensees_ponte.py`, roda sob `py -3.12`,
+recebe a descrição de um modelo por JSON na entrada padrão e devolve
+deslocamentos, reações, esforços de barra e (no modo modal) frequências e
+modos por JSON na saída padrão. Do lado 3.14, `validacao.py` (seção 44, logo
+depois da bateria de dez cenários) chama esse script com
+`subprocess.run(["py", "-3.12", caminho, ...], input=json, ...)` — nenhum
+código em Python 3.14 importa `openseespy` direto. `_opensees_disponivel()`
+testa a disponibilidade antes de cada confronto; se `py -3.12` ou o pacote
+não existirem noutra máquina, a conferência é pulada com um aviso claro, em
+vez de derrubar a suíte.
+
+**Seis dos dez cenários ganharam o terceiro motor** — os que fazem sentido
+para ele: 4 (pórtico plano), 5 (grelha), 6 (seção rotacionada), 8 (apoio
+elástico), 9 (trecho rígido, traduzido para `geomTransf(..., '-jntOffset',
+...)` — o OpenSeesPy tem essa primitiva, ao contrário do PyNiteFEA) e 10
+(pórtico espacial completo). Todos batem contra o motor próprio a 1e-6 ou
+melhor (a maioria a 1e-13/1e-15). Os cenários 1–3 continuam só com o
+PyNiteFEA — são vigas isoladas, sem nada que o OpenSeesPy testasse de
+diferente dos outros sete.
+
+**Convenção de eixo local — medida, não suposta.** Ao contrário do
+PyNiteFEA (que troca `Iy`/`Iz` e os rótulos `My`/`Mz` em barra vertical), o
+OpenSeesPy **não precisa de troca nenhuma**, desde que o `vecxz` que ele
+pede seja o eixo local z **desta casa** (linha `ez` de `matriz_rotacao`, em
+coordenadas globais) — confirmado com um balanço vertical e um balanço
+horizontal sob carga lateral, comparando a flecha do OpenSeesPy com
+`PL³/3EI` nas duas ordens possíveis de `Iy`/`Iz`; só a ordem sem troca bateu
+a 1e-12, nos dois casos. `_opensees_payload_do_modelo`/`_momento_opensees`
+não fazem troca de rótulo nenhuma — ao contrário dos nomes gêmeos do lado
+PyNiteFEA, que fazem.
+
+**Pegadinha de API achada na marra**: `ops.eleForce(tag)` devolve a força do
+elemento em coordenadas **globais**, não locais — ficou claro comparando o
+balanço vertical contra a reação de apoio (os dois vetores saíam idênticos,
+o que só acontece sem rotação nenhuma de eixo). Quem dá as coordenadas
+locais de verdade é `ops.eleResponse(tag, "localForce")`; é o que o
+script-ponte usa.
+
+**Análise modal confrontada contra `ops.eigen()`**: fechou. Outra pegadinha
+de API, também achada na marra e confirmada com um teste isolado antes de
+entrar na suíte: `elasticBeamColumn` não gera massa nenhuma sozinho — sem
+`'-mass', massa_por_comprimento, '-cMass'` na chamada de `element(...)`, o
+`ops.eigen()` falha com `ArpackSolver::Error ... Starting vector is zero`
+(matriz de massa nula), em vez de dar um resultado errado silenciosamente.
+Com a massa declarada (`ρA` por comprimento, `-cMass` para a matriz
+consistente — a mesma formulação de `massa_local` desta casa), os três
+primeiros modos do plano x–y do balanço em 16 barras batem com o OpenSeesPy
+a 2·10⁻⁷, 5·10⁻⁶ e 4·10⁻⁵ de erro relativo (o terceiro modo é o que mais
+precisa de malha fina para convergir, o mesmo efeito já visto contra a
+fórmula fechada).
+
+**A flambagem (cenário 7) não ganhou o terceiro motor, e não é pendência —
+é limite medido do OpenSeesPy.** Checado contra a documentação oficial antes
+de tentar qualquer sintaxe: a página de integradores estáticos do OpenSees
+(`opensees.github.io/OpenSeesDocumentation`) lista só quatro —
+`LoadControl`, `DisplacementControl`,
+`MinimumUnbalancedDisplacementNorm` e `Arc-Length` — sem nenhum
+`LinearBucklingIntegrator`, que não existe na distribuição oficial. O
+próprio time do OpenSees confirma por quê (blog de um dos mantenedores,
+"Ordinary Eigenvalues", `openseesdigital.com`, e o fórum oficial): não há
+`getGeometricTangentStiff()` implementado para elemento de pórtico — só
+elementos de fluido PFEM o implementam —, então não existe matriz
+geométrica de barra para montar o autovalor de estabilidade. O único
+"jeito" documentado de arrancar flambagem do `eigen()` é um truque de massa
+fictícia válido só para uma coluna isolada, não uma funcionalidade de
+flambagem de verdade — não serve para generalizar nem foi usado aqui. O
+confronto do cenário 7 continua motor próprio × Euler fechada, como antes.
+
+**requirements.txt** ganhou a receita de instalação do Python 3.12 separado
+e o caminho do script-ponte, para quem for reproduzir noutra máquina.
+
+### Análise modal em edifícios inteiros, com pareamento de modo por MAC (2026-10-01, terceira passada)
+
+A análise modal acima (seção "Análise modal — frequências e modos de
+vibração livre") só tinha sido confrontada num cantilever isolado de 16
+barras, um plano de flexão por vez. O que faltava — e o que de fato testa a
+formulação num caso realista — é um **edifício inteiro**: vários modos de
+frequência próxima, e, em planta assimétrica, modos **acoplados**
+(translação e torção na mesma forma). É aí que comparar só "modo 3 com modo
+3" pode mascarar um erro de verdade, ou, ao contrário, acusar divergência
+onde os dois motores só acharam os mesmos modos em ordem diferente.
+
+`validacao.py`, seção 45 ("Análise modal em edifícios inteiros — pareamento
+de modo por MAC"), monta quatro edifícios pela API crua do `Modelo` (grelha
+retangular de pilares e vigas de concreto C30, com peso específico de
+verdade) e confronta cada um contra `ops.eigen()`:
+
+1. **Pequeno, 2×2 vãos de 5 m, 2 pavimentos** — calibração. Duplamente
+   simétrico em planta, serve para conferir que o caso trivial bate quase
+   exato antes dos difíceis. Frequência fundamental 4,9608 Hz (motor
+   próprio) × 4,9609 Hz (OpenSeesPy), 0,003 % de diferença.
+2. **Alto, mesma planta, 10 pavimentos** — o desafio é numérico: mais graus
+   de liberdade, frequências mais próximas nos modos de ordem alta. De fato
+   o par fundamental sai em ordem trocada entre os dois motores (modo 1-2 no
+   motor próprio, 2-1 no OpenSeesPy) — o MAC resolve isso antes de comparar
+   frequência. Fundamental 1,0151 Hz nos dois motores.
+3. **Com balanço, 3×2 vãos, 6 pavimentos**, com 2 m de viga em balanço além
+   da última linha de pilares em X, sem apoio na ponta, em toda a altura —
+   testa se a massa do trecho em balanço (inércia sem apoio próximo) entra
+   certa nos dois motores. Fundamental 1,6154 Hz nos dois. A quebra de
+   simetria em Y que o balanço introduz já acopla translação Y com torção em
+   quase todos os modos.
+4. **Assimétrico, 3×3 vãos, 8 pavimentos**, planta em L (falta o pilar do
+   canto) e um pilar 60×60 no canto oposto (os demais são 30×30) —
+   desloca o centro de rigidez para longe do centro de massa de propósito.
+   Fundamental 1,2795 Hz nos dois motores.
+
+**Pareamento de modo pelo MAC** (Modal Assurance Criterion,
+`MAC(i,j) = (φᵢᵀφⱼ)²/((φᵢᵀφᵢ)(φⱼᵀφⱼ))`, só nos graus de liberdade de
+translação — evita ter que escalar rotação contra translação para comparar):
+em todos os quatro edifícios, todo par de modo pareado bateu com
+**MAC ≥ 0,99** (a maioria exatamente 1,0000) e erro de frequência **≤
+0,011 %** — muito abaixo da tolerância de 0,2 % usada nas conferências
+permanentes.
+
+**Classificação do modo** (translação X, Y, torção, ou combinação): em vez
+de olhar o maior componente num nó qualquer (frágil contra a malha),
+`_classificar_modo` ajusta por mínimos quadrados um campo de corpo rígido no
+plano do pavimento mais alto (`ux = u0x − θ(y−y0)`, `uy = u0y + θ(x−x0)`) e
+compara a translação pura do centro com o giro equivalente na borda
+(`|θ|·R`) — a mesma unidade, o que `θ` sozinho não tem contra `u0x`/`u0y`.
+
+**O edifício 4 confirma o que a torção pede de verdade**: dois modos saem
+claramente torsionais (giro equivalente dominante, translação do centro
+quase nula) — modo 3 (1,4327 Hz) e modo 9 (4,3668 Hz) — e os **dois
+motores concordam que são torção**, não translação disfarçada, com MAC ≈
+1,0000 e erro de frequência ≤ 0,002 % nos dois pares.
+
+**Achado que não é erro, e vale registrar para não se confundir depois**:
+o edifício 1, duplamente simétrico, tem pares de modo **degenerados** (mesma
+frequência — translação X e translação Y, por exemplo, viram uma base
+arbitrária dentro do mesmo subespaço bidimensional). O MAC *individual* de
+um modo assim pode cair bem abaixo de 1,0 (medido: 0,7934 no par mais alto,
+14,16 Hz) sem que isso seja divergência nenhuma — conferido à parte
+reconstruindo um modo do motor próprio como combinação linear do par
+degenerado do OpenSeesPy: o resíduo relativo fica em 5·10⁻⁵, ou seja, o
+**subespaço** bate quase exato, só a base escolhida por cada `eigh`/
+`eigen()` dentro dele é diferente. Por isso a conferência permanente do
+edifício 1 pede só os 6 primeiros modos — já cobrem translação X, Y e
+torção, e o par degenerado mais alto (que exigiria comparar subespaço, não
+vetor a vetor) fica de fora por não ser necessário ao que a bateria promete.
+
+Os quatro edifícios rodam em menos de meio segundo cada (malha pequena mas
+genuína — grelha completa, sem redução de porte); viraram quatro novas
+funções em `validacao.py` (`edificio_modal_pequeno_opensees`,
+`edificio_modal_alto_opensees`, `edificio_modal_balanco_opensees`,
+`edificio_modal_assimetrico_opensees`), seguindo o mesmo padrão de pulo
+gracioso (`_opensees_ou_pulado`) das demais conferências contra o
+OpenSeesPy.
+
+### Massa adicional por caso de carga, e o confronto com a passarela do DNIT (2026-10-01, quarta passada)
+
+Até aqui a análise modal só sabia somar a massa das próprias barras
+(`matriz_massa_global`). Isso basta para edifício, onde a laje já entra pela
+espessura do pilar/viga ou nem entra. Não basta para uma passarela metálica:
+o tabuleiro (steeldeck + capa de concreto) pesa em cima da treliça sem ser
+barra nenhuma.
+
+**A capacidade nova**, em `core/dinamica.py`:
+
+* `massa_adicional_global(modelo, preparadas, casos)` reaproveita
+  `montagem.vetor_cargas` para montar o vetor de cargas equivalente de cada
+  caso pedido, toma a componente Fz (a direção da gravidade) de cada nó e
+  divide por `GRAVIDADE` — é peso de um caso de carga já existente, virando
+  massa por `F/g`, sem entidade de dados nova nenhuma. A massa entra igual
+  nos três graus de translação (não tem direção), e não entra nos de
+  rotação.
+* `analisar_modal` ganhou o parâmetro `casos_de_massa: tuple[str, ...] = ()`;
+  vazio (o padrão), o caminho é bit a bit igual ao de antes — é essa a prova
+  de que a capacidade é aditiva, não um desvio por baixo do que já existia.
+  As **553 conferências do autoteste continuaram passando sem mudar um
+  número**, rodadas de novo depois da mudança.
+
+**O benchmark**: a passarela metálica PL-35 do DNIT (treliça espacial
+Warren, vão de 35 m, dois eixos de treliça plana afastados 2,5 m, altura
+2,5 m, 14 painéis de 2,5 m, sem montante nos painéis internos), remontada do
+zero pela API crua do `core` em `exemplos/passarela_dnit.py`, com os perfis W
+da memória de cálculo do projeto (W360x72 no banzo superior, W360x44,6 no
+inferior, W200x35,9 nas diagonais, aço A572 Grau 50) e confrontada contra as
+duas frequências que o projeto publica (Tabela 3.1 do Volume 2, SAP2000):
+3,21 Hz de flexão vertical e 5,58 Hz de flexão transversal.
+
+A malha bateu com a contagem esperada antes de rodar modal nenhum: **60 nós,
+174 barras** (2 eixos × 30 nós cada; por eixo, 14 barras de banzo inferior +
+14 de superior + 14 diagonais do zigue-zague + 2 montantes de apoio, mais
+15×2 transversais entre eixos e 14×2×2 diagonais de contraventamento em X).
+
+O peso do tabuleiro não está fechado em número no documento — só o SAP2000
+original sabia, pela casca que alguém modelou lá. Aqui ele é o parâmetro de
+calibração: um caso de carga `"TABULEIRO"`, nodal nos nós de banzo inferior
+pela área de influência (tributário 2,5 m nos nós internos, 1,25 m nas
+pontas), virando massa pela capacidade nova.
+
+**Resultado — bateu bem numa frequência, não bateu na outra, e por um motivo
+identificável, não por acaso**:
+
+* **Flexão vertical**: com a hipótese inicial de 8 cm de capa de concreto, o
+  modelo deu 3,74 Hz contra 3,21 Hz do documento — 16,7 % acima. Calibrando
+  só a espessura da capa (varredura de 6 a 16 cm, ajuste de f² linear em
+  espessura), **13,7 cm reproduz 3,21 Hz com -0,46 % de erro** — espessura
+  de capa perfeitamente plausível para um tabuleiro de steeldeck MF-75 numa
+  passarela.
+* **Flexão transversal**: em toda a varredura de espessura, o modelo ficou
+  entre 51 % e 63 % ABAIXO dos 5,58 Hz publicados, e calibrar a espessura
+  pela vertical (13,7 cm) não aproxima a transversal — afasta mais um pouco
+  (-60,5 % de erro). Isso não é problema de massa: é falta de **rigidez**
+  transversal. Testado à parte (não persistido): multiplicar por 5 a área
+  do contraventamento em X quase não mexeu na frequência transversal — a
+  rigidez que falta não está nos perfis de aço aproximados por catálogo
+  (M01, TS01, TI01, CS01/CI01). O suspeito mais plausível é o que este
+  motor **nunca modela**: a capa de concreto como diafragma rígido no
+  próprio plano — a mesma ressalva que `Laje` já registra em `modelo.py`
+  ("a laje não trabalha como diafragma"). A flexão vertical depende
+  sobretudo da rigidez axial das cordas (bem capturada aqui, daí o bom
+  ajuste); a flexão transversal, nesta geometria, depende da treliça
+  resistir como viga deitada com as duas cordas longitudinais fazendo de
+  mesa a 2,5 m uma da outra — e é exatamente aí que a rigidez de diafragma
+  do tabuleiro, modelada só como massa por desenho desta capacidade,
+  contaria muito e está ausente.
+
+Perfis aproximados por falta de dado no documento (não extraídos do Volume
+1/2, montados por catálogo compatível com a massa linear informada): M01
+(montante de apoio), TS01 e TI01 (transversais), e a cantoneira dupla
+CS01/CI01 do contraventamento (aproximada como seção maciça equivalente de
+mesma área). Nenhum deles, isoladamente, explica o gap da transversal (ver o
+teste de sensibilidade acima) — o que pesa é a ausência estrutural do
+diafragma, não a aproximação de um perfil específico.
+
+A varredura completa, os dois achados e a comparação lado a lado ficam em
+`exemplos/passarela_dnit.py` — rodar com `py exemplos/passarela_dnit.py`.
+
+### Dois TCCs contra a análise modal — vigas do Lima e o edifício do Nascimento (2026-10-02)
+
+Mais dois confrontos contra literatura acadêmica, no mesmo espírito do PyNite,
+do OpenSeesPy e da passarela do DNIT: resolver os mesmos modelos que um
+trabalho publicado resolveu e comparar número a número — sem arredondar o
+que não bateu.
+
+**Lima (TCC UnB, 2019) — viga biapoiada e viga engastada-livre**, aço
+(E = 2×10⁸ kN/m², ν = 0,3, peso específico 76,982 kN/m³ — o valor exato do
+documento, não o padrão de 78,5 kN/m³ da casa), seção 0,1×0,3 m, vão de 4,0 m
+(não escrito no texto, mas retrocalculado da própria frequência publicada
+contra a fórmula fechada do autor — bate em 4,0 m exato nos dois casos),
+remontados em `exemplos/lima_vigas.py`, 16 elementos por vão:
+
+* **1º modo: bateu bem nos dois casos** — biapoiada 42,9153 Hz contra
+  42,512 Hz publicados (+0,95 %); engastada-livre 15,2884 Hz contra
+  15,221 Hz (+0,44 %).
+* **2º e 3º modos, tomados pelo valor publicado: "não batem"** — biapoiada
+  171,66 Hz contra 123,08 Hz publicados (+39,5 %) e 386,27 Hz contra
+  192,16 Hz (+101 %); engastada-livre 95,81 Hz contra 77,754 Hz (+23,2 %) e
+  268,28 Hz contra 159,645 Hz (+68,1 %). **Mas a causa não é deste motor**
+  — ver o achado abaixo.
+
+Achado, confirmado por conferência cruzada (reler o relatório do agente que
+gerou este script antes de aceitar "gap inexplicado"): os modos calculados
+aqui seguem **exatamente** a razão clássica de Euler-Bernoulli entre
+harmônicos — 1:4:9 para biapoiada (42,9153 × 4 = 171,661, × 9 = 386,24,
+batendo com o calculado até a 3ª casa) e 1:6,267:17,55 para engastada-livre
+(15,2884 × 6,267 = 95,83, × 17,55 = 268,31 — as mesmas razões de
+`validacao.modal_viga_em_balanco`, as raízes de cos(βL)cosh(βL) = -1). Essa
+razão é **a mesma fórmula fechada que o próprio documento diz ter usado**
+para validar seu modelo ANSYS (equações 15-20 do TCC, reproduzidas no
+docstring deste script). Só que os números publicados **não seguem essa
+razão**: 123,08/42,512 = 2,895 (não 4) e 192,16/42,512 = 4,521 (não 9);
+77,754/15,221 = 5,108 (não 6,267) e 159,645/15,221 = 10,49 (não 17,55).
+Ou seja, se as frequências publicadas fossem de verdade o 2º e 3º harmônico
+de flexão vertical da mesma viga, elas teriam de respeitar a mesma razão que
+o próprio autor usa para validar o 1º modo — e não respeitam. A explicação
+mais provável não é um defeito deste motor (que reproduz a teoria à risca,
+inclusive confirmado contra Timoshenko à parte — a correção por cisalhamento
+desloca o 2º modo da biapoiada de 171,66 para só 166,95 Hz, longe de cobrir
+o gap de 39,5 %): é que o 2º/3º "modo de flexão vertical" que o TCC extraiu
+do ANSYS Workbench **não é** o 2º/3º harmônico puro — é comum, em um
+elemento de pórtico 3D genérico (BEAM188/BEAM4, 6 GDL/nó) sem o cuidado de
+filtrar por direção, a lista de modos ordenada por frequência intercalar
+modos de flexão no eixo forte com os do eixo fraco, axiais e torcionais, e
+um trabalho de graduação confundir qual é qual ao ler a interface do
+software — exatamente o tipo de armadilha que `classificar_modos_verticais`
+neste script existe para evitar, e que o próprio TCC não documenta ter
+filtrado. O 1º modo, que não sofre dessa ambiguidade (é sempre o mais baixo
+de todos, não há com o que confundir), bateu bem nos dois casos — e é o
+que a maioria dos trabalhos usa como validação principal.
+
+**Nascimento (TCC UFSM, 2025) — edifício de 12 pavimentos, sem alvenaria
+participante** (simulações 1, 2 e 5 do documento — a diagonal de Mainstone
+fica de fora desta rodada). Grelha de 15 pilares (5×3, vãos de 6 m), pé-direito
+3 m, 12 pavimentos; pilares 50×50 cm na linha Y = 6 m e 40×40 cm nas linhas
+Y = 0/12 m; vigas 20×60 cm nas duas direções; dois concretos com EI reduzido
+simplificado (NBR 6118:2023, 15.7.3) via E — pilar a 0,8 EI, viga a 0,4 EI —
+C40 nos dois primeiros lances/pisos, C25 do 3º ao 12º; peso específico
+24,516625 kN/m³ (2500 kgf/m³ × 9,80665, não os 25 kN/m³ padrão da casa).
+Massa pela capacidade de `casos_de_massa`: parede (310 kgf/m² × 2,40 m =
+7,296 kN/m) em todas as vigas, revestimento (100 kgf/m² = 0,980665 kN/m²,
+40 kgf/m² = 0,392266 kN/m² na cobertura) repassado pelas lajes via
+`lajes.aplicar_lajes` — que já soma o peso próprio da espessura (13 cm) ao
+revestimento antes de ratear pela área de influência, decisão de modelagem
+registrada no cabeçalho de `exemplos/nascimento_edificio.py`. Malha
+conferida antes do modal: **195 nós, 444 barras, 96 lajes** (pórtico
+espacial) e **39 nós, 60 barras** (pórtico plano).
+
+*Pórtico plano (a linha de pilares P3-P8-P13, X = 12 m — confinado ao plano
+Y-Z restringindo ux, ry, rz em TODOS os nós, não só nos apoios, porque uma
+barra isolada fora do plano fica mecanismo nessas três direções)*:
+simulações 2 e 5 do documento, que diferem só no método de ratear a carga
+de laje nas vigas — "método 1" (metade para cada viga) contra "método 2"
+(charneiras/área de influência). **Os dois métodos colapsam no mesmo número
+aqui**: os painéis adjacentes a este pórtico são quadrados (6×6 m), e para
+painel quadrado a fórmula de área de influência de `lajes.distribuir`
+("quinhão = q·lx·(2·Le−lx)/4") cai exatamente no triângulo simétrico que o
+rateio por metade também daria — é a mesma coincidência que o próprio
+documento registra (Tabela 6: os dois métodos batem entre si a menos de
+0,1 % para este edifício). Por isso um modelo só foi confrontado com os
+dois alvos:
+
+* modo 1: 0,4214 Hz × 0,3434/0,3435 Hz publicados → **+22,7 %**
+* modo 2: 1,3013 Hz × 1,0591/1,0594 Hz → **+22,9 %**
+* modo 3: 2,2955 Hz × 1,8609/1,8620 Hz → **+23,3 %**
+
+As **razões entre os três modos batem quase exatas** com o documento
+(1,3013/0,4214 = 3,088 contra 1,0591/0,3434 = 3,085; 2,2955/0,4214 = 5,447
+contra 1,8609/0,3434 = 5,419) — prova de que são o mesmo trio de modos (o
+1º, 2º e 3º harmônico de flexão do pórtico no plano Y-Z), não um descompasso
+de identificação de modo.
+
+**Bug real encontrado e corrigido na revisão deste resultado**: a primeira
+versão de `carga_tributaria_laje_quadrada` (a função que reproduz à mão a
+fórmula de `lajes.distribuir` para o pórtico reduzido a um plano, que não
+tem as 4 vigas de contorno reais que o mecanismo `Laje` exige) desenhava só
+a **metade** do triângulo de carga — a rampa de subida (0 ao meio do vão),
+sem a rampa de descida simétrica (do meio ao fim do vão) que
+`lajes.distribuir` sempre fecha, mesmo quando o patamar do meio desaparece
+para painel quadrado. Isso aplicava só metade da força total que cada
+painel deveria repassar à viga — um fator 2 faltando bem na massa
+tributária da laje, a maior parcela da massa adicional deste modelo.
+Corrigido acrescentando a segunda rampa (ver o código), o erro caiu de
+**+37 % para +23 %** nos três modos — confirma que a causa raiz era mesmo
+massa faltando, e que a maior parte dela já foi encontrada.
+
+**O que ainda falta para fechar os ≈ 23 % restantes**: comparando o pórtico
+plano (corrigido) contra o **próprio** pórtico espacial deste programa (não
+contra o documento) — 0,4214 Hz contra 0,3493 Hz, 20,6 % de diferença —, fica
+claro que a divergência não é mais só contra a literatura, é entre os dois
+modelos deste mesmo motor que deveriam descrever a mesma linha de pórtico.
+O pórtico espacial usa o mecanismo `Laje`/`aplicar_lajes` de verdade (código
+já validado por anos de conferências) e bate o 1º modo do documento a
+-1,01 % — é o lado confiável. O pórtico plano precisa reconstruir a laje à
+mão porque está reduzido a um plano sem as 4 vigas de contorno, e é nessa
+reconstrução manual que ainda deve morar o resíduo (um candidato óbvio,
+ainda não conferido: o pórtico plano não tem como saber que as vigas X desse
+mesmo nó, no edifício de verdade, também carregam uma fração da parede e da
+laje que o modelo plano não tem onde pôr — mas essa parcela deveria ser nula
+num corte exatamente pelo eixo do pórtico, não precisa de mais investigação
+sem reabrir o modelo). Fica como pendência menor — o achado principal (o
+bug do triângulo pela metade) já está corrigido, e o caminho confiável
+(pórtico espacial, modo 1) já valida a capacidade de massa adicional em
+escala de edifício real.
+
+*Pórtico espacial (simulação 1, o edifício inteiro em 3D)*: o 1º modo
+(translação pura em Y, sem torção) bateu bem — 0,3493 Hz contra 0,3529 Hz
+publicados (**-1,01 %**). Mas os modos 2 e 3 calculados aqui, tomados
+literalmente na ordem que `analisar_modal` devolve, são **translação em X**
+(0,3749 Hz) e **torção** (0,4018 Hz) — não são o 2º e 3º harmônico de
+flexão em Y que a comparação do pórtico plano (acima) deixa claro ser o que
+o documento publica (as razões 1,0815/0,3529 = 3,065 e 1,8920/0,3529 = 5,362
+são praticamente as mesmas do pórtico plano). Uma varredura de 20 modos não
+achou uma sequência limpa de harmônicos só-translação-em-Y além do 1º e do
+5º (f = 0,6513 Hz) — a torção se mistura com a translação a partir do 2º
+harmônico, ao contrário do pórtico plano (que não tem torção nenhuma, por
+construção). Isso é consistente com uma explicação já registrada nesta
+mesma seção para a passarela do DNIT: **a laje aqui nunca é diafragma**
+(`Laje`, em `core/modelo.py`, só entrega carga, nunca rigidez no próprio
+plano) — na estrutura real, a laje de concreto (mesmo sem alvenaria
+participante) amarra as prumadas e enrijece a torção e a translação em X o
+bastante para que o 2º e 3º modo do edifício inteiro continuem sendo
+harmônicos de Y, em vez de aparecer torção e X-translação intercaladas tão
+cedo quanto o 2º modo. Por isso a comparação direta modo-a-modo do pórtico
+espacial contra a Simulação 1 não é honesta além do 1º modo — e por isso o
+pórtico plano (que não sofre dessa ambiguidade, por não ter X nem torção) é
+a comparação que vale mais aqui.
+
+**Pendência, revisada**: a causa principal do excesso (o triângulo de carga
+pela metade, ver acima) já foi encontrada e corrigida — caiu de ≈ 37 % para
+≈ 23 %. O resíduo de ≈ 23 % continua sem causa identificada com certeza, mas
+agora está isolado: é um desacordo entre os dois modelos **deste mesmo
+programa** (pórtico plano × pórtico espacial, 0,4214 × 0,3493 Hz), não mais
+entre o programa e o documento — e o lado espacial, que usa o mecanismo
+`Laje` de verdade em vez da reconstrução manual, já bate o 1º modo publicado
+a -1,01 %. Quem for investigar o resíduo deve olhar a reconstrução manual da
+carga de laje no pórtico plano (`carga_tributaria_laje_quadrada`), não o
+motor `analisar_modal`/`casos_de_massa`, que já se mostrou correto nos dois
+outros benchmarks de edifício (os 4 edifícios de ontem e o pórtico espacial
+de hoje).
+
+Os dois scripts completos, com a malha conferida antes do modal e a
+comparação lado a lado, ficam em `exemplos/lima_vigas.py` e
+`exemplos/nascimento_edificio.py` — rodar com `py exemplos/lima_vigas.py` e
+`py exemplos/nascimento_edificio.py`. As 553 conferências do autoteste
+continuam passando sem mudar um número — nenhum arquivo de `core` nem
+`validacao.py` foi tocado nesta rodada, só os dois scripts novos em
+`exemplos/`.
+
+### Mais dois trabalhos contra a análise modal — dissertação de identificação modal e TCC do prédio com NDV (2026-10-16)
+
+**Dissertação "Aplicação de métodos no domínio da frequência"**
+(`exemplos/dissertacao_vigas.py`).
+
+O trabalho é de identificação modal por sinal (PP e FDD), e só dois dos seis
+casos dele têm estrutura descrita:
+
+* Os "Casos Controle" são sinais sintéticos.
+* As pontes PI-57 e PK075+317 trazem só as frequências de referência, sem
+  geometria, seção nem material.
+
+| Viga | Referência | Programa |
+|---|---|---|
+| Numérica, 6 m (E = 210 GPa, A = 2,81·10⁻³ m², I = 1,845·10⁻⁸ m⁴) | 0,58 / 2,31 / 5,21 Hz | 0,5783 / 2,3131 / 5,2045 Hz — fórmula fechada a 0,00 %, valor publicado (arredondado) a 0,3 % |
+| COPPE, 1,46 m, 76,2 × 8,0 mm | analítica 8,59 / 34,34 / 77,27 / 137,37 / 214,64 Hz | idem, até a última casa (com A e I arredondados como a dissertação os publica) |
+
+Para os ensaios da COPPE, o programa fica onde a fórmula fica:
+
+* **Vibração aleatória:** −7,1 / +3,3 / +4,7 / +1,0 / +9,2 %.
+* **Impacto:** +3,2 / +3,2 / +5,5 / +1,5 %.
+
+São as mesmas diferenças que a dissertação mostra entre fórmula e ensaio. A
+diferença é de ensaio (apoio real, massa do acelerômetro), não de modelo.
+
+**TCC "Simulação de edifício esbelto com neutralizador de vibrações"**
+(`exemplos/tcc_edificio_ndv.py`).
+
+O protótipo é um prédio de quatro pavimentos em escala:
+
+* chapas de aço de 220 × 150 × 11,5 mm, de 3,0 kg;
+* barras chatas de 19 × 2,75 mm, com 250 mm livres entre as chapas;
+* um NDV em pêndulo invertido no topo: um cubo de 1,382 kg sobre uma haste
+  inox de 71 × 26 × 0,9 mm.
+
+O TCC compara três ferramentas: um modelo de cisalhamento no Octave e sólidos
+no SolidWorks e no ANSYS. O NDV entrou sem mudar nada no programa, só com
+barra, trecho rígido e massa de caso de carga:
+
+* a haste é uma barra engastada no centro da chapa do topo;
+* o cubo é uma barra rígida sem peso, com metade da massa em cada um de dois
+  nós a `±a/√6` do centro. É o par que tem a massa e a inércia de rotação do
+  cubo.
+
+| | Programa | × SolidWorks | × ANSYS | × Octave |
+|---|---|---|---|---|
+| Primário, chapa rígida | 4,312 / 12,470 / 19,243 / 23,733 Hz | −0,2 a −0,3 % | −1,2 a −1,5 % | −1,8 a −3,5 % |
+| Primário, chapa em grelha | 4,286 / 12,412 / 19,192 / 23,715 Hz | −0,4 a −0,8 % | −1,3 a −2,1 % | −1,9 a −4,1 % |
+| NDV isolado, haste como viga | 3,990 Hz | −2,9 % | −4,1 % | (teórico −1,2 %) |
+| NDV isolado, haste como lâmina | 4,186 Hz | +1,9 % | +0,7 % | (teórico +3,6 %) |
+| Global, chapa rígida, haste como lâmina | 3,459 / 5,117 / 12,472 / 19,175 / 23,699 Hz | −0,3 a +0,5 % | −1,3 a −0,1 % | — |
+
+O que esses números ensinam:
+
+* **O Octave fica acima dos três modelos de elementos finitos.** Ele usa a
+  massa equivalente do pilar concentrada (3,0973 kg por pavimento). A massa
+  consistente daqui concorda com os sólidos e não com ele.
+* **A haste é lâmina, não viga.** Com 26 mm de largura para 0,9 mm de
+  espessura e 71 mm de comprimento, ela flete entre a viga (módulo E) e a
+  placa em flexão cilíndrica (E/(1−ν²), 9,9 % mais rígida), porque a largura
+  contém a curvatura anticlástica. Os dois CAD caem entre esses dois limites.
+  Com a leitura de lâmina, o sistema global bate com o SolidWorks a 0,5 %.
+* **A chapa rígida é a leitura certa deste protótipo.**
+  * Na grelha, o pilar se liga à chapa num nó só. No sólido, a barra chata de
+    19 mm fica colada ao longo da chapa.
+  * Na direção fraca isso custa 0,5 %. Na forte, o modo em Y cai para 22,8 Hz
+    e entra entre os quatro primeiros, o que o SolidWorks não mostra.
+  * Com a chapa rígida, a torção (24,9 Hz) e o modo em Y (26,7 Hz) ficam
+    acima dos quatro de direção fraca, como no TCC.
+  * É um limite da ligação pontual barra–grelha, que vale anotar para
+    ligações curtas e largas.
+
+De passagem, a modal ganhou um recurso de reserva: no caminho esparso, se o
+Lanczos não converge (sistema pequeno e quase todo sem massa), ela condensa os
+graus sem massa e resolve denso.
 
 ## Modelagem
 
@@ -344,11 +1122,10 @@ geometria do painel — sem esse cuidado a carga que cai sobre o braço rígido
 sumiria do modelo sem que nada acusasse.
 
 Duas coisas que a laje **não** faz. Ela não é dimensionada aqui — disso cuida o
-programa de Lajes. E ela **não trabalha como diafragma**: não enrijece o
-pavimento no próprio plano, de modo que as prumadas resistem ao vento cada uma
-pela sua rigidez, sem a compatibilização horizontal que uma laje real impõe.
-Para pórtico de contraventamento regular a diferença é pequena; para planta
-muito assimétrica, não é.
+programa de Lajes. E, por padrão, ela **não trabalha como diafragma** nem tem
+rigidez à flexão: é só carga. As duas coisas existem como opção do menu
+**Cálculo** — ver "Laje como diafragma e como grelha; vigas armadas pelo
+pórtico", mais abaixo.
 
 **Alternância de cargas acidentais.** O caso acidental se desdobra nos padrões
 clássicos — todos os tramos, tramos alternados, pares de tramos adjacentes —
@@ -371,6 +1148,660 @@ a NBR 6123:2023, item 3.2, define ℓ1 como a largura perpendicular ao vento e
 ℓ2 como a profundidade, e é nessa orientação que as tabelas de lá foram
 digitalizadas. Há conferência travando isso, e o comentário no código explica
 por quê — para que ninguém "conserte" de volta.
+
+## Edifício de 3 pavimentos contra os programas isolados (2026-11-05)
+
+`exemplos/edificio_3pav.py` é um edifício para conferir o Pórticos contra os
+programas de Vigas, Pilares e Lajes rodados **isoladamente**:
+
+* vãos de 4,0 / 5,0 / 3,5 m em X e 5,0 / 4,0 m em Y;
+* vigas de cinco seções (15×40 a 20×60);
+* V1 e V2 em balanço de 1,5 m, com a V8 nas pontas e a sacada L7 sobre elas;
+* L8 e L9 em balanço puro de 1,2 m além da V3;
+* pilares 20×40, 20×50 e 25×60, parte deles girados 90°;
+* vento.
+
+`exemplos/verificar_contra_programas.py` monta a entrada de cada programa à
+mão — sem as funções da ponte —, roda os **originais** (Vigas R04, Pilares
+R05, Lajes R11, das pastas deles), compara e grava em
+`exemplos/verificacao-3pav/` o relatório, as entradas no formato de cada
+programa (abrem neles) e as imagens da armadura 3D.
+
+### O que bateu
+
+* **Vigas:** a viga que o Pórticos monta, gravada no formato do Vigas R04 e
+  aberta no original, dá resultado **idêntico** nas 24 cadeias (momentos,
+  regiões e cada posição de armadura). Montada à mão, as seções T, as
+  larguras de apoio e as molas 4EI/ℓ batem exatamente; o que difere é
+  escolha de modelagem, documentada:
+  * a carga de laje vai só para o **vão flexível** (com o trecho rígido do
+    14.6.2.1, o total se conserva): momento de vão 1 a 3 % maior;
+  * o peso da viga dentro do pilar fica com o pilar.
+* **Pilares:** em todos os lances verificados, mesmo Nd, mesmos momentos de
+  topo e de base (o sinal geral sai invertido, a relação topo/base — que é
+  o que decide a curvatura e o αb — é a mesma) e o **mesmo arranjo**.
+* **Lajes:** posições, vínculos e larguras de apoio idênticos, menos nas
+  duas lajes em balanço lado a lado (ver abaixo).
+
+### Defeitos achados e corrigidos aqui
+
+* **Laje em balanço** não existia. Agora existe (`Laje.balanco`,
+  `Laje.sentido`; no lançamento, `LajeLancada.balanco/sentido` com o ponto
+  na sacada): a carga vai inteira para a viga do lado apoiado (q·b por
+  metro), e o programa de Lajes a arma como balanço engastado na laje de
+  dentro (`destino = "balanco"`, que leva a negativa até a ponta e o h
+  mínimo de 10 cm do 13.2.4.1). O momento do engaste é equilibrado pela
+  laje de dentro; o solver não tem torque distribuído, e por isso a laje em
+  balanço **sem** laje contínua do outro lado da viga é recusada com o
+  motivo. Duas em balanço lado a lado não se engastam pela borda lateral.
+  Na viga T, o lado da laje em balanço colabora com b3 ≤ b4 (Figura 14.2).
+* **Largura do pilar girado.** `compatibilizacao.largura_do_pilar` supunha o
+  eixo local y = X global e ignorava a rotação da barra: a viga em Y sobre
+  um 20×50 girado 90° recebia 50 cm de apoio em vez de 20 — com eles a
+  ancoragem, o arredondamento sobre o apoio e a posição dos estribos.
+* **Largura de apoio das lajes no bordo errado.** A ponte passava as
+  larguras na ordem das arestas, e o programa de Lajes numera os bordos
+  pela orientação da laje: na orientação Y a viga da direita ia para o
+  bordo da esquerda. Agora vai pela face.
+* **3D — mesa da viga de borda.** O motor de Vigas trata a mesa simétrica;
+  na viga de borda metade das barras do laço da mesa ficava no ar, do lado
+  sem laje. O desenho agora põe a mesa inteira do lado da laje (seção L).
+* **3D — topos nivelados.** Vigas de alturas diferentes ficavam com o topo
+  em níveis diferentes, e cada laje seguia a viga mais alta do próprio
+  contorno: a mesa da viga T saía abaixo da laje, e a negativa entre duas
+  lajes, acima de uma delas. O desenho agora põe toda viga e toda laje com o
+  topo no **nível do pavimento** — o topo da viga mais alta da cota
+  (`core.lajes.nivel_do_pavimento`, `desnivel_da_viga`); o cálculo continua
+  com os eixos na cota.
+
+Com isso o verificador do 3D (cada ponto de cada barra dentro de alma de
+viga, seção de pilar ou laje) não acha barra fora do concreto.
+
+### Achados nos outros programas (pedidos às janelas deles)
+
+* **Lajes R11:** (1) a negativa da borda comum é centrada na face da
+  primeira laje do par, e não no eixo da viga — do lado da segunda ela
+  entra a largura da viga a menos; no balanço, termina ~20 cm antes da
+  borda livre; (2) o balanço é reconhecido pelo `destino`, e não pelos
+  vínculos; (3) duas lajes em balanço lado a lado se engastam pela borda
+  lateral livre, e sai uma negativa de −87,5 a 867,5 cm.
+* **Vigas R04:** a negativa do apoio de extremidade só desce no pilar se o
+  apoio for "engaste"; com "mola" (que o próprio programa diz representar
+  os pilares) reprova. O Pórticos contorna isso só na verificação de
+  ancoragem; o programa isolado reprova quase todas as vigas do edifício.
+
+### Ainda reprovado, e é veredito
+
+* No exemplo residencial, a borda comum L4/L5 dos dois pavimentos maciços:
+  wk = 0,304 mm contra 0,300 mm — verificação nova do Lajes R11.
+
+Conferências: seção 53 de `validacao.py`.
+
+## Sacada: viga em balanço que carrega laje (2026-10-16)
+
+O usuário lançou uma sacada (vigas avançando em balanço além dos pilares, uma
+viga de borda nas pontas e a laje em cima) e achou a armadura "generalizada",
+sem o reforço superior que o balanço pede. A verificação, sobre um modelo
+igual (`_sacada` em `validacao.py`), separou o que estava certo do que não
+estava.
+
+**Certo — o cálculo do balanço.** A viga em balanço é armada pela envoltória
+do pórtico, e o momento do motor bate ponto a ponto com o do pórtico. Com a
+sacada carregada (2,5 m de balanço, 5 kN/m²) o apoio pede 110 kN.m e sai
+2Ø20 em cima, do apoio à ponta; o resto da face superior fica só com
+porta-estribos 2Ø6,3. O reforço do balanço existe.
+
+**Por que parece generalizado no caso leve.** Com 1,5 m de balanço e 3 kN/m²
+o momento é 41 kN.m, a área calculada (2,1 cm²) fica abaixo da mínima da
+seção T (2,55 cm², 17.3.5.2.1) e **a mínima comanda os dois apoios**: os dois
+saem com 4Ø10. Além disso o motor de vigas estende as barras que só existem
+por causa da mínima até o fim da região do apoio (meio vão), e não até onde
+o momento negativo acaba — isso está no motor do Vigas R04, que aqui é cópia
+idêntica, e foi entregue como pedido para a janela daquele programa.
+
+**Errado — e corrigido aqui:**
+
+* **A viga de borda ficava sem armadura.** A V5, apoiada só nas pontas dos
+  balanços, era recusada ("sem apoio em pilar nem em viga"): a regra de que
+  ponta de balanço não é apoio (pilar de canto retirado) valia para ela
+  também. Agora a viga **sem pilar nenhum** pode repousar nas pontas dos
+  balanços (`continuidade._apoiar_nas_pontas_de_balanco`), desde que ganhe
+  pelo menos dois apoios; sai com o aviso de apoio deslocável — o pórtico já
+  tem o deslocamento da ponta, o modelo isolado da viga o trata como fixo.
+  A reação dela entra como carga na ponta do balanço. O caso do pilar de canto
+  (cada viga tem o seu pilar) continua como era.
+* **O desenho 3D descartava calado** a viga com menos de dois apoios. Agora
+  avisa.
+* **O negativo entre duas lajes caía dentro da viga.** O programa de Lajes dá
+  a ele o nome das duas ("L1 / L2"); o desenho procurava uma laje com esse
+  nome, não achava, e punha a barra no plano dos nós — 20 cm abaixo da laje.
+  Agora fica sob o topo mais alto das duas. A conferência antiga de "barra
+  dentro da laje" pulava justamente esse caso, e passou a cobri-lo.
+
+Conferências: seção 51 de `validacao.py` (9).
+
+## Lançamento por planta (2026-10-16, fase 1: o gerador)
+
+Os programas de edifício não pedem nós e barras: o engenheiro desenha a
+**planta de fôrma** de cada pavimento, e o modelo de cálculo sai sozinho. O
+pacote `portico3d/lancamento/` é essa camada. Nesta fase ela entra por
+código ou por arquivo JSON; o editor gráfico de planta vem em seguida, sobre
+ela.
+
+### O que se lança (`lancamento/modelo.py`)
+
+| Elemento | Como é lançado |
+|---|---|
+| Pavimento | nome, cota (do eixo das vigas) e a **planta** que usa — várias cotas podem usar a mesma planta: é o pavimento-tipo |
+| Pilar | ponto, `b × h`, ângulo em planta e ponto de inserção (centro ou um canto). O pilar da planta de um pavimento é o lance que **chega** nele |
+| Viga | polilinha de ponta a ponta, `b × h` |
+| Laje | um ponto dentro do contorno de vigas, mais os dados de laje (maciça ou treliçada, carga ou tipo de carga) |
+| Parede | polilinha sobre vigas, espessura, peso específico e altura (padrão: até o fundo da viga de cima) |
+| Vento | V0, categoria e grupo da NBR 6123 — sai nas quatro direções |
+
+### O que o gerador decide (`lancamento/gerador.py`)
+
+* **Nós.** Viga cruzando viga, viga encostando noutra, viga passando por
+  pilar e vértices de polilinha: pontos coincidentes viram um nó só.
+* **Quebra das vigas** nesses nós. Quem apoia em quem é a regra de viga
+  apoiada em viga de sempre (`continuidade`), que agora recebe o modelo
+  pronto.
+* **Trecho rígido** em cada ponta de viga com pilar, pelo 14.6.2.1. A
+  Figura 14.1, conferida na imagem da norma, leva o trecho do eixo do pilar
+  até `0,3·h` da viga antes da face: `c/2 − 0,3·h`, com `c` a dimensão do
+  pilar **na direção da viga**, que leva em conta o giro do pilar.
+* **Pilares.**
+  * O primeiro lance engasta na fundação.
+  * O lance que tem pilar embaixo continua dele.
+  * O que não tem nasce na viga do pavimento de baixo (transição, com aviso),
+    e essa viga é quebrada embaixo dele.
+* **Lajes.** O retângulo de vigas em volta do ponto. O lado pode ser coberto
+  por várias vigas na mesma reta, por exemplo onde uma viga secundária nasce
+  no meio dele. Para isso o `core.lajes` passou a aceitar lado composto
+  (`Aresta.trechos`), e a grelha, a viga T, a faixa treliçada e as fôrmas
+  acompanham. O quinhão do lado é o mesmo perfil de rampa e patamar,
+  recortado em cada barra.
+* **Casos.**
+  * `G`: peso próprio das barras, lajes e paredes;
+  * `Q`: acidental das lajes;
+  * com V0 > 0, `VX+`, `VX−`, `VY+` e `VY−` pela NBR 6123.
+
+### Conferência de lançamento
+
+O gerador **recusa**, com a lista dos motivos, em vez de devolver um modelo
+errado:
+
+* pilar que nasce no ar;
+* viga que passa perto do pilar mas fora do eixo dele (a excentricidade
+  viga–pilar ainda não é modelada);
+* laje sem contorno fechado, não retangular, ou com viga atravessando o
+  painel;
+* parede que não está inteira sobre viga;
+* pavimentos fora de ordem, planta inexistente, nome repetido.
+
+Ele **avisa** sem recusar: pilar de transição, pilar sem viga no topo, viga
+sem apoio, trecho rígido que não coube.
+
+### Arquivo e janela
+
+O lançamento é um JSON com `"tipo": "lancamento"` (`lancamento/arquivo.py`).
+O leitor de modelo (`arquivo.ler`) reconhece esse tipo e gera o modelo na
+hora, de modo que "Abrir" na janela e a linha de comando funcionam com ele
+sem mais nada. As tabelas mostram o modelo de cálculo gerado; editar nelas
+não volta ao lançamento.
+
+### Exemplo
+
+`exemplos/lancamento_residencial.py` grava `exemplos/lancamento-residencial.json`:
+
+* três pavimentos, planta-tipo repetida em dois e cobertura com laje
+  treliçada;
+* grade irregular de pilares 20×40, os de extremidade girados 90°;
+* a viga V7 nascendo na V1 e morrendo na V2;
+* paredes no perímetro e vento.
+
+Saem 42 nós, 72 barras e 15 lajes. O modelo gerado passa pelo caminho
+inteiro (análise com 2ª ordem, os três motores e a compatibilização) com
+tudo aprovado.
+
+Um achado no caminho mostra para que serve a compatibilização. Com os
+pilares de extremidade sem giro, a viga V2 terminava num pilar de 20 cm na
+direção dela: a ancoragem dispunha de 17,0 cm e precisava de 17,3 cm. O
+motor de Vigas aprovava a viga, e a conferência do nó viga–pilar pegou.
+
+### Conferências (seção 50 de `validacao.py`)
+
+| Conferência | Resultado |
+|---|---|
+| Contagem de nós e barras do exemplo; quebra da V1 em x = 4; 6,5; 9 | exato |
+| Trecho rígido 0,40/2 − 0,3·0,45 = 0,065 m; no pilar girado, o mesmo; no lado de 20 cm, zero | exato |
+| Lado da L5 coberto por duas vigas, que recebem juntas o quinhão do lado; L5 entrega q·lx·ly | exato |
+| ΣFz do permanente = barras (vão flexível) + lajes + paredes | 2,7·10⁻¹⁶ |
+| Pavimento-tipo repetido; vento nas quatro direções; sem erro nem viga solta | sim |
+| Pilar de transição nasce na viga de baixo, quebrada embaixo dele | sim |
+| Recusa: pilar no ar, viga fora do eixo, laje sem contorno, parede fora de viga | sim |
+| JSON gravado e lido gera o mesmo modelo; o leitor de modelo aceita o lançamento | exato |
+| Ponta a ponta: 21 vigas, todos os lances de pilar, três pavimentos de laje, emendas e nós | aprovados |
+
+### Fase 2: o editor de planta (`ui/editor_planta.py`)
+
+Botão **Lançamento** (Ctrl+L) na barra da janela principal. Ele abre a janela
+do editor com o lançamento de onde o modelo atual veio, ou com um novo. O
+editor só desenha e grava o `Lancamento`; toda regra estrutural continua no
+gerador da fase 1.
+
+**A folha.** A planta de um pavimento por vez:
+
+* zoom na roda, deslocamento com o botão do meio, "Enquadrar" na barra;
+* grade de 1 m desenhada e captura a cada 5 cm;
+* os pilares da planta do pavimento de baixo aparecem tracejados, em
+  fantasma, para o pilar de cima nascer sobre eles;
+* depois de "Gerar modelo", os painéis de laje que o gerador achou aparecem
+  pintados.
+
+**Ferramentas:**
+
+| Ferramenta | Tecla | Uso |
+|---|---|---|
+| Selecionar | S | escolhe o elemento e mostra as propriedades dele |
+| Pilar | P | um clique |
+| Viga | V | ponto a ponto; duplo clique, Enter ou botão direito termina; Esc cancela; Shift trava em X/Y |
+| Laje | L | um clique dentro do contorno |
+| Parede | W | como a viga |
+| Apagar | Del | um clique no elemento |
+
+**Captura.** O clique vai, nesta ordem, para o ponto notável mais próximo a
+até 10 px (centro de pilar, vértice ou cruzamento de vigas, ponta de linha do
+DXF), para o eixo da viga mais próxima, ou para a grade.
+
+**Painéis:**
+
+* **À esquerda:**
+  * pavimentos (nome, cota e planta de cada um, com + e −);
+  * a planta em edição (nova, duplicar, renomear — é o pavimento-tipo);
+  * os dados do edifício: concreto, cota da base, trecho rígido, vento e
+    tipos de carga de laje.
+* **À direita:**
+  * as propriedades do elemento selecionado (ou do próximo elemento da
+    ferramenta), montadas a partir dos campos do lançamento — inclusive os
+    pontos da viga como texto, para coordenada exata;
+  * a conferência do gerador, com os erros em vermelho e os avisos em
+    laranja.
+
+**DXF de fundo.** Linhas, polilinhas, arcos, círculos e blocos explodidos
+num nível, em cinza. A unidade é sugerida pelo `$INSUNITS` do arquivo e
+confirmada pelo usuário.
+
+**Gerar modelo (F9).** Roda o gerador e, quando ele fecha, entrega o modelo à
+janela principal, com as opções do menu Cálculo que já estavam escolhidas.
+Abrir um arquivo de lançamento pela janela também deixa o lançamento pronto
+para editar.
+
+**Precisão de posicionamento** — a segunda linha da barra, pedida pelo
+usuário depois do primeiro uso:
+
+* **O elemento aparece no cursor antes do clique.**
+  * O pilar sai com a seção, o ângulo e o ponto de inserção que vai ter,
+    transparente, com "20×40 · 90°" ao lado. **R** (ou "Girar 90°") gira o
+    próximo pilar — ou o selecionado —, e a mudança se vê na hora.
+  * Viga e parede mostram a largura real enquanto se desenha, e o comprimento
+    do trecho em curso.
+* **Coordenadas:**
+  * uma etiqueta (x; y) acompanha o cursor, com vírgula decimal;
+  * a barra de status traz o comprimento e o ângulo do trecho;
+  * "Coordenadas dos pilares" escreve (x; y) ao lado de cada pilar, e o
+    elemento selecionado mostra os seus;
+  * a caixa **Coordenada** coloca o ponto exato da ferramenta: `2,2; 2,8` é
+    absoluto, `@3; 0` é relativo ao último ponto (o separador é o
+    ponto-e-vírgula, porque a vírgula é a decimal).
+* **Grade na vista inteira.** É desenhada no fundo da vista (`drawBackground`)
+  em qualquer zoom e posição, e não só em volta do lançado:
+  * a malha fina segue o passo e se adensa de 2 em 2, 2,5 em 2,5 quando
+    ficaria ilegível;
+  * a forte marca o metro (ou os 10 m, de longe);
+  * os eixos x = 0 e y = 0 vão em azul.
+* **Passo.** O campo "Passo" define a captura na grade, por exemplo 0,10 m,
+  para os pontos caírem só de 10 em 10 cm. "Captura em objetos" desligada
+  deixa só o passo valendo, sem o ímã de pilar e viga.
+
+**Grelha de eixos, zoom e viga por direção (2026-10-19)** — a terceira
+leva de ajustes pedida pelo usuário:
+
+* **Zoom no ponto que se olha.** A roda aproxima e afasta mantendo parado o
+  ponto da planta sob o mouse (`VistaPlanta.zoom_em`). Antes todo zoom ia
+  para o (0; 0): a âncora "sob o mouse" do Qt usa a posição que o
+  `mouseMoveEvent` da classe base registra, e a vista o substitui sem
+  chamá-lo. O ponto agora é preso à mão, pelas barras de rolagem.
+* **Uma viga por direção.** A polilinha que muda de direção vira uma viga por
+  trecho reto (`lancamento.grelha.dividir_por_direcao`): (0; 0) (4,5; 0)
+  (6; 2) dá V1 e V2. Pontos no meio de um trecho reto não quebram a viga, e
+  a viga editada no formulário que passar a dobrar é quebrada do mesmo modo.
+* **Grelha de eixos** (painel Pavimentos → Grelha; `Lancamento.grelha`,
+  comum a todas as plantas e gravada no arquivo):
+  * colunas verticais com **letras** (A, B, …, Z, AA…), da esquerda para a
+    direita; linhas horizontais com **números**, de baixo para cima. O
+    encontro **2-E** é a linha 2 com a 5ª coluna;
+  * quantidade e espaçamento de colunas e de linhas, e a origem;
+  * **Pilares**: um pilar em cada encontro (com a seção do "próximo pilar"),
+    menos onde já há um; **Vigas**: em cada eixo, uma viga do primeiro ao
+    último pilar sobre ele, com a seção da "próxima viga" — o gerador a
+    quebra nos pilares do meio. Gerar de novo não duplica nada;
+  * os eixos passam 2 m antes do primeiro encontro e 6 m depois do último,
+    com a bolha do nome nas duas pontas, e capturam o clique (encontro e
+    eixo);
+  * a **4 m do último encontro** fica a linha de cotas, com o valor de cada
+    espaço no meio dele. **Clicar na cota** abre o valor daquele espaço, e
+    só ele muda: os eixos seguintes se deslocam, e o que está lançado anda
+    junto em todas as plantas — o que está sobre um eixo fica sobre ele, o
+    que está entre dois eixos fica na mesma proporção do vão (a laje no meio
+    do vão continua no meio), o que está além do último anda o que o último
+    andou (`lancamento.grelha.mudar_espaco`). O pilar anda pelo centro, não
+    pelo ponto de inserção.
+* A captura no eixo de uma viga já lançada anda no passo ao longo dela,
+  contado do vértice. Antes devolvia a projeção crua — o clique em 4,5 m
+  sobre uma viga existente caía em 4,503 —, e foi o teste por clique da viga
+  dobrada que pegou.
+* As caixas de opção do editor ganharam borda: no Fusion claro elas saíam
+  brancas sobre o painel branco, e desmarcadas não se viam.
+
+Conferências: seção 52 de `validacao.py` (17) e o autoteste da janela, que
+confere a deriva do zoom em pixels, a viga dobrada por clique e a cota da
+grelha.
+
+**Seleção múltipla (2026-10-19).** **Ctrl+clique** soma o elemento à
+seleção e **Alt+clique** o tira, com qualquer ferramenta (menos no meio de
+uma polilinha). A seleção é sempre de uma família só — pilares, vigas, lajes
+ou paredes —, e o elemento de outra família é recusado com aviso na barra de
+status. Com vários selecionados:
+
+* o painel mostra os campos do primeiro, e **o que se muda vale para todos**
+  (`Formulario.alvos`); o campo em que eles diferem leva "(vários)" no
+  rótulo. Nome, posição e pontos não aparecem: dar o mesmo valor a todos
+  empilharia os elementos;
+* **R** (Girar 90°) gira todos os pilares selecionados, cada um em torno do
+  próprio ponto de inserção;
+* **Delete** apaga todos;
+* todos aparecem destacados, e Esc ou um clique simples recomeça a seleção.
+
+Conferido no autoteste da janela por clique com Ctrl e Alt (`QTest`).
+
+**Duas armadilhas de interface achadas no teste por clique (`QTest`):**
+
+* **A cena precisa de área fixa.** Sem isso ela cresce a cada item, a vista se
+  recentraliza e a folha "pula" debaixo do mouse.
+* **Os painéis laterais precisam de largura fixa.** Trocar de ferramenta troca
+  o formulário, e o painel que muda de largura empurra a folha. O primeiro
+  pilar clicado depois de escolher a ferramenta caía meio metro ao lado.
+
+**Conferência da janela (`main.py`).** Um pórtico de 5 × 4 m lançado por
+cliques de mouse de verdade:
+
+* pilares clicados fora da grade, que a captura põe no lugar;
+* viga capturando os centros dos pilares;
+* laje e dois pavimentos;
+* gerado e entregue à janela (12 nós, 16 barras);
+* depois o exemplo residencial aberto e gerado pelo editor.
+
+## Dimensionamento mais perto de um programa de edifício (2026-10-16)
+
+Três lacunas apontadas na comparação com o Eberick, fechadas nesta rodada.
+Fundações ficaram de fora por decisão do usuário.
+
+### 1. A 2ª ordem global chega ao dimensionamento (`core/segunda_ordem_global.py`)
+
+O item 15.7.1 manda considerar, no dimensionamento das estruturas de nós
+móveis, os efeitos globais de 2ª ordem. Até aqui a envoltória que ia aos
+pilares e às vigas era de 1ª ordem pura, e o γz era só relatado. Agora cada
+combinação ELU recebe, pelo γz dela:
+
+| γz da combinação | Tratamento |
+|---|---|
+| sem ação horizontal | 1ª ordem (γz não se define) |
+| ≤ 1,10 | 1ª ordem — nós fixos (15.4.2) |
+| 1,10 a 1,30, com ao menos 4 andares | ações horizontais × 0,95·γz (15.7.2), por superposição |
+| > 1,30, ou menos de 4 andares | P-Δ da combinação com a rigidez secante (15.7.3) |
+
+* **O γz passou a ser calculado com a rigidez secante** do 15.7.3: 0,8 EI nos
+  pilares, 0,4 nas vigas e 0,3 nas lajes em grelha
+  (`OpcoesDeCalculo.fator_rigidez_laje`). É a rigidez com que a norma pede a
+  análise dos esforços globais de 2ª ordem. Antes a janela relatava o γz com
+  a rigidez cheia, que sai menor que o de projeto.
+* **A Análise já monta a envoltória do dimensionamento.** "Combinações"
+  guarda as ELU com a 2ª ordem dentro, e "Dimensionar" usa essa envoltória
+  sem resolver de novo. O relatório lista o tratamento de cada combinação, e a
+  memória de cálculo ganhou a tabela no capítulo 4.
+* **Nos exemplos de teste:**
+  * prédio de 8 pavimentos (γz 1,22): as combinações são majoradas;
+  * prédio de 12 pavimentos (γz 1,46): elas vão por P-Δ;
+  * a envoltória dos lances térreos cresce 3 a 11 %.
+
+### 2. Viga T e laje treliçada
+
+* **Viga T pela mesa colaborante (14.6.2.2).** A viga é armada como seção T:
+  * `bf = bw + Σ b1`, com `b1 ≤ 0,1·a` e `b1 ≤ 0,5·b2` para cada lado com laje
+    ao longo do tramo inteiro;
+  * `a` = 1,00 / 0,75 / 0,60 / 2,00 ℓ conforme o tramo;
+  * a mesa é a espessura da laje, ou a capa na treliçada.
+
+  É opção do menu Cálculo, ligada por padrão. A análise do pórtico segue com
+  a seção retangular, só o dimensionamento usa a T.
+
+  De passagem, a conferência contra o pórtico passou a usar o momento **com
+  sinal** e o As de **cálculo**, sem a armadura mínima. Em módulo, o momento
+  negativo seria calculado com a mesa comprimida. Com o mínimo dentro, a
+  seção T, cujo mínimo é sobre a área da mesa, acusava falta de aço perto do
+  apoio por 1 kN·m.
+* **Laje treliçada.** A laje ganhou `tipo` ("macica" ou "trelicada"),
+  `direcao` das nervuras, treliça, enchimento, altura do enchimento, capa,
+  bloco e base da vigota. Tudo isso tem colunas na tabela de lajes e vai para
+  o JSON.
+  * **Carga:** o peso próprio por m² é o mesmo do programa de Lajes (por
+    nervura ÷ intereixo). A laje se apoia **só nas duas vigas perpendiculares
+    às nervuras**.
+  * **Grelha:** na direção das nervuras entra a seção T da nervura, repartida
+    pela faixa; na outra, só a capa. A carga vai inteira pelas faixas das
+    nervuras.
+  * **Dimensionamento:** a cópia do motor de Lajes subiu do R04 para o
+    **R07**, que tem o módulo de laje treliçada. Os painéis treliçados
+    encostados na direção das nervuras viram uma **faixa contínua**, com vãos
+    de eixo a eixo e a largura de cada viga como apoio. A vigota entra na
+    viga o que ela dá (largura − 3 cm). A faixa vai inteira ao
+    `dimensionar_trelicada`.
+  * **Desenho:** a vista de Laje e a armadura 3D avisam que a treliçada sai
+    por faixa e não a desenham.
+  * **O que não foi feito:** a laje nervurada **bidirecional** moldada no
+    local não entrou, porque o programa de Lajes não tem esse dimensionamento.
+    Seria pedido para a janela do Lajes, não deste programa.
+
+### 3. Continuidade dos pilares e nós viga–pilar (`compatibilizacao.py`)
+
+**Prumadas.** Os lances de um mesmo pilar, em ordem. Em cada pavimento é
+conferida a emenda:
+
+* a espera do lance de baixo (ℓ0c, 9.5.2.3, do motor de Pilares);
+* a **taxa na emenda**, (As de baixo + As de cima)/Ac de cima ≤ 8 %
+  (17.3.5.3.2, que conta a sobreposição);
+* o **espaço livre entre pares emendados**, face a face (18.4.2.2, que vale na
+  emenda);
+* barras que param ou que nascem;
+* redução de seção e mudança de bitola.
+
+A armadura 3D passou a desenhar a espera subindo no lance de cima. O
+quantitativo do motor já a contava.
+
+**Nós viga–pilar.** O 21.4 não dá verificação fechada para o nó, que é
+região D (Figura 22.1, a2). O que se confere sem modelo de bielas:
+
+* a **ancoragem da armadura positiva da viga no pilar de extremidade**
+  (18.3.2.4);
+* a largura da viga contra a do pilar;
+* os **nós de joelho** da cobertura (sem pilar acima), onde o laço da
+  armadura negativa tem de ser detalhado.
+
+Junto veio a correção de um defeito antigo: a largura do pilar que a ponte
+dava ao motor de Vigas era sempre o lado `b`, que na barra vertical mede em X.
+Uma viga em Y sobre um pilar 20×60, com os 60 cm em Y, recebia 20 cm de apoio.
+Agora a largura é medida **na direção da viga**.
+
+"Dimensionar" pilares e vigas roda a compatibilização quando os dois já
+existem. O Projeto completo também, e a memória ganhou os itens 6.2
+(continuidade) e 7.2 (nós).
+
+### Conferências (seção 49 de `validacao.py`)
+
+| Conferência | Resultado |
+|---|---|
+| Prédio rígido fica em 1ª ordem, igual à superposição | exato |
+| Majoração multiplica só a parcela horizontal, por (0,95γz − 1) | 1,6·10⁻¹⁶ |
+| γz > 1,3 vai por P-Δ e amplifica o topo além de γz | sim |
+| γz secante maior que o γz com a rigidez cheia | sim |
+| bf = 50 / 53,75 / 80 cm nos três casos do 14.6.2.2; hf = laje ou capa | exato |
+| Peso da treliçada igual ao do programa de Lajes; paralelas sem carga; perpendiculares com a laje inteira; grelha conserva a carga | exato |
+| Faixa treliçada de 2 vãos dimensionada pelo motor e atendendo | sim |
+| Taxa na emenda, espera, redução de seção, largura do pilar por direção, joelho só na cobertura, ancoragem em todo nó de extremidade | exato |
+
+## Laje como diafragma e como grelha; vigas armadas pelo pórtico (2026-10-16)
+
+Três opções novas, no menu **Cálculo ▾** da barra. Elas moram no modelo
+(`Modelo.calculo`, uma `OpcoesDeCalculo`), vão para o arquivo JSON no bloco
+`"calculo"` e sobrevivem ao "Aplicar tabelas". Mudar qualquer uma apaga as
+análises e o dimensionamento feitos com a opção anterior. Arquivo antigo, sem
+o bloco, abre com os padrões.
+
+| Opção | Padrão | O que faz |
+|---|---|---|
+| Laje como diafragma rígido | desligada | os nós de cada pavimento com laje transladam em X e Y e giram em Z juntos |
+| Lajes em grelha (malha) | desligada, 1,0 m | cada laje vira grelha de barras ligada às vigas de contorno |
+| Vigas armadas com | envoltória do pórtico | de onde vêm os esforços ELU com que o motor de Vigas arma a viga |
+
+### Diafragma rígido (`core/diafragma.py`)
+
+Restrição **exata**, por transformação de coordenadas, e não mola rígida de
+penalidade: `D = D₀ + T·r`. Os ux, uy e rz de cada nó do pavimento deixam de
+ser incógnitas e passam a sair dos três graus do pavimento (Ux, Uy, Rz),
+referidos ao centro dos nós dele. Os graus fora do plano (uz, rx, ry)
+continuam livres, que é onde a laje é flexível e onde a viga trabalha.
+
+* **Quem entra:** os nós da cota de uma laje que estão sobre algum painel,
+  seja canto, borda ou interior (os nós da grelha, quando há grelha). O nó
+  com apoio em ux, uy ou rz fica de fora e é listado no relatório da Análise.
+* **Onde vale:** em todas as análises. A classe `montagem.Base` é por onde
+  passam a 1ª ordem, o P-Δ, a flambagem e a modal. Sem diafragma, `T` nem
+  existe, e a conta é a de antes: `K[livres, livres]`.
+* **O que muda no resultado:**
+  * o vento se reparte pelos pórticos pela rigidez de cada um;
+  * o pavimento em planta assimétrica gira;
+  * o **normal das vigas no plano some**, porque elas deixam de alongar.
+    É o comportamento conhecido do diafragma rígido em qualquer programa de
+    edifício.
+
+### Laje em grelha (`core/grelha.py`)
+
+O modelo do usuário não muda. Na hora de calcular, monta-se um **modelo de
+cálculo**:
+
+* **A malha:** cada painel é dividido em faixas de espaçamento próximo da
+  malha pedida, com no mínimo duas por lado.
+* **As vigas de contorno:** são partidas onde as faixas chegam. Cada pedaço
+  herda seção, material, giro, liberação e trecho rígido da sua ponta. Se uma
+  faixa cair dentro de um trecho rígido, sai erro pedindo outra malha.
+* **As faixas:** cada faixa interna é uma barra de seção b×e, com `I = b·e³/12`
+  e a rigidez à torção da placa, `J = b·e³/6` (analogia de grelha de Hambly).
+  O material dela não tem peso, porque o peso da laje já está na carga.
+* **As faixas de borda:** meia largura de laje correm em paralelo com cada
+  viga de contorno, como barras à parte. Sem elas faltava perto dos bordos a
+  rigidez à torção da placa, e a grelha convergia para a placa só linearmente
+  com a malha (14 % de erro na flecha com malha de 0,5 m). Com elas converge
+  com o quadrado da malha.
+* **A carga:** a laje carregava as vigas pelas áreas a 45°, e essas cargas
+  agora levam a marca `origem = "laje:L1"` (coluna **Origem** na tabela de
+  distribuídas, e no JSON). A grelha tira das vigas o que tem essa marca,
+  converte em carga por área (`q = W/(lx·ly)`, o total se conserva
+  exatamente) e reaplica metade em cada direção, cada faixa com a sua largura
+  de influência. A faixa de borda é a própria viga.
+* **A volta ao modelo do usuário:** deslocamentos e reações saem dos nós
+  dele. Cada viga partida é **remontada numa barra só**: as forças que as
+  faixas aplicam nela entram como ações concentradas ao longo da barra
+  (`Resultado.pontuais`). Diagrama, envoltória, combinação e dimensionamento
+  leem a viga como sempre leram. O resultado no modelo de cálculo fica em
+  `Resultado.calculo`.
+
+Fica de fora, de propósito:
+
+* **Excentricidade laje–viga:** a grelha está no plano dos eixos das vigas,
+  então a mesa colaborante não entra.
+* **Laje sem espessura ou sem material:** fica fora da grelha, com aviso.
+* **Modelo antigo, com a carga de laje nas vigas sem a marca:** a grelha entra
+  só com a rigidez, também com aviso. Reabrir no assistente refaz as marcas.
+* **Dimensionamento da laje:** continua pelas tabelas do programa de Lajes.
+* **Vista de Cargas:** continua mostrando a carga como o usuário a tem, nas
+  vigas.
+
+### Matriz esparsa
+
+A grelha multiplica os graus de liberdade: o prédio de 10 pavimentos com 120
+lajes vai de 1 320 para 22 200. Uma matriz densa desse tamanho ocupa 4 GB.
+Acima de `montagem.LIMITE_DENSO` (3 000 graus) a montagem passa a ser esparsa
+(`Montador`) e as soluções mudam junto:
+
+| Análise | Abaixo do limite | Acima do limite |
+|---|---|---|
+| 1ª ordem e P-Δ | Cholesky | LU esparsa, com a mesma conferência de pivô contra mecanismo |
+| Flambagem | autovalores densos | Lanczos, só os modos pedidos |
+| Modal | autovalores densos | Lanczos com deslocamento em zero, só os modos pedidos |
+
+Os nós internos da grelha não têm massa:
+
+* No caminho **denso**, a modal faz a condensação estática exata desses graus.
+* No caminho **esparso**, o Lanczos com deslocamento em zero aceita a massa
+  singular.
+
+Prédio de 10 pavimentos com 120 lajes, diafragma e grelha de 1 m: 2,6 s por
+caso na 1ª ordem e 2,6 s na modal.
+
+### Vigas armadas pelo pórtico
+
+O motor de Vigas fazia a própria análise de viga contínua sob g e q, e o
+pórtico só conferia a armadura no fim. Agora, havendo envoltória (o
+"Dimensionar vigas" sempre a monta), a **envoltória ELU do pórtico substitui
+a dele**. Com isso entram na armadura:
+
+* o vento e o desaprumo;
+* a rigidez real dos pilares;
+* com a grelha, a carga que a laje entrega pela rigidez.
+
+O ELS (flecha e fissura), as reações para viga apoiada em viga e a
+suspensão continuam saindo da viga contínua sob g e q.
+
+* **Sem editar o motor:** a cópia do motor é conferida byte a byte contra o
+  Vigas R04. A troca é feita por fora (`dimensionar_com_envoltoria`): durante
+  a chamada, o `combinacoes` que o motor enxerga devolve tudo igual, menos a
+  envoltória ELU.
+* **Sem redução sobre o apoio no motor:** com a envoltória do pórtico, o
+  motor não reduz o momento negativo sobre o apoio. Quem quer considerar a
+  largura do apoio modela o trecho rígido. No Vigas R03 a redução era "à
+  face" (`momento_face_apoio`); no R04 virou o arredondamento R·t/8 do
+  14.6.3 (`arredondar_momento_apoio`), que tira o R do modelo isolado da
+  viga, e não do pórtico — por isso também fica desligado. Sem isso, na viga de um vão só do teste, o pórtico
+  exigia no apoio 1,15 vez o aço que o motor detalhava.
+* **As outras duas fontes:**
+  * `"envolvente"` usa o pior dos dois em cada seção;
+  * `"motor"` é o comportamento antigo.
+* **No relatório:** "Dimensionar vigas" diz com que esforços armou, e a
+  memória de cálculo descreve a opção usada.
+
+### Conferências desta rodada (seção 48 de `validacao.py`)
+
+| Conferência | Contra o quê | Resultado |
+|---|---|---|
+| Diafragma, estática | `rigidDiaphragm` do OpenSeesPy, prédio em L de 3 pavimentos com torção | deslocamentos e momentos a 1e-14 |
+| Diafragma, modal | idem | MAC = 1 nos três modos. A frequência difere na quinta casa **com ou sem** diafragma, do mesmo tamanho: é a inércia de rotação do `-cMass` dele, não a restrição |
+| Diafragma, cinemática | a definição | o pavimento se move como corpo rígido a 1e-16, o normal das vigas zera, ΣFx fecha |
+| Grelha × placa de Navier | placa quadrada apoiada nos 4 bordos, ν = 0 (Timoshenko & Woinowsky-Krieger §30) | malha 0,5 m: flecha a 0,08 %, Mx a 1,6 %; malha 0,25 m: 0,02 % e 0,39 % |
+| Grelha, equilíbrio | a laje pelas áreas | ΣFz igual a 1e-14; a viga remontada fecha com o último pedaço a 1e-15 e coincide com os pedaços no meio de cada um |
+| Esparsa × densa | o mesmo prédio, com diafragma e grelha | 1ª ordem, P-Δ, quatro frequências e fator de flambagem a 1e-11 |
+| Vigas pelo pórtico | a envoltória do pórtico | a envoltória do motor é a do pórtico exatamente; todas as vigas cobrem o pórtico; com vento a armadura muda |
+| Arquivo | ida e volta | opções e origem das cargas voltam iguais |
 
 ## Cargas, combinações e envoltória
 
@@ -523,6 +1954,15 @@ As duas últimas carregam **arquivos de dados** — os modelos .xml do docx, os
 recursos do ezdxf —, que a receita coleta à mão: sem eles o pacote monta e só
 falha na hora de gravar, que é o pior momento para descobrir.
 
+Desde a troca do motor de desenho para PyVista/VTK, o `.spec` também arrasta
+`pyvista`, `vtkmodules`, `pyvistaqt` e `qtpy` inteiros por `collect_all()` —
+não há hook dedicado do PyInstaller para eles, e VTK importa centenas de
+submódulos por nome em tempo de execução que a varredura estática não
+descobre sozinha (a mesma receita de Consolos R03 e Lajes R06). Diferente do
+Lajes, aqui `pyvistaqt`/`qtpy` **são** necessários: seis das sete vistas usam
+o widget embutido, só a Armadura abre em janela nativa. Isso engorda o
+executável em dezenas de MB — é o preço da vista interativa embutida.
+
 ### O que o empacotamento quebrou, e a conferência que ficou
 
 Duas coisas funcionavam em Python e quebravam empacotadas. As duas foram
@@ -592,16 +2032,16 @@ portico3d/
         estabilidade.py     γz, α, majoração 0,95γz, rigidez secante
     ui/
         janela.py           janela principal e as ações
-        tabelas.py          as dez tabelas de entrada
+        tabelas.py          as doze tabelas de entrada
         conversao.py        modelo ↔ linhas das tabelas
         assistente.py       gerador de pórtico regular
         vista3d.py          modelo, sólido, laje, armadura, diagramas
         tema.py             paleta clara, a mesma dos outros programas
 ```
 
-Além das 421 conferências numéricas, o autoteste **monta a janela sem tela** e
+Além das 430 conferências numéricas, o autoteste **monta a janela sem tela** e
 faz dois percursos. No primeiro, gera um pórtico pelo assistente, acrescenta e
-remove linha em cada uma das dez tabelas, analisa, combina, avalia
+remove linha em cada uma das doze tabelas, analisa, combina, avalia
 estabilidade e flambagem, e desenha as nove vistas. No segundo, monta uma viga
 **do zero pelas tabelas**, na ordem em que alguém montaria — material, seção
 pelos lados, nós, barra apontando para os nós, apoios, caso, carga — e confere
@@ -624,8 +2064,50 @@ compara **byte a byte** com a origem quando ela está ao alcance. Cópia editada
 à mão deixa de ser cópia e vira um garfo silencioso — a conferência existe para
 que isso não passe.
 
-Só o `core/` foi copiado: as interfaces e as saídas dependem de PySide6,
-matplotlib, ezdxf e python-docx, e nada disso é preciso para calcular.
+Vieram o `core/` e o `saidas/` (é do `saidas/` que saem os desenhos das
+peças); as interfaces ficaram de fora.
+
+**Revisões em uso** (atualizadas em 2026-11-03):
+
+| Elemento | Revisão | O que a troca trouxe para cá |
+|---|---|---|
+| Vigas | Vigas R04 | arredondamento R·t/8 sobre o apoio (14.6.3) no lugar da redução à face; ancoragem das negativas e da torção nos extremos; ductilidade com o aço adotado; costura em faixas |
+| Pilares | Pilares R05 (de novo em 2026-11-05) | várias combinações por pilar com armadura comum; método geral; elipse do momento mínimo; desaprumo no balanço; busca exata dos arranjos (com processos paralelos, desligáveis por `PILARES_SEM_PARALELO`) |
+| Lajes | Lajes R11 (2026-11-05) | laje em balanço reconhecida pelo destino; fissuração nas bordas comuns; nervurada, alveolar, MEF de placa (não usados aqui) |
+
+Do Pilares R05 ficou de fora o `compat_pcalc.py`: é o modo de
+compatibilidade com o PCalc, que não é verificação pela NBR, e o motor o
+importa como opcional.
+
+**Custo.** O Pilares R05 verifica a envoltória e a seção mínima com mais
+rigor, e cada combinação de cada lance leva cerca de 4 s (no pórtico de três
+pavimentos da conferência de continuidade, 18 lances). O tempo é do motor, e
+a cópia não se edita; a ponte o chama uma vez por combinação governante.
+
+**O que a troca para o Vigas R04 mudou nos resultados:**
+
+* **Ancoragem da negativa nos apoios de extremidade** (18.3.2.4-d, a partir
+  da face). Quando o trecho reto não basta, o motor faz a barra descer no
+  pilar — mas só admite isso no apoio "engaste", e a ponte representa o
+  pilar como "mola" (a rigidez dos lances) ou "simples". Sem ajuste, 18 das
+  21 vigas do exemplo residencial reprovavam com "não há onde a barra
+  descer", com o pilar lá. A ponte agora passa ao motor a **altura do pilar
+  abaixo da viga** (`altura_do_pilar_abaixo`, campo previsto no R04, que o
+  motor usa para conferir se a perna cabe) e, **só durante a verificação de
+  ancoragem**, apresenta o apoio de extremidade com pilar embaixo como o nó
+  monolítico que ele é (`_no_monolitico_na_ancoragem`). A análise da viga
+  isolada (flecha, reações) continua com mola ou apoio simples. Como a
+  envoltória, a troca é por fora: a cópia não é editada.
+* **Secundárias apoiadas em viga.** As três V7 do exemplo (uma por
+  pavimento) se apoiam em vigas, sem pilar. O pórtico lhes dá negativo nas
+  pontas pela rigidez à torção das vigas de apoio, e a ancoragem a partir
+  da face não cabe: 17 cm de apoio contra até 73 cm exigidos (Ø16). É
+  veredito do motor, não defeito da ponte — as três ficam reprovadas, e a
+  conferência trava que essa seja a única razão de reprovação do exemplo.
+* **Laço da mesa.** Na seção T o R04 detalha o laço que abraça a mesa, com
+  barras de canto dentro da laje, fora da alma. O desenho 3D já as punha no
+  lugar certo; a conferência de "barra dentro da seção" passou a aceitar
+  barra fora da alma quando ela cai na faixa da laje.
 
 ## A ponte com o dimensionamento
 
@@ -673,15 +2155,62 @@ barras que tem três vãos, justamente por causa disso.
 `Dimensionar vigas` (F6) monta a viga do programa de Vigas a partir da cadeia
 — vãos, seção, largura dos apoios tirada do pilar, e as cargas traduzidas para
 a coordenada da viga em kN/m positivos para baixo —, chama o
-`dimensionar` dele e **grava os desenhos**: a elevação com armadura e estribos
-e o quadro de barras explodido, mais as seções transversais. O desenho é o do
+`dimensionar` dele e **atualiza o modelo 3D da armadura**. Não pergunta pasta
+nem grava nada: a prancha (a elevação com armadura e estribos, o quadro de
+barras explodido e as seções) sai em `Emitir ▾ > Pranchas de vigas`, quando o
+usuário pedir, a partir do último dimensionamento — sem calcular de novo. É o
+mesmo para `Dimensionar lajes` (`Emitir ▾ > Pranchas de lajes`) e para
+`Dimensionar pilares`, que também só atualiza o modelo 3D. O desenho é o do
 programa de Vigas; daqui sai só a tradução e o destino.
 
-**Uma consequência da escolha de usar o dimensionamento dele**: aquele
-programa faz a própria análise da viga contínua, com os pilares entrando como
-apoio simples. Os momentos de apoio saem, portanto, dos dele, e não da rigidez
-que o pórtico 3D conhece. É o comportamento pedido, e está declarado aqui para
-não surpreender quem comparar os dois.
+**Antes**, os três botões pediam a pasta antes de calcular e gravavam
+desenho na hora, mesmo quando o usuário só queria ver o resultado; agora
+dimensionar e imprimir são dois passos. Rodar `Dimensionar` duas vezes seguidas
+com as tabelas iguais não descarta o que foi guardado (a assinatura das
+tabelas é comparada), e é isso que deixa a prancha sair sem recálculo.
+
+**Viga apoiada em viga.** Onde duas vigas se encontram num nó em que não chega
+pilar, uma **repousa na outra**: em V1, que se apoia, a V2 entra como
+**apoio** (simples e indeslocável, com a largura da seção de V2), e em V2, que
+recebe, a V1 entra como **carga concentrada** — a reação de V1 naquele nó,
+separada em permanente e variável porque o motor combina as duas com os
+próprios coeficientes. A carga entra como **indireta** (item 18.3.6), o que faz
+o motor armar a suspensão; e se a viga apoiada é mais alta que a de apoio
+(face de baixo abaixo da outra), é **viga pendurada**, com a conta do tirante
+inteiro.
+
+**Só serve de apoio a viga que está segura naquele ponto.** O nó tem de cair
+*dentro* dos vãos da viga de apoio, entre o primeiro e o último apoio dela. Na
+ponta de um balanço não há apoio: a ponta deforma, e tratá-la como apoio
+indeslocável fazia a outra viga sair dimensionada como uma viga apoiada
+qualquer. Foi o defeito de **retirar um pilar de canto**: as duas vigas que
+chegavam nele viravam balanços, mas uma "se apoiava" na ponta da outra e saía
+com a armadura de uma viga comum. Agora as duas ficam em balanço, com o
+encontro das pontas como aviso no resultado. Quem apoia quem sai de onde o
+nó cai, e só desempata por prioridade; as vigas são dimensionadas das que
+repousam nas outras para as que recebem, e um ciclo (A em B, B em C, C em A) é
+desfeito. Entre as que podem servir de apoio, vale a prioridade **da viga inteira**: mais apoios de pilar, depois a maior altura de seção, depois
+a mais comprida, e o nome só para desempatar. No caso corrente — uma
+secundária que nasce no meio de uma principal —, a principal tem os dois
+pilares e leva a prioridade. As vigas são dimensionadas das mais secundárias
+para as mais principais, porque a reação de uma só se conhece depois que ela
+está pronta. A reação variável é a **máxima** possível no apoio (soma das
+parcelas positivas dos casos-base), e a permanente é a da viga toda carregada.
+
+Duas simplificações declaradas, e que aparecem como aviso no resultado da
+viga apoiada: o apoio na viga de apoio é **indeslocável** (a flecha dela não
+entra) e **sem restrição à rotação** (a torção dela não entra). Se uma viga
+apoiada falha no dimensionamento, a viga de apoio avisa que aquela reação NÃO
+entrou como carga. Junto veio a correção de um defeito antigo: uma viga com
+**balanço depois do último pilar** perdia esse apoio na tradução (a lista de
+apoios do motor saía um a menos que os tramos), o que agora tem conferência.
+
+**De onde saem os momentos.** Aquele programa faz a própria análise da viga
+contínua. Até 2026-10-16 os momentos de apoio saíam dela, e não da rigidez que
+o pórtico 3D conhece. Agora, por padrão, a envoltória ELU do **pórtico**
+substitui a dele — ver "Vigas armadas pelo pórtico". A análise própria do
+motor segue valendo para o ELS, as reações e a suspensão, e volta a ser a fonte
+inteira com a opção "Só a viga contínua (g e q)".
 
 A carga é conferida pelo **total**: a soma de q·comprimento dos trechos
 traduzidos tem de dar a carga que o pórtico tem, senão a viga seria
@@ -756,6 +2285,25 @@ Injetar momentos fictícios para forçar a passagem foi tentado e descartado: no
 apoio interno um momento nodal cria salto no diagrama, o sinal muda de uma
 extremidade para a outra, e uma memória de cálculo com carregamento inventado
 não é conferível por ninguém.
+
+**Os estribos saem numa distribuição só por tramo, não escalonados.** O motor
+de Vigas já tinha o botão pronto para isso — `Config.uniformizar_estribos`,
+que funde as faixas do escalonamento fino na mais conservadora (o menor
+espaçamento, com a maior bitola), estendida de ponta a ponta do trecho, pelo
+item 18.3.3.2 — e a ponte é que não o acionava. Agora aciona sempre: sai mais
+aço do que o escalonamento fino, e sai uma peça só para montar e conferir na
+obra.
+
+**O desenho da viga sai num DXF só, com todas lado a lado, e sem PNG.** Antes
+cada viga gravava um par de imagens (elevação e seções) mais um DXF; num
+edifício com vinte vigas contínuas isso são sessenta arquivos, a metade deles
+imagem que ninguém abre fora do programa. Pular o render em matplotlib das
+imagens — que ninguém consome aqui — é o que mais barateia o tempo: medido no
+exemplo de vinte vigas, a geração dos desenhos caiu de 15,1 s para 4,0 s.
+A prancha única é montada do mesmo jeito que a do projeto inteiro — cada
+desenho é importado com a própria camada e transladado para a sua vaga, numa
+coluna —, e o título de cada viga vem do próprio DXF que ela já grava, sem
+duplicar.
 
 ## O projeto completo (F2)
 

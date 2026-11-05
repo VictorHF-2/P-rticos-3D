@@ -104,7 +104,9 @@ def calcular(res) -> Quantitativo:
     if arr is not None:
         comprimento = altura + (anc.l0c if anc is not None else 0.0)
         q.comprimento_barra = comprimento
-        q.aco[arr.phi] = q.aco.get(arr.phi, 0.0) + arr.massa(comprimento)
+        for b in arr.barras:            # bitola por bitola (lista livre)
+            q.aco[b.phi] = (q.aco.get(b.phi, 0.0)
+                            + massa_linear(b.phi) * comprimento / 100.0)
     if est is not None:
         q.aco[est.phi] = q.aco.get(est.phi, 0.0) + est.massa
     return q

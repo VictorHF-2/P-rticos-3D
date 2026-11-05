@@ -11,8 +11,11 @@ recalcular -- os valores de entrada aparecem em azul.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from openpyxl import Workbook
 
+from .. import __norma__, __version__
 from ..core import avisos as avisos_mod
 from ..core.dimensionar import ResultadoViga
 from .estilo_planilha import (COR, NF, cabecalho, expressao, grandeza,
@@ -31,7 +34,8 @@ def _celula(linha: int, coluna: int = 3) -> str:
 # Aba de dados
 # ---------------------------------------------------------------------------
 
-def _aba_dados(wb: Workbook, res: ResultadoViga) -> None:
+def _aba_dados(wb: Workbook, res: ResultadoViga,
+               emitido_em: datetime | None = None) -> None:
     viga = res.viga
     cfg = viga.config
     ws = wb.create_sheet("DADOS")
@@ -47,6 +51,14 @@ def _aba_dados(wb: Workbook, res: ResultadoViga) -> None:
                  NF["texto"], entrada=True)
     L = grandeza(ws, L, "Projeto =", viga.projeto or "-", "(obra)",
                  NF["texto"], entrada=True)
+    L = grandeza(ws, L, "Programa =", f"Vigas {__version__}",
+                 f"({__norma__})", NF["texto"])
+    if emitido_em is not None:
+        L = grandeza(ws, L, "Emitida em =", emitido_em.strftime("%d/%m/%Y %H:%M"),
+                     "(data da emissão desta planilha)", NF["texto"])
+    L = grandeza(ws, L, "Dados =", viga.impressao_digital(),
+                 "(identificação dos dados de entrada; igual à da memória)",
+                 NF["texto"])
     L = separador(ws, L)
 
     L = secao(ws, L, "geometria")
@@ -845,11 +857,10 @@ def _aba_quantitativo(wb: Workbook, res: ResultadoViga) -> None:
 # Interface pública
 # ---------------------------------------------------------------------------
 
-def gerar(res: ResultadoViga, caminho: str) -> str:
-    """Grava a planilha de resultados e devolve o caminho do arquivo."""
-    wb = Workbook()
-    wb.remove(wb.active)
-    _aba_dados(wb, res)
+def _abas_da_viga(wb: Workbook, res: ResultadoViga,
+                  emitido_em: datetime | None = None) -> None:
+    """As abas de uma viga, na ordem de sempre."""
+    _aba_dados(wb, res, emitido_em)
     _aba_esforcos(wb, res)
     _aba_flexao(wb, res)
     _aba_cisalhamento(wb, res)
@@ -860,6 +871,120 @@ def gerar(res: ResultadoViga, caminho: str) -> str:
     _aba_detalhamento(wb, res)
     _aba_quantitativo(wb, res)
     _aba_avisos(wb, res)
+
+
+def gerar(res: ResultadoViga, caminho: str,
+          emitido_em: datetime | None = None) -> str:
+    """Grava a planilha de resultados e devolve o caminho do arquivo."""
+    return gerar_varias([res], caminho, emitido_em)
+
+
+#: o Excel limita o nome da aba a 31 caracteres e proíbe estes
+_PROIBIDOS_NA_ABA = set("[]:*?/\\")
+#: a maior aba é "CISALHAMENTO" (12) mais o espaço: sobram 18 para a viga
+_LARGURA_PREFIXO = 18
+#: uma cor de etiqueta por viga, para o olho achar onde cada uma começa
+_CORES_ABA = ("1F4E79", "2E7D4F", "9A6A00", "7B3F98", "A5232F", "00798C")
+
+
+def _prefixos_das_abas(resultados) -> list[str]:
+    """Um prefixo curto, válido e único por viga: ``V1``, ``V2``..."""
+    usados: set[str] = set()
+    saida = []
+    for k, res in enumerate(resultados):
+        base = "".join(c for c in res.viga.nome if c not in _PROIBIDOS_NA_ABA)
+        base = base.strip()[:_LARGURA_PREFIXO].strip() or f"Viga {k + 1}"
+        nome = base
+        if nome.lower() in usados:           # o Excel ignora a caixa
+            sufixo = f"~{k + 1}"
+            nome = base[:_LARGURA_PREFIXO - len(sufixo)] + sufixo
+        usados.add(nome.lower())
+        saida.append(nome)
+    return saida
+
+
+def _aba_resumo(wb: Workbook, resultados, prefixos: list[str]) -> None:
+    """Todas as vigas lado a lado: uma coluna por viga, uma linha por número.
+
+    É a aba que responde "como as vigas se comparam" sem abrir cada uma. As
+    grandezas aditivas (aço, concreto, forma) ganham uma coluna de total com
+    fórmula viva do Excel.
+    """
+    n = len(resultados)
+    ws = wb.create_sheet("RESUMO", 0)
+    preparar_tabela(ws, [30.0] + [15.0] * n + [15.0])
+    ultima = 2 + n                    # coluna do total (B é o indicador)
+    L = 2
+    L = titulo(ws, L, "RESUMO DAS VIGAS — LADO A LADO", 2, ultima)
+    L = nota(ws, L, "Uma coluna por viga; os detalhes de cada uma estão nas "
+                    "abas com o nome dela.", 2, ultima)
+    L = separador(ws, L)
+    L = cabecalho(ws, L, ["Indicador"] + [r.viga.nome for r in resultados]
+                  + ["Total"])
+    from openpyxl.utils import get_column_letter
+    c0, c1 = get_column_letter(3), get_column_letter(2 + n)
+
+    def linha(rotulo, valor, formato=None, soma=False):
+        nonlocal L
+        valores = [rotulo] + [valor(r) for r in resultados]
+        formatos = [None] + [formato] * n
+        if soma:
+            valores.append(f"=SUM({c0}{L}:{c1}{L})")
+            formatos.append(formato)
+        else:
+            valores.append("")
+            formatos.append(None)
+        L = linha_tabela(ws, L, valores, formatos)
+
+    linha("Aba", lambda r: prefixos[resultados.index(r)])
+    linha("Projeto", lambda r: r.viga.projeto or "-")
+    linha("Tramos", lambda r: len(r.viga.tramos), NF["inteiro"])
+    linha("Comprimento (m)", lambda r: r.viga.comprimento, NF["m"])
+    linha("Concreto", lambda r: r.viga.concreto.classe)
+    linha("Aço", lambda r: r.viga.aco.categoria)
+    linha("Agressividade (CAA)", lambda r: r.viga.ambiente.caa)
+    linha("Posições de armadura", lambda r: len(r.posicoes), NF["inteiro"],
+          soma=True)
+    linha("Aço (kg)", lambda r: r.quantitativo["massa_total"], NF["kg"],
+          soma=True)
+    linha("Aço + 10 % de perdas (kg)",
+          lambda r: r.quantitativo["massa_com_perdas"], NF["kg"], soma=True)
+    linha("Concreto (m³)", lambda r: r.quantitativo["concreto_m3"],
+          '0.000\\ "m³"', soma=True)
+    linha("Forma (m²)", lambda r: r.quantitativo["forma_m2"],
+          '0.00\\ "m²"', soma=True)
+    linha("Taxa de aço (kg/m³)", lambda r: r.quantitativo["taxa_aco"],
+          NF["kg"])
+    linha("Situação",
+          lambda r: "ATENDE" if r.ok else "NÃO ATENDE — VER AVISOS")
+
+
+def gerar_varias(resultados, caminho: str,
+                 emitido_em: datetime | None = None) -> str:
+    """Grava num .xlsx só as vigas de ``resultados``.
+
+    Com uma viga é a planilha de sempre, aba por aba. Com várias, entra uma aba
+    ``RESUMO`` (as vigas lado a lado) e as abas de cada viga vêm em grupo, com
+    o nome dela como prefixo e uma cor de etiqueta própria: ``V1 DADOS``,
+    ``V1 FLEXÃO``, ... ``V2 DADOS``.
+    """
+    resultados = list(resultados)
+    if not resultados:
+        raise ValueError("Nenhuma viga para exportar.")
+    emitido_em = emitido_em or datetime.now()
+    wb = Workbook()
+    wb.remove(wb.active)
+    varias = len(resultados) > 1
+    prefixos = _prefixos_das_abas(resultados) if varias else []
+    for k, res in enumerate(resultados):
+        antes = len(wb.worksheets)
+        _abas_da_viga(wb, res, emitido_em)
+        if varias:
+            for ws in wb.worksheets[antes:]:
+                ws.title = f"{prefixos[k]} {ws.title}"
+                ws.sheet_properties.tabColor = _CORES_ABA[k % len(_CORES_ABA)]
+    if varias:
+        _aba_resumo(wb, resultados, prefixos)
     normalizar_alturas(wb)
     wb.save(caminho)
     return caminho

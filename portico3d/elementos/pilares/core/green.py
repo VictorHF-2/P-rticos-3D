@@ -84,7 +84,10 @@ _T_PESOS = _GAUSS_PESOS / 2.0
 #: regime a resultante já é bem aproximada pela compressão uniforme -- o autor
 #: do TCC observa a mesma degenerescência no item 4.3.6 e propõe a mesma
 #: saída: uma fórmula à parte para deformação uniforme.
-K_MINIMO = 1e-9
+#: Medido contra o fatiamento (40x60, theta = 0,3): com k = 1e-8 o Mx de
+#: Green já saía -385 kN·cm contra 0; a 1e-6 a diferença é de 0,05 kN·cm.
+#: Abaixo daqui a soma das faixas assume.
+K_MINIMO = 1e-6
 
 
 def _r(eps_mil: np.ndarray, eps_c2: float) -> np.ndarray:
@@ -142,7 +145,7 @@ def _antideriv0(c: Concreto, eps_mil: np.ndarray) -> np.ndarray:
     diferenciação numérica contra ``sigma_c`` no autoteste, para qualquer
     ``n``, e não só pela álgebra.
     """
-    fcd_ac = c.alfa_c * c.fcd_kNcm2
+    fcd_ac = c.fator_pico * c.fcd_kNcm2
     eps_c2 = c.eps_c2_mil
     n = c.expoente_n
     eps = np.maximum(eps_mil, 0.0)
@@ -165,7 +168,7 @@ def _antideriv1(c: Concreto, eps_mil: np.ndarray) -> np.ndarray:
     serve de novo -- ``eps · sigma_c(eps) = 0`` aí, e ela é constante.
     Conferida por diferenciação numérica no autoteste, como a anterior.
     """
-    fcd_ac = c.alfa_c * c.fcd_kNcm2
+    fcd_ac = c.fator_pico * c.fcd_kNcm2
     eps_c2 = c.eps_c2_mil
     n = c.expoente_n
     eps = np.maximum(eps_mil, 0.0)

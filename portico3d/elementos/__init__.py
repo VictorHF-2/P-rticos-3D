@@ -19,9 +19,11 @@ a origem, quando ela está ao alcance. Ao trazer uma revisão nova, copie os
 diretórios inteiros e atualize a entrada — não edite estes arquivos, ou a cópia
 deixa de ser cópia e passa a ser um garfo que ninguém sabe que existe.
 
-Do Pilares veio só o ``core/``. Do Vigas e do Lajes veio também o ``saidas/``,
-porque é de lá que saem os desenhos das peças dimensionadas. As interfaces
-ficaram de fora em todos os casos.
+Do Pilares, do Vigas e do Lajes vieram o ``core/`` e o ``saidas/`` — é do
+``saidas/`` que saem os desenhos das peças dimensionadas. As interfaces
+ficaram de fora em todos os casos, e do Pilares R05 ficou de fora também o
+``compat_pcalc.py`` (modo de compatibilidade com o PCalc, que não é
+verificação pela NBR): o motor o importa como opcional e segue sem ele.
 """
 
 from __future__ import annotations
@@ -31,30 +33,30 @@ from __future__ import annotations
 PROCEDENCIA = {
     "pilares": {
         "programa": "Pilares",
-        "revisao": "Pilares R02",
-        "origem": "Pilares/Pilares R02/Programa/pilares",
+        "revisao": "Pilares R05",
+        "origem": "Pilares/Pilares R05/Programa/pilares",
         "partes": ("core", "saidas"),
-        "copiado_em": "2026-09-09",
+        "copiado_em": "2026-11-05",
     },
     "vigas": {
         "programa": "Vigas",
-        "revisao": "Vigas R03",
-        "origem": "Vigas/Vigas R03/Programa/vigas",
+        "revisao": "Vigas R04",
+        "origem": "Vigas/Vigas R04/Programa/vigas",
         "partes": ("core", "saidas"),
-        "copiado_em": "2026-09-09",
+        "copiado_em": "2026-11-03",
     },
     "lajes": {
         "programa": "Lajes",
-        "revisao": "Lajes R04",
-        "origem": "Lajes/Lajes R04/Programa/lajes",
+        "revisao": "Lajes R11",
+        "origem": "Lajes/Lajes R11/Programa/lajes",
         "partes": ("core", "saidas"),
-        "copiado_em": "2026-09-09",
+        "copiado_em": "2026-11-05",
     },
     "vento": {
         "programa": "NBR-6123",
         "revisao": "NBR-6123",
         "origem": "NBR-6123/App",
         "partes": ("",),
-        "copiado_em": "2026-09-09",
+        "copiado_em": "2026-09-30",
     },
 }

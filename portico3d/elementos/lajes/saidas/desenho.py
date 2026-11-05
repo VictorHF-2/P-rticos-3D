@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 desenho.py
-Plantas de armação do pavimento e cortes das lajes, em matplotlib.
+Plantas de armação do pavimento, em matplotlib.
 
 São **duas** plantas, e a separação não é estética: a armadura positiva vive
 na face inferior e a negativa na superior, e desenhar as duas juntas produz um
@@ -13,12 +13,15 @@ real, com o rótulo ``n Nx Ø c/s C=...`` puxado por linha de chamada. As barras
 são desenhadas todas, e não uma representativa, porque é a densidade delas que
 mostra o espaçamento -- e espaçamento errado é o erro mais comum na laje.
 
-Convenção de cores, a mesma dos gráficos e do DXF:
+Convenção de cores das duas plantas e do DXF:
 
     positiva ......... vermelho
     negativa ......... azul
     distribuição ..... verde
     contorno ......... laranja
+
+O modelo 3D interativo (``vista3d.py``, desde a R06) usa uma convenção
+diferente, por pedido explícito -- ver o docstring de lá.
 """
 
 from __future__ import annotations
@@ -126,6 +129,27 @@ def _fundo(ax, res, com_nomes: bool = True, com_vigas: bool = False) -> None:
             ax.text(x0 + 0.12, y1 - 0.12, rl.nome, ha="left", va="top",
                     fontsize=8, color=estilo.CINZA, zorder=3,
                     fontweight="bold")
+    # lajes treliçadas, alveolares e nervuradas: sem barras nesta prancha --
+    # a armação delas está nas tabelas, na memória e na planilha --, mas o
+    # contorno entra para a planta não ficar com buracos
+    for e in getattr(res, "especiais", []):
+        for nome in e.lajes:
+            laje = res.pavimento.laje(nome)
+            if laje is None:
+                continue
+            x0, y0, x1, y1 = laje.retangulo
+            if com_vigas:
+                graficos._vigas(ax, laje)
+            ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0,
+                                   facecolor=graficos.COR_TIPO[laje.tipo],
+                                   edgecolor=estilo.CINZA, lw=1.0,
+                                   alpha=0.45, zorder=1))
+            if com_nomes:
+                ax.text((x0 + x1) / 2.0, (y0 + y1) / 2.0,
+                        f"{laje.nome}\n{graficos._texto_do_tipo(laje)}\n"
+                        f"armação nas tabelas e na memória",
+                        ha="center", va="center", fontsize=7.5,
+                        color=estilo.CINZA, zorder=3)
 
 
 def _preparar(res, titulo: str):
@@ -478,89 +502,4 @@ def figura_armadura_negativa(res, esquematico: bool = False) -> Figure:
         desenhar(pos)
     fig.tight_layout()
     _resolver_textos(fig, ax, textos)
-    return fig
-
-
-# ---------------------------------------------------------------------------
-# Cortes
-# ---------------------------------------------------------------------------
-
-def figura_cortes(res, por_linha: int = 3) -> Figure:
-    """Corte de cada laje, mostrando as duas faces e os cobrimentos.
-
-    O corte é o desenho que explica a altura útil: mostra onde cada armadura
-    fica, qual delas vai por baixo e por que ``da`` e ``db`` diferem de meio
-    centímetro. O cobrimento da face superior é o de **cada barra**, não um
-    valor genérico para a laje inteira: ele cai a 15 mm quando a face é
-    revestida, mas nunca menos que a bitola da própria barra (7.4.7.5), e
-    duas negativas de bitolas diferentes na mesma laje podem, por isso,
-    desenhar em profundidades levemente diferentes.
-    """
-    lajes = res.lajes
-    n = max(len(lajes), 1)
-    colunas = min(por_linha, n)
-    linhas = math.ceil(n / colunas)
-    fig = Figure(figsize=(4.6 * colunas, 3.4 * linhas))
-    amb = res.pavimento.ambiente
-
-    for i, rl in enumerate(lajes):
-        ax = fig.add_subplot(linhas, colunas, i + 1)
-        laje = rl.laje
-        h = laje.h
-        largura = 100.0
-        ax.add_patch(Rectangle((0, 0), largura, h, facecolor=estilo.CONCRETO,
-                               edgecolor=estilo.CINZA, lw=1.2))
-        c_inf = amb.cobrimento_nominal
-
-        # armaduras positivas: a do menor vão por baixo
-        inferiores = [p for p in rl.posicoes if p.face == "inferior"]
-        superiores = [p for p in rl.posicoes if p.face == "superior"]
-        superiores += [p for p in res.posicoes_continuidade
-                       if laje.nome in p.laje.split(" / ")]
-        # o cobrimento que governa o desenho é o da bitola mais grossa entre
-        # as negativas -- é o mais exigente, e é o que a cota de fora mostra
-        c_sup = max((amb.cobrimento_superior(p.phi) for p in superiores),
-                   default=amb.cobrimento_superior(
-                       res.pavimento.config.bitola_minima_negativa))
-
-        for k, pos in enumerate(sorted(inferiores,
-                                       key=lambda p: 0 if p.direcao == "a"
-                                       else 1)):
-            y = c_inf + 0.25 + k * 0.55
-            xs = [largura * (j + 0.5) / max(min(pos.quantidade, 12), 1)
-                  for j in range(max(min(pos.quantidade, 12), 1))]
-            ax.plot(xs, [y] * len(xs), "o", color=_cor(pos), ms=3.2,
-                    label=f"N{pos.numero} Ø{pos.phi:g} c/{pos.espacamento:g} "
-                          f"({pos.direcao})")
-        for k, pos in enumerate(superiores):
-            c_pos = amb.cobrimento_superior(pos.phi)
-            y = h - c_pos - 0.25 - k * 0.55
-            xs = [largura * (j + 0.5) / max(min(pos.quantidade, 12), 1)
-                  for j in range(max(min(pos.quantidade, 12), 1))]
-            ax.plot(xs, [y] * len(xs), "o", color=_cor(pos), ms=3.2,
-                    label=f"N{pos.numero} Ø{pos.phi:g} c/{pos.espacamento:g} "
-                          f"({pos.direcao})")
-
-        # cotas de cobrimento e altura útil
-        ax.annotate("", xy=(6, 0), xytext=(6, c_inf),
-                    arrowprops=dict(arrowstyle="<->", color=estilo.CINZA,
-                                    lw=0.7))
-        ax.text(7.5, c_inf / 2.0, f"c = {c_inf:g}", fontsize=7,
-                va="center", color=estilo.CINZA)
-        ax.annotate("", xy=(6, h), xytext=(6, h - c_sup),
-                    arrowprops=dict(arrowstyle="<->", color=estilo.CINZA,
-                                    lw=0.7))
-        ax.text(7.5, h - c_sup / 2.0, f"c' = {c_sup:g}", fontsize=7,
-                va="center", color=estilo.CINZA)
-
-        ax.set_xlim(-6, largura + 6)
-        ax.set_ylim(-h * 0.45, h * 1.45)
-        ax.set_aspect("equal")
-        ax.set_title(f"{laje.nome} — corte (h = {h:g} cm)", fontsize=9)
-        ax.set_xlabel("faixa de 1 m (cm)", fontsize=7.5)
-        ax.set_yticks([0, h])
-        ax.grid(False)
-        ax.legend(fontsize=6, loc="lower center", ncol=2,
-                  bbox_to_anchor=(0.5, -0.42))
-    fig.tight_layout()
     return fig

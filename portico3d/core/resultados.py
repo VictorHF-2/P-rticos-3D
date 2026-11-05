@@ -65,6 +65,18 @@ class Resultado:
     # Preenchidos pela análise de segunda ordem; na linear ficam no padrão.
     iteracoes: int = 0
     segunda_ordem: bool = False
+    #: Ações concentradas **ao longo** da barra, nos eixos locais: listas de
+    #: ``(s, f)`` com ``s`` a abscissa no vão flexível e ``f`` as seis
+    #: componentes (três forças, três momentos) que agem sobre a barra
+    #: naquele ponto. Só aparecem quando a barra foi partida no modelo de
+    #: cálculo — a viga de contorno da laje em grelha recebe as barras da
+    #: laje em pontos intermediários —, e é assim que a viga continua sendo
+    #: uma barra só para quem lê o resultado.
+    pontuais: dict[str, list[tuple[float, np.ndarray]]] = field(
+        default_factory=dict)
+    #: O modelo de cálculo e o resultado nele, quando o cálculo foi feito
+    #: noutro modelo (a grelha). ``None`` no caso comum.
+    calculo: object = None
 
     # -- por nó -------------------------------------------------------------
 
@@ -133,6 +145,15 @@ class Resultado:
         acumulados = [acumulado(segmentos, float(si)) for si in s]
         F = np.array([a[0] for a in acumulados])
         M = np.array([a[1] for a in acumulados])
+        # Ação concentrada no meio da barra: a força entra na resultante do
+        # trecho já percorrido, com o braço até a estação, e o momento entra
+        # direto — do mesmo lado em que entra o momento da extremidade i.
+        C = np.zeros((len(s), 3))
+        for sp_, f in self.pontuais.get(barra, ()):
+            depois = s > sp_ + 1e-12
+            F[depois] += f[:3]
+            M[depois] += np.outer(s[depois] - sp_, f[:3])
+            C[depois] += f[3:]
 
         return Diagrama(
             barra=barra,
@@ -140,9 +161,9 @@ class Resultado:
             N=-q[0] - F[:, 0],
             Vy=-q[1] - F[:, 1],
             Vz=q[2] + F[:, 2],
-            T=np.full_like(x, -q[3]),
-            My=q[4] + q[2] * s + M[:, 2],
-            Mz=q[5] - q[1] * s - M[:, 1],
+            T=-q[3] - C[:, 0],
+            My=q[4] + q[2] * s + M[:, 2] + C[:, 1],
+            Mz=q[5] - q[1] * s - M[:, 1] + C[:, 2],
         )
 
     # -- leitura rápida -----------------------------------------------------

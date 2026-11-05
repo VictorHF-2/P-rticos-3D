@@ -31,7 +31,8 @@ def modelo_para_registros(modelo: Modelo) -> dict[str, list[dict]]:
                                  "qx": c.qx, "qy": c.qy, "qz": c.qz,
                                  "sistema": c.sistema, "inicio": c.inicio,
                                  "fim": c.fim, "qx_fim": c.qx_fim,
-                                 "qy_fim": c.qy_fim, "qz_fim": c.qz_fim})
+                                 "qy_fim": c.qy_fim, "qz_fim": c.qz_fim,
+                                 "origem": c.origem})
         for c in caso.recalques:
             recalques.append({"caso": caso.nome, "no": c.no, "ux": c.ux,
                               "uy": c.uy, "uz": c.uz, "rx": c.rx,
@@ -65,8 +66,18 @@ def modelo_para_registros(modelo: Modelo) -> dict[str, list[dict]]:
                   for m in modelo.molas.values()],
         "lajes": [{"nome": l.nome, "no_a": l.no_a, "no_c": l.no_c,
                    "espessura": l.espessura, "material": l.material,
-                   "permanente": l.permanente, "acidental": l.acidental}
+                   "tipo_carga": l.tipo_carga,
+                   "permanente": l.permanente, "acidental": l.acidental,
+                   "tipo": l.tipo, "direcao": l.direcao,
+                   "trelica": l.trelica, "enchimento": l.enchimento,
+                   "altura_enchimento": l.altura_enchimento,
+                   "capa": l.capa, "largura_bloco": l.largura_bloco,
+                   "base_vigota": l.base_vigota,
+                   "balanco": l.balanco, "sentido": l.sentido}
                   for l in modelo.lajes.values()],
+        "cargas_lajes": [{"nome": t.nome, "permanente": t.permanente,
+                          "acidental": t.acidental, "descricao": t.descricao}
+                         for t in modelo.cargas_de_laje.values()],
         "casos": [{"nome": c.nome, "natureza": c.natureza,
                    "categoria": c.categoria, "grupo": c.grupo}
                   for c in modelo.casos.values()],
@@ -121,9 +132,29 @@ def registros_para_modelo(registros: dict[str, list[dict]],
         modelo.add_mola(r["no"], r["kx"], r["ky"], r["kz"], r["krx"],
                         r["kry"], r["krz"])
 
+    # Os tipos de carga entram antes das lajes: uma laje pode citar um tipo
+    # que ainda não existiria se a ordem fosse a outra.
+    for r in registros.get("cargas_lajes", []):
+        modelo.add_carga_de_laje(r["nome"], r["permanente"], r["acidental"],
+                                 r.get("descricao", ""))
+
     for r in registros["lajes"]:
         modelo.add_laje(r["nome"], r["no_a"], r["no_c"], r["espessura"],
-                        r["material"], r["permanente"], r["acidental"])
+                        r["material"], r["permanente"], r["acidental"],
+                        r.get("tipo_carga", ""),
+                        tipo=(r.get("tipo") or "macica").strip(),
+                        direcao=(r.get("direcao") or "x").strip(),
+                        trelica=(r.get("trelica") or "TR 12646").strip(),
+                        enchimento=(r.get("enchimento") or "EPS").strip(),
+                        altura_enchimento=r.get("altura_enchimento") or 0.0,
+                        capa=r.get("capa") or 0.0,
+                        largura_bloco=r.get("largura_bloco") or 0.40,
+                        base_vigota=r.get("base_vigota") or 0.12,
+                        balanco=r.get("balanco") or 0.0,
+                        sentido=(r.get("sentido") or "").strip())
+    # Uma laje com tipo_carga tem os valores do tipo, não os digitados nela —
+    # é a mesma regra de "a seção vem dos lados": o tipo é a fonte.
+    modelo.aplicar_cargas_de_laje()
 
     for r in registros["casos"]:
         modelo.add_caso(r["nome"], r["natureza"] or "permanente",
@@ -136,7 +167,8 @@ def registros_para_modelo(registros: dict[str, list[dict]],
         _caso(modelo, r["caso"]).distribuida(
             r["barra"], r["qx"], r["qy"], r["qz"], r["sistema"] or "local",
             r["inicio"], r["fim"] if r["fim"] else 1.0,
-            r["qx_fim"], r["qy_fim"], r["qz_fim"])
+            r["qx_fim"], r["qy_fim"], r["qz_fim"],
+            str(r.get("origem", "") or "").strip())
     for r in registros["recalques"]:
         _caso(modelo, r["caso"]).recalque(r["no"], r["ux"], r["uy"], r["uz"],
                                           r["rx"], r["ry"], r["rz"])

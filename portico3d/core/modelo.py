@@ -16,7 +16,7 @@ Graus de liberdade por nó, sempre no sistema global e nesta ordem:
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -263,6 +263,11 @@ class CargaDistribuida:
     continue coerente se a geometria mudar. Os campos ``qx_fim``, ``qy_fim`` e
     ``qz_fim`` dão a intensidade na outra ponta do trecho; deixados em
     ``None``, a carga é uniforme.
+
+    ``origem`` diz de onde a carga veio quando ela não foi digitada: o
+    quinhão de uma laje é ``"laje:L1"``. É o que deixa a grelha tirar das
+    vigas a carga que a regra das áreas pôs ali e devolvê-la à laje — sem a
+    marca, a carga de laje é indistinguível de uma parede.
     """
 
     barra: str
@@ -275,6 +280,7 @@ class CargaDistribuida:
     qx_fim: float | None = None
     qy_fim: float | None = None
     qz_fim: float | None = None
+    origem: str = ""
 
     @property
     def vetor_inicio(self) -> np.ndarray:
@@ -316,19 +322,49 @@ class Recalque:
 
 
 @dataclass(frozen=True)
+class CargaDeLaje:
+    """Um tipo de carga de laje, nomeado, para aplicar em vários painéis.
+
+    É o que faz a setorização barata: em vez de digitar revestimento e
+    acidental painel a painel, o projetista nomeia os usos que o edifício tem
+    — "corredor", "biblioteca", "lavanderia" — uma vez só, com os valores de
+    cada um, e depois aponta cada laje para o tipo que ela é. Mudar um valor
+    aqui e reaplicar as tabelas atualiza todas as lajes daquele tipo de uma
+    vez, em vez de caçar painel por painel.
+
+    Os dois campos são os mesmos da laje, no mesmo sentido: ``permanente`` é
+    o revestimento **além** do peso próprio (que continua saindo da
+    espessura), e ``acidental`` vai para o caso variável.
+    """
+
+    nome: str
+    permanente: float = 0.0
+    acidental: float = 0.0
+    descricao: str = ""
+
+
+#: Para onde avança a laje em balanço, a partir do lado apoiado.
+SENTIDOS_DE_BALANCO = ("+x", "-x", "+y", "-y")
+
+
+@dataclass(frozen=True)
 class Laje:
     """Painel de laje, definido pelos dois cantos de uma diagonal.
 
-    A laje **não é elemento de cálculo** aqui: ela é um painel de carga. O
+    A laje **não é elemento de cálculo** por padrão: ela é um painel de carga. O
     programa calcula o peso próprio pela espessura, soma o revestimento e o
     acidental, e reparte tudo para as quatro vigas de contorno pelas áreas de
     influência a 45°. Quem dimensiona laje é o programa de Lajes; o que falta
     ao pórtico é a carga que ela entrega às vigas, e é isso que está aqui.
 
-    Uma consequência disso que precisa estar clara: **a laje não trabalha como
-    diafragma**. Ela não enrijece o pavimento no próprio plano, de modo que as
-    prumadas resistem ao vento cada uma pela sua rigidez, sem a compatibilização
-    horizontal que uma laje real impõe.
+    Por padrão, então, **a laje não trabalha como diafragma** nem tem rigidez
+    à flexão. As duas coisas são opção de cálculo (:class:`OpcoesDeCalculo`):
+    o diafragma rígido em ``core.diafragma`` e a grelha em ``core.grelha``.
+
+    ``tipo_carga`` aponta para um nome em ``Modelo.cargas_de_laje``; quando
+    preenchido, é dele que ``permanente`` e ``acidental`` vêm — ver
+    :meth:`Modelo.aplicar_cargas_de_laje`. O campo fica gravado mesmo depois
+    de resolvido, para a próxima edição saber a que setor esta laje pertence.
     """
 
     nome: str
@@ -338,6 +374,47 @@ class Laje:
     material: str = ""
     permanente: float = 0.0
     acidental: float = 0.0
+    tipo_carga: str = ""
+    #: ``"macica"`` ou ``"trelicada"`` (unidirecional, vigotas pré-moldadas
+    #: com treliça). Na treliçada, ``espessura`` é ignorada: a altura é
+    #: ``altura_enchimento + capa``, e ``direcao`` é a direção das nervuras
+    #: — a laje se apoia só nas duas vigas perpendiculares a ela.
+    tipo: str = "macica"
+    direcao: str = "x"
+    trelica: str = "TR 12646"
+    enchimento: str = "EPS"
+    altura_enchimento: float = 0.0      # m
+    capa: float = 0.0                   # m
+    largura_bloco: float = 0.40         # m, Le do bloco de enchimento
+    base_vigota: float = 0.12           # m
+    #: Laje em balanço: ``balanco`` é o comprimento, m, do eixo da viga de
+    #: apoio até a borda livre, e ``sentido`` (``"+x"``, ``"-x"``, ``"+y"``
+    #: ou ``"-y"``) para onde ela avança. Aí ``no_a`` e ``no_c`` não são uma
+    #: diagonal: são as duas pontas do lado apoiado, sobre a viga. Zero é a
+    #: laje comum, apoiada nas quatro vigas de contorno.
+    balanco: float = 0.0
+    sentido: str = ""
+
+    @property
+    def em_balanco(self) -> bool:
+        return self.balanco > 0.0
+
+    @property
+    def trelicada(self) -> bool:
+        return self.tipo == "trelicada"
+
+    @property
+    def altura(self) -> float:
+        """Altura total, m: a espessura da maciça, ou enchimento + capa."""
+        if self.trelicada:
+            return self.altura_enchimento + self.capa
+        return self.espessura
+
+    @property
+    def mesa(self) -> float:
+        """Espessura que colabora como mesa de viga T (14.6.2.2), m: a laje
+        maciça inteira, ou só a capa da treliçada."""
+        return self.capa if self.trelicada else self.espessura
 
 
 @dataclass(frozen=True)
@@ -387,7 +464,8 @@ class CasoDeCarga:
                     qz: float = 0.0, sistema: str = "local",
                     inicio: float = 0.0, fim: float = 1.0,
                     qx_fim: float | None = None, qy_fim: float | None = None,
-                    qz_fim: float | None = None) -> CargaDistribuida:
+                    qz_fim: float | None = None,
+                    origem: str = "") -> CargaDistribuida:
         if sistema not in ("local", "global"):
             raise ErroDeModelo(
                 f"sistema '{sistema}' inválido: use 'local' ou 'global'")
@@ -395,7 +473,7 @@ class CasoDeCarga:
             raise ErroDeModelo(
                 f"trecho [{inicio}, {fim}] inválido: use 0 ≤ início < fim ≤ 1")
         carga = CargaDistribuida(barra, qx, qy, qz, sistema, inicio, fim,
-                                 qx_fim, qy_fim, qz_fim)
+                                 qx_fim, qy_fim, qz_fim, origem)
         self.distribuidas.append(carga)
         return carga
 
@@ -405,6 +483,58 @@ class CasoDeCarga:
         r = Recalque(no, ux, uy, uz, rx, ry, rz)
         self.recalques.append(r)
         return r
+
+
+# ---------------------------------------------------------------------------
+# Opções de cálculo
+# ---------------------------------------------------------------------------
+
+#: De onde vêm os esforços com que as vigas são dimensionadas.
+FONTES_DAS_VIGAS = ("portico", "envolvente", "motor")
+
+
+@dataclass
+class OpcoesDeCalculo:
+    """Como a laje entra no cálculo, e com que esforços a viga é armada.
+
+    ``diafragma`` — a laje de cada pavimento vira **diafragma rígido** no
+    próprio plano: os nós dela passam a transladar em X e Y e a girar em Z
+    juntos, como corpo rígido (``core.diafragma``). É o que reparte o vento
+    entre os pórticos pela rigidez de cada um, e o que faz a torção do
+    pavimento existir.
+
+    ``grelha`` — a laje vira **grelha de barras** (analogia de grelha), ligada
+    às vigas de contorno, e a carga dela chega às vigas pela rigidez, não mais
+    pelas áreas a 45° (``core.grelha``). ``malha_grelha`` é o espaçamento-alvo
+    das barras, em metros.
+
+    ``fonte_vigas`` — com que esforços o motor de Vigas arma a viga:
+
+    * ``"portico"``: a envoltória ELU do pórtico substitui a análise de viga
+      contínua do motor. É como os programas de edifício fazem.
+    * ``"envolvente"``: o pior dos dois em cada seção.
+    * ``"motor"``: o comportamento antigo — viga contínua com g e q, e o
+      pórtico só conferindo.
+
+    ``mesa_colaborante`` — a viga é armada como seção T com as lajes ao lado
+    (14.6.2.2).
+
+    Os padrões deixam o cálculo como era, exceto ``fonte_vigas``, que o
+    pedido de projeto é armar com o pórtico.
+    """
+
+    diafragma: bool = False
+    grelha: bool = False
+    malha_grelha: float = 1.0
+    fonte_vigas: str = "portico"
+    #: A viga é armada como seção T, com a mesa colaborante das lajes ao lado
+    #: (14.6.2.2) — só no dimensionamento: a análise do pórtico segue com a
+    #: seção retangular declarada.
+    mesa_colaborante: bool = True
+    #: Fração de E·I das barras da laje em grelha. Não é opção do usuário:
+    #: é o 0,3 do 15.7.3 que o modelo de rigidez secante põe aqui, para a
+    #: 2ª ordem global (``core.segunda_ordem_global``). Não vai ao arquivo.
+    fator_rigidez_laje: float = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +551,11 @@ class Modelo:
     apoios: dict[str, Apoio] = field(default_factory=dict)
     molas: dict[str, Mola] = field(default_factory=dict)
     lajes: dict[str, Laje] = field(default_factory=dict)
+    cargas_de_laje: dict[str, CargaDeLaje] = field(default_factory=dict)
     casos: dict[str, CasoDeCarga] = field(default_factory=dict)
+    #: Como o modelo é calculado — ver :class:`OpcoesDeCalculo`.
+    calculo: "OpcoesDeCalculo" = field(
+        default_factory=lambda: OpcoesDeCalculo())
 
     # -- construção ---------------------------------------------------------
 
@@ -458,12 +592,45 @@ class Modelo:
 
     def add_laje(self, nome: str, no_a: str, no_c: str, espessura: float = 0.0,
                  material: str = "", permanente: float = 0.0,
-                 acidental: float = 0.0) -> Laje:
+                 acidental: float = 0.0, tipo_carga: str = "",
+                 **trelicada) -> Laje:
+        """``trelicada`` recebe os campos da laje treliçada (``tipo``,
+        ``direcao``, ``trelica``, ``enchimento``, ``altura_enchimento``,
+        ``capa``, ``largura_bloco``, ``base_vigota``) e os da laje em balanço
+        (``balanco``, ``sentido``)."""
         if nome in self.lajes:
             raise ErroDeModelo(f"laje '{nome}' já existe")
         self.lajes[nome] = Laje(nome, no_a, no_c, espessura, material,
-                                permanente, acidental)
+                                permanente, acidental, tipo_carga,
+                                **trelicada)
         return self.lajes[nome]
+
+    def add_carga_de_laje(self, nome: str, permanente: float = 0.0,
+                          acidental: float = 0.0,
+                          descricao: str = "") -> CargaDeLaje:
+        self.cargas_de_laje[nome] = CargaDeLaje(nome, permanente, acidental,
+                                                descricao)
+        return self.cargas_de_laje[nome]
+
+    def aplicar_cargas_de_laje(self) -> None:
+        """Resolve ``Laje.tipo_carga`` em ``permanente``/``acidental``.
+
+        Toda laje com ``tipo_carga`` preenchido recebe os valores do tipo
+        nomeado, substituindo o que estivesse digitado nela — o tipo é a
+        fonte, não um valor inicial que a laje possa desviar. Chame de novo
+        depois de mudar um tipo de carga para propagar aos painéis que o usam;
+        é assim que a setorização barateia o ajuste em lote.
+        """
+        for nome, laje in list(self.lajes.items()):
+            if not laje.tipo_carga:
+                continue
+            tipo = self.cargas_de_laje.get(laje.tipo_carga)
+            if tipo is None:
+                raise ErroDeModelo(
+                    f"laje '{nome}' usa o tipo de carga '{laje.tipo_carga}', "
+                    "que não existe")
+            self.lajes[nome] = replace(laje, permanente=tipo.permanente,
+                                       acidental=tipo.acidental)
 
     def add_mola(self, no: str, kx: float = 0.0, ky: float = 0.0,
                  kz: float = 0.0, krx: float = 0.0, kry: float = 0.0,
@@ -517,6 +684,12 @@ class Modelo:
             raise ErroDeModelo("modelo sem barras")
         if not self.apoios and not self.molas:
             raise ErroDeModelo("modelo sem apoios nem molas")
+        if self.calculo.fonte_vigas not in FONTES_DAS_VIGAS:
+            raise ErroDeModelo(
+                f"fonte dos esforços das vigas '{self.calculo.fonte_vigas}' "
+                f"inválida; use um de {', '.join(FONTES_DAS_VIGAS)}")
+        if self.calculo.grelha and self.calculo.malha_grelha <= 0.0:
+            raise ErroDeModelo("a malha da grelha tem de ser positiva")
 
         for b in self.barras.values():
             for no in (b.no_i, b.no_j):
@@ -556,10 +729,48 @@ class Modelo:
                 if no not in self.nos:
                     raise ErroDeModelo(
                         f"laje '{laje.nome}' cita o nó '{no}', que não existe")
-            if laje.espessura > 0.0 and laje.material not in self.materiais:
+            if laje.altura > 0.0 and laje.material not in self.materiais:
                 raise ErroDeModelo(
                     f"laje '{laje.nome}' tem espessura mas o material "
                     f"'{laje.material}' não existe; sem ele não há como pesar")
+            if laje.tipo not in ("macica", "trelicada"):
+                raise ErroDeModelo(
+                    f"laje '{laje.nome}': tipo '{laje.tipo}' desconhecido; use "
+                    "'macica' ou 'trelicada'")
+            if laje.balanco < 0.0:
+                raise ErroDeModelo(
+                    f"laje '{laje.nome}': o balanço não pode ser negativo")
+            if laje.em_balanco:
+                if laje.trelicada:
+                    raise ErroDeModelo(
+                        f"laje '{laje.nome}': laje em balanço só maciça — o "
+                        "programa de Lajes não arma treliçada em balanço")
+                if laje.sentido not in SENTIDOS_DE_BALANCO:
+                    raise ErroDeModelo(
+                        f"laje '{laje.nome}': o sentido do balanço é um de "
+                        f"{', '.join(SENTIDOS_DE_BALANCO)}")
+                a, c = self.ponto(laje.no_a), self.ponto(laje.no_c)
+                eixo = 0 if laje.sentido[1] == "y" else 1
+                if abs(a[eixo] - c[eixo]) < 1e-9 or \
+                        abs(a[1 - eixo] - c[1 - eixo]) > 1e-6 or \
+                        abs(a[2] - c[2]) > 1e-6:
+                    raise ErroDeModelo(
+                        f"laje '{laje.nome}': em balanço, os dois nós são as "
+                        "pontas do lado apoiado — na mesma cota e alinhados "
+                        "na direção perpendicular ao balanço")
+            if laje.trelicada:
+                if laje.direcao not in ("x", "y"):
+                    raise ErroDeModelo(
+                        f"laje '{laje.nome}': a direção das nervuras é 'x' ou "
+                        "'y'")
+                if laje.capa <= 0.0 or laje.altura_enchimento <= 0.0:
+                    raise ErroDeModelo(
+                        f"laje '{laje.nome}': a treliçada precisa de capa e "
+                        "de altura de enchimento positivas")
+                if laje.base_vigota - 0.03 <= 0.0 or laje.largura_bloco <= 0.0:
+                    raise ErroDeModelo(
+                        f"laje '{laje.nome}': base da vigota e largura do "
+                        "bloco inválidas")
 
         for caso in self.casos.values():
             for c in caso.nodais:

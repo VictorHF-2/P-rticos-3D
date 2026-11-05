@@ -51,6 +51,9 @@ MARCAS_DE_ERRO = (
     "em vez de engastado",
     "acima do limite",
     "estourou",
+    "precisa de apoio",
+    "não pôde ser calculada",
+    "não vale na nervurada",
 )
 
 

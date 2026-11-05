@@ -43,11 +43,17 @@ AGREGADOS = tuple(ALFA_E)
 MODULOS = ("Ecs", "Eci")
 NATUREZAS = ("permanente", "variavel")
 SISTEMAS = ("local", "global")
+TIPOS_DE_LAJE = ("macica", "trelicada")
+ENCHIMENTOS = ("EPS", "Cerâmico")
+TRELICAS = ("TR 8644", "TR 8645", "TR 12645", "TR 12646", "TR 16745",
+            "TR 16746", "TR 20745", "TR 20756", "TR 25856", "TR 25858",
+            "TR 30856", "TR 30858")
 LIBERACOES = ("", "ry, rz", "rx, ry, rz", "u", "v, w", "ry", "rz")
 
 # Colunas que o programa calcula quando o tipo não é genérico.
 CALCULADAS = ("A", "Iy", "Iz", "J", "Asy", "Asz")
 CALCULADAS_MATERIAL = ("E",)
+CALCULADAS_LAJE = ("permanente", "acidental")
 
 
 def para_float(texto: str, campo: str) -> float:
@@ -108,6 +114,13 @@ class TabelaDeRegistros(QWidget):
     """Tabela editável de linhas homogêneas, com acrescentar e remover."""
 
     alterado = Signal()
+    #: Um dicionário por linha removida em ``remover_selecionadas`` (``chave
+    #: da coluna -> texto``) — a linha inteira, não só o nome, porque uma
+    #: cascata pode precisar de outra coluna (a barra apagada carrega
+    #: ``no_i``/``no_j``, não só o próprio nome). Quem ouve decide se isso
+    #: exige exclusão em cascata noutra tabela (ver
+    #: ``PainelDeDados._remover_cargas_da_barra``).
+    linhas_removidas = Signal(list)
 
     def __init__(self, colunas: list[Coluna], rotulo: str) -> None:
         super().__init__()
@@ -254,14 +267,45 @@ class TabelaDeRegistros(QWidget):
     def remover_selecionadas(self) -> None:
         linhas = sorted({i.row() for i in self.tabela.selectedIndexes()},
                         reverse=True)
+        removidos = []
         for linha in linhas:
+            registro = {}
+            for i, coluna in enumerate(self.colunas):
+                item = self.tabela.item(linha, i)
+                registro[coluna.chave] = ("" if item is None
+                                          else item.text().strip())
+            if registro.get(self.colunas[0].chave):
+                removidos.append(registro)
             self.tabela.removeRow(linha)
         if linhas:
             self.alterado.emit()
+        if removidos:
+            self.linhas_removidas.emit(removidos)
+
+    def remover_onde(self, chave: str, valores: set[str]) -> int:
+        """Remove as linhas cujo campo ``chave`` está em ``valores``.
+
+        É a exclusão em cascata: uma barra apagada não pode deixar uma carga
+        distribuída apontando para um nome que não existe mais — sem isto,
+        "Aplicar tabelas" só reprovava o modelo com um erro de referência, e
+        quem apagou a barra tinha de caçar a carga órfã na mão.
+        """
+        coluna = self._indice.get(chave)
+        if coluna is None or not valores:
+            return 0
+        removidas = 0
+        for linha in reversed(range(self.tabela.rowCount())):
+            item = self.tabela.item(linha, coluna)
+            if item is not None and item.text().strip() in valores:
+                self.tabela.removeRow(linha)
+                removidas += 1
+        if removidas:
+            self.alterado.emit()
+        return removidas
 
 
 # ---------------------------------------------------------------------------
-# As dez tabelas do modelo
+# As doze tabelas do modelo
 # ---------------------------------------------------------------------------
 
 COLUNAS = {
@@ -350,10 +394,54 @@ COLUNAS = {
         Coluna("Espessura (m)", "espessura", "numero", 105,
                "O peso próprio da laje sai daqui, pelo γ do material"),
         Coluna("Material", "material", "texto", 105, fonte="materiais"),
+        Coluna("Tipo de carga", "tipo_carga", "texto", 130,
+               "Escolha um tipo da aba 'Carga nas lajes' para preencher "
+               "Revestimento e Acidental sozinhos; em branco, digite os "
+               "dois à mão",
+               fonte="cargas_lajes", livre=True),
         Coluna("Revestimento (kN/m²)", "permanente", "numero", 150,
-               "Permanente além do peso próprio: contrapiso, forro, piso"),
+               "Permanente além do peso próprio: contrapiso, forro, piso. "
+               "Calculado quando há Tipo de carga"),
         Coluna("Acidental (kN/m²)", "acidental", "numero", 140,
-               "Vai para o caso variável, não para o permanente"),
+               "Vai para o caso variável, não para o permanente. "
+               "Calculado quando há Tipo de carga"),
+        Coluna("Laje", "tipo", "texto", 90, lista=TIPOS_DE_LAJE,
+               ajuda="Maciça, ou treliçada (vigotas com treliça, armada numa "
+                     "direção só)"),
+        Coluna("Nervuras", "direcao", "texto", 75, lista=("x", "y"),
+               ajuda="Treliçada: direção das nervuras. A laje apoia só nas "
+                     "duas vigas perpendiculares a elas"),
+        Coluna("Treliça", "trelica", "texto", 95, lista=TRELICAS,
+               ajuda="Treliçada: a treliça eletrossoldada (NBR 14862)"),
+        Coluna("Enchimento", "enchimento", "texto", 95, lista=ENCHIMENTOS,
+               ajuda="Treliçada: material do bloco de enchimento"),
+        Coluna("h enchimento (m)", "altura_enchimento", "numero", 115,
+               "Treliçada: altura do bloco de enchimento"),
+        Coluna("Capa (m)", "capa", "numero", 80,
+               "Treliçada: capa de concreto sobre os blocos (≥ 4 cm, "
+               "13.2.4.2)"),
+        Coluna("Bloco (m)", "largura_bloco", "numero", 80,
+               "Treliçada: largura do bloco de enchimento (Le)"),
+        Coluna("Base vigota (m)", "base_vigota", "numero", 110,
+               "Treliçada: largura da base da vigota pré-moldada"),
+        Coluna("Balanço (m)", "balanco", "numero", 90,
+               "Laje em balanço: do eixo da viga de apoio até a borda "
+               "livre. Aí Canto A e Canto oposto são as pontas do lado "
+               "apoiado. Zero = laje apoiada nas quatro vigas"),
+        Coluna("Sentido", "sentido", "texto", 75,
+               lista=("", "+x", "-x", "+y", "-y"),
+               ajuda="Laje em balanço: para onde ela avança a partir do "
+                     "lado apoiado"),
+    ],
+    "cargas_lajes": [
+        Coluna("Nome", "nome", "texto", 120,
+               "Ex.: corredor, biblioteca, lavanderia, dormitório"),
+        Coluna("Descrição", "descricao", "texto", 220,
+               "Nota livre; não entra em nenhuma conta"),
+        Coluna("Revestimento (kN/m²)", "permanente", "numero", 150,
+               "Permanente além do peso próprio, para toda laje deste tipo"),
+        Coluna("Acidental (kN/m²)", "acidental", "numero", 140,
+               "Vai para o caso variável, para toda laje deste tipo"),
     ],
     "casos": [
         Coluna("Nome", "nome", "texto", 130),
@@ -386,6 +474,10 @@ COLUNAS = {
                "Vazio: carga uniforme. Zero: carga que morre na ponta"),
         Coluna("qz fim", "qz_fim", "opcional", 75,
                "Vazio: carga uniforme. Zero: carga que morre na ponta"),
+        Coluna("Origem", "origem", "texto", 90,
+               "De onde a carga veio quando não foi digitada: 'laje:L1' é o "
+               "quinhão da laje L1. A laje em grelha tira estas cargas das "
+               "vigas e as devolve à laje"),
     ],
     "recalques": [
         Coluna("Caso", "caso", "texto", 120, fonte="casos"),
@@ -404,6 +496,7 @@ ROTULOS = {
     "apoios": ("Apoios", "apoio"),
     "molas": ("Molas", "mola"),
     "lajes": ("Lajes", "laje"),
+    "cargas_lajes": ("Carga nas lajes", "tipo de carga"),
     "casos": ("Casos de carga", "caso"),
     "nodais": ("Cargas nodais", "carga"),
     "distribuidas": ("Cargas distribuídas", "carga"),
@@ -412,23 +505,49 @@ ROTULOS = {
 
 # De onde cada lista suspensa tira os nomes.
 CHAVE_DO_NOME = {"nos": "nome", "barras": "nome", "materiais": "nome",
-                 "secoes": "nome", "casos": "nome"}
+                 "secoes": "nome", "casos": "nome", "cargas_lajes": "nome"}
+
+#: As doze tabelas agrupadas em três abas principais, cada uma com as suas
+#: sub-abas. Antes eram onze abas soltas lado a lado — e onze é congestionado
+#: em qualquer resolução, o texto do rótulo já começa a truncar por volta da
+#: sétima. Agrupado por assunto, cada aba principal cabe com folga, e o
+#: agrupamento segue a ordem de preenchimento de um modelo novo: primeiro o
+#: que não depende de geometria (materiais, seções, casos, os tipos de carga
+#: de laje), depois a geometria em si, depois as cargas que a usam.
+GRUPOS = [
+    ("Inicial", ("materiais", "secoes", "casos", "cargas_lajes")),
+    ("Geometria", ("nos", "barras", "apoios", "molas", "lajes")),
+    ("Cargas", ("nodais", "distribuidas", "recalques")),
+]
 
 
 class PainelDeDados(QTabWidget):
-    """As dez tabelas, ligadas entre si pelas listas suspensas."""
+    """As doze tabelas, agrupadas em três abas e ligadas pelas listas suspensas.
+
+    O agrupamento é só de apresentação — ``self.tabelas`` continua um
+    dicionário achatado por chave, igual antes, e é dali que o resto do
+    programa lê e escreve. Quem muda é só onde a tabela aparece: dentro de
+    ``Inicial``, ``Geometria`` ou ``Cargas``, e não mais as doze lado a lado.
+    """
 
     alterado = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.tabelas: dict[str, TabelaDeRegistros] = {}
-        for chave, colunas in COLUNAS.items():
-            titulo, singular = ROTULOS[chave]
-            tabela = TabelaDeRegistros(colunas, singular)
-            tabela.alterado.connect(self.alterado.emit)
-            self.tabelas[chave] = tabela
-            self.addTab(tabela, titulo)
+        #: a sub-aba de cada grupo, para quem quiser abrir uma delas por
+        #: código (o assistente, por exemplo, pode querer pousar em "Cargas")
+        self.subabas: dict[str, QTabWidget] = {}
+        for titulo_grupo, chaves in GRUPOS:
+            sub = QTabWidget()
+            for chave in chaves:
+                titulo, singular = ROTULOS[chave]
+                tabela = TabelaDeRegistros(COLUNAS[chave], singular)
+                tabela.alterado.connect(self.alterado.emit)
+                self.tabelas[chave] = tabela
+                sub.addTab(tabela, titulo)
+            self.subabas[titulo_grupo] = sub
+            self.addTab(sub, titulo_grupo)
 
         fontes = {chave: (lambda c=chave: self.tabelas[c].valores(
             CHAVE_DO_NOME[c])) for chave in CHAVE_DO_NOME}
@@ -438,6 +557,54 @@ class PainelDeDados(QTabWidget):
         self.tabelas["secoes"].tabela.itemChanged.connect(self._recalcular_secao)
         self.tabelas["materiais"].tabela.itemChanged.connect(
             self._recalcular_material)
+        self.tabelas["lajes"].tabela.itemChanged.connect(
+            self._recalcular_carga_de_laje)
+        self.tabelas["barras"].linhas_removidas.connect(
+            self._remover_cargas_da_barra)
+
+    # -- exclusão em cascata -------------------------------------------------
+
+    def _remover_cargas_da_barra(self, registros: list[dict]) -> None:
+        """Apagar uma barra apaga com ela as cargas distribuídas que a
+        referenciam — senão "Aplicar tabelas" reprovaria o modelo com uma
+        carga apontando para uma barra que não existe mais. Depois, verifica
+        se algum dos dois nós da barra ficou sem barra nenhuma tocando nele
+        (ver ``_remover_nos_orfaos``)."""
+        nomes = {r["nome"] for r in registros if r.get("nome")}
+        if nomes:
+            self.tabelas["distribuidas"].remover_onde("barra", nomes)
+        self._remover_nos_orfaos(registros)
+
+    def _remover_nos_orfaos(self, barras_removidas: list[dict]) -> None:
+        """Um nó que só a barra apagada tocava deixa de fazer sentido no
+        modelo, e desaparece com ela — junto com o apoio, a mola, o recalque
+        e a carga nodal que ele tivesse. O exemplo que motivou isto: apagar o
+        pilar da base de um pórtico gerado pelo assistente apaga, com ele, o
+        engaste e as cargas daquele nó — mas o nó do **topo** do pilar fica,
+        porque a viga continua chegando nele.
+
+        Um nó que uma laje ainda referencia (canto do painel) **não** é
+        considerado órfão, mesmo sem barra nenhuma — apagá-lo quebraria a
+        laje, e isso exigiria decidir o que fazer com ela, o que não foi
+        pedido.
+        """
+        candidatos = {r[campo] for r in barras_removidas
+                     for campo in ("no_i", "no_j") if r.get(campo)}
+        if not candidatos:
+            return
+
+        barras = self.tabelas["barras"]
+        tocados = set(barras.valores("no_i")) | set(barras.valores("no_j"))
+        lajes = self.tabelas["lajes"]
+        referenciados_por_laje = (set(lajes.valores("no_a"))
+                                  | set(lajes.valores("no_c")))
+        orfaos = candidatos - tocados - referenciados_por_laje
+        if not orfaos:
+            return
+
+        self.tabelas["nos"].remover_onde("nome", orfaos)
+        for chave in ("apoios", "molas", "recalques", "nodais"):
+            self.tabelas[chave].remover_onde("no", orfaos)
 
     # -- materiais ---------------------------------------------------------
 
@@ -513,6 +680,48 @@ class PainelDeDados(QTabWidget):
                 celula.setToolTip("")
         tabela.tabela.blockSignals(False)
 
+    # -- carga nas lajes -----------------------------------------------------
+
+    def _recalcular_carga_de_laje(self, item: QTableWidgetItem) -> None:
+        """Preenche Revestimento/Acidental quando o Tipo de carga é escolhido.
+
+        A mesma regra da seção calculada: o **tipo** é a fonte, não um valor
+        inicial que a laje possa desviar depois. Escolhido um tipo que existe
+        na aba "Carga nas lajes", as duas colunas ficam travadas com o valor
+        dele; em branco, ou com um nome que não bate com tipo nenhum, elas
+        voltam a aceitar digitação livre.
+        """
+        tabela = self.tabelas["lajes"]
+        indice = tabela._indice
+        if item.column() != indice["tipo_carga"]:
+            return
+
+        linha = item.row()
+        nome_tipo = item.text().strip()
+
+        tipos = self.tabelas["cargas_lajes"]
+        i_tipos = tipos._indice
+        encontrado = None
+        for r in range(tipos.tabela.rowCount()):
+            celula = tipos.tabela.item(r, i_tipos["nome"])
+            if celula is not None and celula.text().strip() == nome_tipo:
+                encontrado = r
+                break
+
+        if not nome_tipo or encontrado is None:
+            self._travar(tabela, linha, CALCULADAS_LAJE, False)
+            return
+
+        def valor_do_tipo(chave: str) -> str:
+            celula = tipos.tabela.item(encontrado, i_tipos[chave])
+            return "" if celula is None else celula.text().strip() or "0"
+
+        tabela.tabela.blockSignals(True)
+        for chave in CALCULADAS_LAJE:
+            self._escrever(tabela, linha, chave, valor_do_tipo(chave))
+        tabela.tabela.blockSignals(False)
+        self._travar(tabela, linha, CALCULADAS_LAJE, True)
+
     # -- seções ------------------------------------------------------------
 
     def _recalcular_secao(self, item: QTableWidgetItem) -> None:
@@ -568,7 +777,9 @@ class PainelDeDados(QTabWidget):
         """
         for chave, coluna, refazer in (("secoes", "tipo", self._recalcular_secao),
                                        ("materiais", "tipo",
-                                        self._recalcular_material)):
+                                        self._recalcular_material),
+                                       ("lajes", "tipo_carga",
+                                        self._recalcular_carga_de_laje)):
             tabela = self.tabelas[chave]
             for linha in range(tabela.tabela.rowCount()):
                 item = tabela.tabela.item(linha, tabela._indice[coluna])

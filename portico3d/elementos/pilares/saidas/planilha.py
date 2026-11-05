@@ -32,6 +32,7 @@ from .estilo_planilha import (COR, NF, cabecalho, expressao,
                               normalizar_alturas, nota, preparar_memoria,
                               preparar_tabela, secao, separador, titulo,
                               veredito)
+from ..core.formato import num
 
 
 def _ok(passou: bool) -> str:
@@ -150,9 +151,11 @@ def _aba_solicitacoes(wb: Workbook, res: ResultadoPilar) -> None:
     m.formula("Ndc", "Nd,cálc =", f"={m.endereco('Nd')}*{m.endereco('f')}",
               "força normal majorada", NF["kN"])
     m.formula("nu", "ν =",
-              f"={m.endereco('Ndc')}/({m.endereco('Ac')}*{m.endereco('fcd')})",
-              "força normal adimensional", NF["adm"],
-              referencia="17.3.5.3.1", algebra="ν = Nd/(Ac·fcd)")
+              f"={m.endereco('Ndc')}/{m.endereco('gaman')}"
+              f"/({m.endereco('Ac')}*{m.endereco('fcd')})",
+              "força normal adimensional da 2ª ordem: sem γn, que majora "
+              "os esforços finais (nota da Tabela 13.1)", NF["adm"],
+              referencia="15.8.3.3.2", algebra="ν = Nd/(γn·Ac·fcd)")
 
     for d, (mt, mb, h, i, le) in (("x", ("Mtx", "Mbx", "hx", "ix", "lex")),
                                   ("y", ("Mty", "Mby", "hy", "iy", "ley"))):
@@ -188,14 +191,14 @@ def _aba_solicitacoes(wb: Workbook, res: ResultadoPilar) -> None:
             expr = (f"=IF({m.endereco(f'e1{d}')}<{m.endereco(f'emin{d}')},1,"
                     f"MIN(1,MAX(0.6+0.4*{m.endereco(f'MB{d}')}"
                     f"/{m.endereco(f'MA{d}')},0.4)))")
-            alg = "α_b = 0,60 + 0,40·MB/MA ≥ 0,40"
+            alg = "αb = 0,60 + 0,40·MB/MA ≥ 0,40"
         elif vinc == 2:
             expr = "=1"
-            alg = "α_b = 1,0 (cargas transversais)"
+            alg = "αb = 1,0 (cargas transversais)"
         else:
             expr = f"={e.alfa_b}"
-            alg = "α_b = 1,0 (balanço, item 15.8.2-c da NBR 6118:2026)"
-        m.formula(f"ab{d}", f"α_b,{d} =", expr, "", NF["coef"],
+            alg = "αb = 1,0 (balanço, item 15.8.2-c da NBR 6118:2026)"
+        m.formula(f"ab{d}", f"αb,{d} =", expr, "", NF["coef"],
                   referencia="15.8.2", algebra=alg)
         m.formula(f"lam{d}", f"λ{d} =",
                   f"={m.endereco(le)}/{m.endereco(i)}", "índice de esbeltez",
@@ -204,21 +207,50 @@ def _aba_solicitacoes(wb: Workbook, res: ResultadoPilar) -> None:
                   f"=MIN(90,MAX(35,(25+12.5*{m.endereco(f'e1{d}')}"
                   f"/{m.endereco(h)})/{m.endereco(f'ab{d}')}))",
                   "esbeltez limite", NF["coef"], referencia="15.8.2",
-                  algebra="λ1 = (25 + 12,5·e1/h)/α_b, 35 ≤ λ1 ≤ 90")
+                  algebra="λ1 = (25 + 12,5·e1/h)/αb, 35 ≤ λ1 ≤ 90")
+        m.valor(f"sempre{d}", f"2ª ordem sempre,{d} =",
+                1 if p.config.sempre_2a_ordem else 0,
+                "1 = imposta pelo projetista mesmo com λ ≤ λ1; 0 = só "
+                "quando λ > λ1", NF["coef"], entrada=True,
+                referencia="15.8.2")
         m.veredito(f"2ª ordem em {d}:",
                    f'=IF({m.endereco(f"lam{d}")}<={m.endereco(f"lam1{d}")},'
-                   f'"dispensada — OK","obrigatória")',
+                   f'IF({m.endereco(f"sempre{d}")}=1,"imposta pelo projetista",'
+                   f'"dispensada — OK"),"obrigatória")',
                    "item 15.8.2: dispensa quando λ ≤ λ1")
         m.veredito(f"λ{d} ≤ 200?",
                    f'=IF({m.endereco(f"lam{d}")}<=200,"OK",'
-                   f'"não atende — 15.8.1")',
-                   "acima de 200 a norma não admite o pilar")
+                   f'IF({m.endereco("Ndc")}<0.1*{m.endereco("fcd")}'
+                   f'*{m.endereco("Ac")},"OK, pouco comprimido",'
+                   f'"não atende — 15.8.1"))',
+                   "acima de 200 só o elemento pouco comprimido "
+                   "(Nd < 0,10 fcd Ac)")
 
-        m.formula(f"e1p{d}", f"e1,proj,{d} =",
-                  f"={m.endereco(f'ab{d}')}*MAX({m.endereco(f'e1{d}')},"
-                  f"{m.endereco(f'emin{d}')})",
-                  "excentricidade de 1ª ordem de projeto, com α_b",
-                  NF["cm"], referencia="15.8.3.3.2")
+        s2 = res.segunda_ordem[d]
+        if p.config.momento_minimo_metodo == "planilha":
+            m.formula(f"e1p{d}", f"e1,proj,{d} =",
+                      f"={m.endereco(f'ab{d}')}*MAX({m.endereco(f'e1{d}')},"
+                      f"{m.endereco(f'emin{d}')})",
+                      "excentricidade de 1ª ordem de projeto, com αb e o "
+                      "piso do mínimo", NF["cm"], referencia="15.8.3.3.2")
+        else:
+            m.formula(f"e1p{d}", f"e1,proj,{d} =",
+                      f"={m.endereco(f'ab{d}')}*{m.endereco(f'e1{d}')}",
+                      "excentricidade de 1ª ordem de projeto, com αb (o "
+                      "mínimo é verificado à parte, pela envoltória mínima)",
+                      NF["cm"], referencia="15.8.3.3.2")
+        m.valor(f"ecc{d}", f"e_cc,{d} =", s2.e_cc if s2.aplicavel else 0.0,
+                "fluência (15.8.4), calculada pelo programa; soma-se a e1 "
+                "como efeito imediato" if p.config.considerar_fluencia
+                else "fluência desligada nos critérios", NF["cm"],
+                entrada=True, referencia="15.8.4")
+        m.formula(f"e1a{d}", f"e1 + e_cc,{d} =",
+                  f"={m.endereco(f'e1p{d}')}+{m.endereco(f'ecc{d}')}",
+                  "excentricidade que a 2ª ordem amplifica", NF["cm"],
+                  referencia="15.8.4")
+        m.valor(f"g1{d}", f"γn1,{d} =", res.esbeltez[d].gamma_n1,
+                "majora só a 2ª ordem quando λ > 140", NF["coef"],
+                entrada=True, referencia="15.8.1")
         m.formula(f"curv{d}", f"(1/r){d} =",
                   f"=MIN(0.005/({m.endereco(h)}*({m.endereco('nu')}+0.5)),"
                   f"0.005/{m.endereco(h)})",
@@ -231,12 +263,12 @@ def _aba_solicitacoes(wb: Workbook, res: ResultadoPilar) -> None:
                   referencia="15.8.3.3.2", algebra="e2 = le²/10 · 1/r")
         m.formula(f"B{d}", f"B{d} =",
                   f"={m.endereco(h)}/5-{m.endereco(le)}^2"
-                  f"/(1600*{m.endereco(h)})-{m.endereco(f'e1p{d}')}",
+                  f"/(1600*{m.endereco(h)})-{m.endereco(f'e1a{d}')}",
                   "coeficiente da quadrática da rigidez", NF["coef"],
                   referencia="15.8.3.3.3",
                   algebra="e² + (h/5 − le²/1600h − e1)·e − h·e1/5 = 0")
         m.formula(f"C{d}", f"C{d} =",
-                  f"=-{m.endereco(h)}*{m.endereco(f'e1p{d}')}/5", "",
+                  f"=-{m.endereco(h)}*{m.endereco(f'e1a{d}')}/5", "",
                   NF["coef"], referencia="15.8.3.3.3")
         m.formula(f"ed{d}", f"ed,{d} =",
                   f"=(-{m.endereco(f'B{d}')}+SQRT({m.endereco(f'B{d}')}^2"
@@ -245,22 +277,33 @@ def _aba_solicitacoes(wb: Workbook, res: ResultadoPilar) -> None:
                   referencia="15.8.3.3.3")
         m.formula(f"e2r{d}", f"e2,rig,{d} =",
                   f"=MAX({m.endereco(f'ed{d}')}"
-                  f"-{m.endereco(f'e1p{d}')},0)",
+                  f"-{m.endereco(f'e1a{d}')},0)",
                   "2ª ordem pela rigidez aproximada", NF["cm"],
                   referencia="15.8.3.3.3")
         criterio = p.config.metodo_2a_ordem
-        if criterio == "curvatura":
-            expr2 = f"={m.endereco(f'e2c{d}')}"
-        elif criterio == "rigidez":
-            expr2 = f"={m.endereco(f'e2r{d}')}"
+        if criterio in ("diagrama", "geral"):
+            # sem fórmula viva: a rigidez sai da relação momento-curvatura da
+            # seção armada (Figura 15.1), que a planilha não integra
+            m.valor(f"e2{d}", f"e2,{d} =", s2.e2 if s2.aplicavel else 0.0,
+                    f"calculado pelo programa -- {s2.metodo}; inclui e_cc e "
+                    f"γn1. Não é fórmula viva", NF["cm"], entrada=True,
+                    referencia="15.8.3.3.4" if criterio == "diagrama"
+                    else "15.8.3.2")
         else:
-            expr2 = (f"=MIN({m.endereco(f'e2c{d}')},"
-                     f"{m.endereco(f'e2r{d}')})")
-        m.formula(f"e2{d}", f"e2,{d} =",
-                  f"=IF({m.endereco(f'lam{d}')}>{m.endereco(f'lam1{d}')},"
-                  f"{expr2[1:]},0)",
-                  f"adotado pelo critério '{criterio}'", NF["cm"],
-                  referencia="15.8.3.3")
+            if criterio == "curvatura":
+                expr2 = f"={m.endereco(f'e2c{d}')}"
+            elif criterio == "rigidez":
+                expr2 = f"={m.endereco(f'e2r{d}')}"
+            else:
+                expr2 = (f"=MIN({m.endereco(f'e2c{d}')},"
+                         f"{m.endereco(f'e2r{d}')})")
+            m.formula(f"e2{d}", f"e2,{d} =",
+                      f"=IF(OR({m.endereco(f'lam{d}')}>{m.endereco(f'lam1{d}')},"
+                      f"{m.endereco(f'sempre{d}')}=1),"
+                      f"{m.endereco(f'g1{d}')}*{expr2[1:]}"
+                      f"+{m.endereco(f'ecc{d}')},0)",
+                      f"adotado pelo critério '{criterio}', com γn1 e e_cc",
+                      NF["cm"], referencia="15.8.3.3")
 
     _situacoes_vivas(m, res)
     normalizar_alturas(wb)
@@ -316,10 +359,25 @@ def _comprimento_equivalente(m: Memoria, res: ResultadoPilar) -> None:
 
 
 def _situacoes_vivas(m: Memoria, res: ResultadoPilar) -> None:
-    """As quatro situações de cálculo, com fórmulas."""
+    """As situações de cálculo, com fórmulas -- as do critério adotado."""
     p = res.pilar
+    if p.config.metodo_2a_ordem == "geral":
+        m.secao("Situações de cálculo — método geral (15.8.3.2)", COR["elu"])
+        m.nota("Uma situação por seção da barra discretizada, com os "
+               "momentos totais (1ª + 2ª ordem) da análise não linear. "
+               "Calculadas pelo programa; não são fórmulas vivas.")
+        for s_ in res.situacoes:
+            m.valor("", f"Mx — {s_.nome} =", s_.Mx,
+                    f"kN·cm, como o resto da aba — {s_.descricao}",
+                    NF["kNm"], entrada=True)
+            m.valor("", f"My — {s_.nome} =", s_.My, "kN·cm", NF["kNm"],
+                    entrada=True)
+        return
+    if p.config.momento_minimo_metodo != "planilha":
+        _situacoes_envoltoria(m, res)
+        return
     m.secao("Situações de cálculo", COR["elu"])
-    m.nota("Extremidades A e B sem 2ª ordem; seção intermediária com α_b e "
+    m.nota("Extremidades A e B sem 2ª ordem; seção intermediária com αb e "
            "e2. O momento mínimo é imposto numa direção de cada vez "
            "(item 11.3.3.4.3).")
     combinar = p.config.combinar_2a_ordem_biaxial
@@ -380,6 +438,55 @@ def _situacoes_vivas(m: Memoria, res: ResultadoPilar) -> None:
            "verificação, porém, é feita contra todas as quatro.")
 
 
+def _situacoes_envoltoria(m: Memoria, res: ResultadoPilar) -> None:
+    """Situações do critério da envoltória mínima: o momento real, sem piso
+    -- o mínimo é verificado à parte (item 3.1 da apostila)."""
+    p = res.pilar
+    m.secao("Situações de cálculo", COR["elu"])
+    m.nota("Momento real, sem o piso do mínimo, que é verificado à parte pela "
+           "envoltória mínima (aba Verificação). Valores em módulo; o "
+           "programa leva o sentido físico de M1d,A, que importa com "
+           "armadura assimétrica.")
+    ab = {d: m.endereco(f"ab{d}") for d in "xy"}
+    e1 = {d: m.endereco(f"e1{d}") for d in "xy"}
+    e2 = {d: m.endereco(f"e2{d}") for d in "xy"}
+    if p.config.combinar_2a_ordem_biaxial:
+        definicoes = [
+            ("Extremo", f"={e1['x']}", f"={e1['y']}",
+             "extremo do pilar, momento real de 1ª ordem"),
+            ("Meio", f"={ab['x']}*{e1['x']}+{e2['x']}",
+             f"={ab['y']}*{e1['y']}+{e2['y']}",
+             "meio do pilar, 2ª ordem nas duas direções"),
+        ]
+    else:
+        definicoes = [
+            ("Extremo", f"={e1['x']}", f"={e1['y']}",
+             "extremo do pilar, momento real de 1ª ordem"),
+            ("Meio (x)", f"={ab['x']}*{e1['x']}+{e2['x']}",
+             f"={ab['y']}*{e1['y']}", "meio do pilar, 2ª ordem em x"),
+            ("Meio (y)", f"={ab['x']}*{e1['x']}",
+             f"={ab['y']}*{e1['y']}+{e2['y']}",
+             "meio do pilar, 2ª ordem em y"),
+        ]
+    enderecos = []
+    for i, (nome, fx, fy, descricao) in enumerate(definicoes):
+        chave = f"E{i}"
+        ex = m.formula(f"ex{chave}", f"ex — {nome} =", fx, descricao,
+                       NF["cm"])
+        ey = m.formula(f"ey{chave}", f"ey — {nome} =", fy, "", NF["cm"])
+        m.formula(f"e{chave}", f"|e| — {nome} =", f"=SQRT({ex}^2+{ey}^2)",
+                  "excentricidade resultante", NF["cm"])
+        m.formula(f"Mx{chave}", f"Mx — {nome} =",
+                  f"={m.endereco('Ndc')}*ABS({ex})",
+                  "momento de cálculo, kN·cm", NF["kNm"])
+        m.formula(f"My{chave}", f"My — {nome} =",
+                  f"={m.endereco('Ndc')}*ABS({ey})", "kN·cm", NF["kNm"])
+        enderecos.append(m.endereco(f"e{chave}"))
+        m.espaco()
+    m.formula("emax", "|e| governante =", f"=MAX({','.join(enderecos)})",
+              "maior excentricidade resultante", NF["cm"])
+
+
 # ---------------------------------------------------------------------------
 # Demais abas
 # ---------------------------------------------------------------------------
@@ -413,13 +520,18 @@ def _aba_dimensionamento(wb: Workbook, res: ResultadoPilar) -> None:
         m.valor("", "d' =", d_linha, "face ao eixo da camada de barras",
                 NF["cm"], entrada=True)
         m.valor("", "d =", h - d_linha, "altura útil", NF["cm"])
-        m.valor("", "α_c =", p.concreto.alfa_c, "", NF["coef"],
+        m.valor("", "αc =", p.concreto.alfa_c, "", NF["coef"],
+                referencia="17.2.2")
+        m.valor("", "ηc =", p.concreto.eta_c, "fragilidade do concreto",
+                NF["coef"], referencia="8.2.10.1")
+        m.valor("", "αc·ηc =", p.concreto.fator_bloco,
+                "tensão do bloco retangular / fcd", NF["coef"],
                 referencia="17.2.2")
         m.valor("", "λ (bloco) =", p.concreto.lambda_bloco, "", NF["coef"],
                 referencia="17.2.2")
         m.valor("", "fcd =", p.concreto.fcd_kNcm2, "", NF["kNcm2"])
         m.valor("", "fyd =", p.aco.fyd_kNcm2, "", NF["kNcm2"])
-        m.valor("", "ε_yd =", p.aco.eps_yd_mil, "deformação de escoamento",
+        m.valor("", "εyd =", p.aco.eps_yd_mil, "deformação de escoamento",
                 NF["coef3"])
 
         m.secao("Esforços e excentricidades")
@@ -466,7 +578,7 @@ def _aba_verificacao(wb: Workbook, res: ResultadoPilar) -> None:
                    col_fim=8)
     linha = nota(ws, linha, f"Item 17.2.5 — (MSd,x/MRd,xx)^α + "
                             f"(MSd,y/MRd,yy)^α ≤ 1, com α = "
-                            f"{p.alfa_interacao:g}", col_fim=8)
+                            f"{num(p.alfa_interacao)}", col_fim=8)
     linha = separador(ws, linha)
     linha = cabecalho(ws, linha, ["Situação", "MSd,x (kN·m)",
                                   "MRd,xx (kN·m)", "MSd,y (kN·m)",
@@ -475,7 +587,8 @@ def _aba_verificacao(wb: Workbook, res: ResultadoPilar) -> None:
         linha = linha_tabela(ws, linha, [
             v.situacao.nome, v.situacao.Mx / 100.0, v.MRd_xx / 100.0,
             v.situacao.My / 100.0, v.MRd_yy / 100.0, v.interacao,
-            "OK" if v.ok_interacao else "não atende"],
+            "OK" if v.ok_interacao else
+            ("informativa" if not v.interacao_exigida else "não atende")],
             [None, NF["kNm"], NF["kNm"], NF["kNm"], NF["kNm"], NF["perc"],
              None])
     linha = separador(ws, linha)
@@ -497,8 +610,8 @@ def _aba_verificacao(wb: Workbook, res: ResultadoPilar) -> None:
             continue
         if v.MRd_envoltoria <= 0:
             continue
-        mrd = (f"[{v.MRd_envoltoria_inferior / 100.0:.1f}; "
-               f"{v.MRd_envoltoria / 100.0:.1f}]"
+        mrd = (f"[{num(v.MRd_envoltoria_inferior / 100.0, 1)}; "
+               f"{num(v.MRd_envoltoria / 100.0, 1)}]"
                if v.MRd_envoltoria_inferior > 0 else v.MRd_envoltoria / 100.0)
         linha = linha_tabela(ws, linha, [
             v.situacao.nome, v.MSd / 100.0, mrd,
@@ -546,6 +659,29 @@ def _aba_verificacao(wb: Workbook, res: ResultadoPilar) -> None:
                 "OK" if ok else "não atende"],
                 [None, NF["kNm"], NF["kNm"], NF["coef3"], None])
 
+    sv = res.servico
+    if sv is not None and sv.aplicavel:
+        linha = separador(ws, linha)
+        linha = secao(ws, linha,
+                      "Serviço — abertura de fissuras (ELS-W, 17.3.3.2)",
+                      col_fim=8)
+        linha = nota(ws, linha,
+                     f"Combinação frequente, estádio II com αe = "
+                     f"{num(sv.alfa_e)}; wk = min(wk1; wk2) da barra "
+                     f"tracionada mais exigida, contra "
+                     f"{num(sv.wk_limite, 2)} mm ({sv.origem_limite}).",
+                     col_fim=8)
+        linha = cabecalho(ws, linha, ["Cota", "Nk (kN)", "Mk,x (kN·m)",
+                                      "Mk,y (kN·m)", "σs máx (MPa)",
+                                      "wk (mm)", "Veredito"])
+        for c in sv.cotas:
+            ok = c.convergiu and c.wk_max <= sv.wk_limite + 1e-9
+            linha = linha_tabela(ws, linha, [
+                c.nome, c.N, c.Mx / 100.0, c.My / 100.0, c.sigma_s_max,
+                c.wk_max, "OK" if ok else "não atende"],
+                [None, NF["kNm"], NF["kNm"], NF["kNm"], NF["MPa"],
+                 NF["mm"], None])
+
     if res.conferencias:
         linha = separador(ws, linha)
         linha = secao(ws, linha, "Conferência entre os dois motores",
@@ -574,31 +710,39 @@ def _aba_detalhamento(wb: Workbook, res: ResultadoPilar) -> None:
                             "e 9.5.2.3")
     m = Memoria(ws, linha)
     m.secao("Armadura longitudinal")
-    m.valor("", "Bitola =", a.phi, "", NF["bitola"], referencia="18.4.2.1")
+    m.valor("", "Bitola =", a.phi, a.descricao_bitolas()
+            if len(a.por_bitola()) > 1 else "", NF["bitola"],
+            referencia="18.4.2.1")
     phi_max = arr_mod.bitola_maxima(p.secao)
-    m.veredito("10 mm ≤ ø ≤ h/8?", _ok(10.0 <= a.phi <= phi_max),
-               f"máximo: {phi_max:.1f} mm")
+    m.veredito("10 mm ≤ ø ≤ h/8?", _ok(10.0 <= a.phi_min and a.phi <= phi_max),
+               f"máximo: {num(phi_max, 1)} mm")
     m.valor("", "Nº de barras =", a.n_barras, "", NF["barras"])
-    m.valor("", "nx (face horizontal) =", a.nx, "", NF["inteiro"])
-    m.valor("", "ny (face vertical) =", a.ny, "", NF["inteiro"])
+    if p.secao.tipo.startswith("retangular"):
+        m.valor("", "nx (face horizontal) =", a.nx, "", NF["inteiro"])
+        m.valor("", "ny (face vertical) =", a.ny, "", NF["inteiro"])
     m.valor("", "As efetiva =", a.As, "", NF["cm2"])
-    m.valor("", "As necessária =", res.As_necessaria, "", NF["cm2"])
+    if res.dim_fechado:
+        m.valor("", "As necessária =", res.As_necessaria,
+                "roteiro de duas camadas (informativo)", NF["cm2"])
+    m.valor("", "As mínima =", res.As_minima, "", NF["cm2"],
+            referencia="17.3.5.3.1")
     m.valor("", "ρ =", res.taxa, "taxa geométrica", NF["perc"],
             referencia="17.3.5.3")
     from ..core.materiais import RHO_MAXIMO, rho_minimo
     rmin = rho_minimo(res.nu, p.concreto, p.aco)
-    m.veredito("ρ,mín ≤ ρ ≤ 8 %?", _ok(rmin <= res.taxa <= RHO_MAXIMO),
-               f"ρ,mín = {rmin * 100:.3f} %")
+    m.veredito("ρ,mín ≤ ρ ≤ 4 % (8 % na emenda)?",
+               _ok(rmin <= res.taxa <= RHO_MAXIMO),
+               f"ρ,mín = {num(rmin * 100, 3)} %")
     s_min = arr_mod.espacamento_livre_minimo(a.phi, p.ambiente.dmax_agregado)
     m.valor("", "Espaçamento livre =", a.espacamento_livre, "", NF["cm"],
             referencia="18.4.2.2")
     m.veredito("s ≥ s,mín?", _ok(a.espacamento_livre >= s_min - 1e-6),
-               f"s,mín = max(2 cm; ø; 1,2 d_máx) = {s_min:.1f} cm")
+               f"s,mín = max(2 cm; ø; 1,2 d_máx) = {num(s_min, 1)} cm")
     s_max = arr_mod.espacamento_eixos_maximo(p.secao)
     m.valor("", "Espaçamento entre eixos =", a.espacamento_eixos, "",
             NF["cm"], referencia="18.4.2.2")
     m.veredito("s ≤ s,máx?", _ok(a.espacamento_eixos <= s_max + 1e-6),
-               f"s,máx = min(2·menor dimensão; 40 cm) = {s_max:.1f} cm")
+               f"s,máx = min(2·menor dimensão; 40 cm) = {num(s_max, 1)} cm")
 
     e = res.estribos
     if e is not None:
@@ -606,14 +750,14 @@ def _aba_detalhamento(wb: Workbook, res: ResultadoPilar) -> None:
         m.valor("", "Bitola do estribo =", e.phi, "", NF["bitola"],
                 referencia="18.4.3")
         phi_t_min = est_mod.bitola_minima(a.phi)
-        m.veredito("ø_t ≥ max(5 mm; ø_l/4)?", _ok(e.phi >= phi_t_min - 1e-9),
-                   f"mínimo: {phi_t_min:.2f} mm")
+        m.veredito("øt ≥ max(5 mm; øl/4)?", _ok(e.phi >= phi_t_min - 1e-9),
+                   f"mínimo: {num(phi_t_min, 2)} mm")
         m.valor("", "Espaçamento =", e.s, "", NF["cm"], referencia="18.4.3")
         m.veredito("s ≤ s,máx?", _ok(e.s <= e.s_maximo + 1e-9),
-                   f"s,máx = {e.s_maximo:.1f} cm — governa: {e.motivo_s}")
+                   f"s,máx = {num(e.s_maximo, 1)} cm — governa: {e.motivo_s}")
         m.valor("", "Estribos no lance =", e.niveis, "", NF["inteiro"])
         m.valor("", "Comprimento do estribo =", e.comprimento, "", NF["cm"])
-        m.valor("", "Alcance 20 ø_t =", e.alcance,
+        m.valor("", "Alcance 20 øt =", e.alcance,
                 "proteção do estribo poligonal", NF["cm"],
                 referencia="18.2.4")
         m.valor("", "Grampos por nível =", e.n_suplementares, "",
@@ -627,10 +771,16 @@ def _aba_detalhamento(wb: Workbook, res: ResultadoPilar) -> None:
                 referencia="9.4.2.4")
         m.valor("", "lb,nec =", anc.lb_nec, "", NF["cm"],
                 referencia="9.4.2.5")
-        m.valor("", "l0c =", anc.l0c, "comprimento de espera", NF["cm"],
-                referencia="9.5.2.3")
-        m.valor("", "l0c,mín =", anc.l0c_min,
-                "max(0,6 lb; 15 ø; 20 cm)", NF["cm"], referencia="9.5.2.3")
+        if anc.tracionada:
+            m.valor("", "α0t =", anc.alfa_0t,
+                    "mais de 50 % das barras emendadas na seção", NF["coef"],
+                    referencia="Tabela 9.4")
+        m.valor("", f"{anc.simbolo} =", anc.l0c,
+                "emenda de barras tracionadas" if anc.tracionada
+                else "comprimento de espera", NF["cm"], referencia=anc.item)
+        m.valor("", f"{anc.simbolo},mín =", anc.l0c_min,
+                "max(0,3 α0t lb; 15 ø; 20 cm)" if anc.tracionada
+                else "max(0,6 lb; 15 ø; 20 cm)", NF["cm"], referencia=anc.item)
 
     m.secao("Quantitativo do lance")
     comprimento = p.lance.altura + (anc.l0c if anc else 0.0)
@@ -708,10 +858,10 @@ def _aba_quantitativo(wb: Workbook, res: ResultadoPilar) -> None:
                                   "Como sai"])
     for rotulo, valor, unidade, origem, fmt in (
             ("Volume de concreto", q.volume_concreto, "m³",
-             f"Ac × h = {p.secao.area:.0f} cm² × {q.altura:.0f} cm",
+             f"Ac × h = {num(p.secao.area, 0)} cm² × {num(q.altura, 0)} cm",
              NF["m3"]),
             ("Área de formas", q.area_formas, "m²",
-             f"perímetro × h = {q.perimetro:.1f} cm × {q.altura:.0f} cm",
+             f"perímetro × h = {num(q.perimetro, 1)} cm × {num(q.altura, 0)} cm",
              NF["m2"]),
             ("Massa de aço", q.massa_aco, "kg",
              "longitudinal (lance + espera) + transversal", NF["kg"]),
@@ -724,14 +874,41 @@ def _aba_quantitativo(wb: Workbook, res: ResultadoPilar) -> None:
     linha = secao(ws, linha, "Aço por bitola", col_fim=5)
     linha = nota(ws, linha,
                  f"Comprimento de corte da barra longitudinal = "
-                 f"{q.comprimento_barra:.0f} cm: o lance mais o comprimento "
+                 f"{num(q.comprimento_barra, 0)} cm: o lance mais o comprimento "
                  f"de espera l0c, que é como a barra é comprada.", col_fim=5)
     linha = cabecalho(ws, linha, ["Bitola", "Massa", "", ""])
     for phi, massa in sorted(q.aco.items()):
-        linha = linha_tabela(ws, linha, [f"ø{phi:g} mm", massa, "kg", ""],
+        linha = linha_tabela(ws, linha, [f"ø{num(phi)} mm", massa, "kg", ""],
                              [None, NF["kg"], None, None])
     linha = linha_tabela(ws, linha, ["Total", q.massa_aco, "kg", ""],
                          [None, NF["kg"], None, None])
+
+
+def _aba_combinacoes(wb: Workbook, res: ResultadoPilar) -> None:
+    """Uma linha por combinação de esforços, todas com a mesma armadura."""
+    ws = wb.create_sheet("Combinações")
+    preparar_tabela(ws, [18.0, 12.0, 12.0, 12.0, 12.0, 12.0, 11.0, 11.0, 14.0])
+    linha = titulo(ws, 2, f"{res.pilar.nome.upper()} — COMBINAÇÕES DE ESFORÇOS",
+                   col_fim=10)
+    linha = nota(ws, linha,
+                 f"Todas verificadas com a mesma armadura "
+                 f"({res.arranjo.descricao() if res.arranjo else '-'}). As "
+                 f"outras abas detalham a que governa: "
+                 f"{res.combinacao_governante}.", col_fim=10)
+    linha = separador(ws, linha)
+    linha = cabecalho(ws, linha, ["Combinação", "Nd (kN)", "Mx topo (kN·m)",
+                                  "Mx base (kN·m)", "My topo (kN·m)",
+                                  "My base (kN·m)", "F.S. mín.",
+                                  "F.S. do mínimo", "Veredito"])
+    for c in res.combinacoes:
+        linha = linha_tabela(ws, linha, [
+            c.nome + (" (governa)" if c.governante else ""), c.Nd,
+            c.Mx_topo, c.Mx_base, c.My_topo, c.My_base,
+            c.fs if math.isfinite(c.fs) else None,
+            c.fs_minimo if math.isfinite(c.fs_minimo) else None,
+            "OK" if c.ok else "não atende"],
+            [None, NF["kN"], NF["kNm"], NF["kNm"], NF["kNm"], NF["kNm"],
+             NF["coef"], NF["coef"], None])
 
 
 def gerar(res: ResultadoPilar, caminho: str) -> str:
@@ -739,6 +916,8 @@ def gerar(res: ResultadoPilar, caminho: str) -> str:
     wb = Workbook()
     wb.remove(wb.active)
     _aba_solicitacoes(wb, res)
+    if res.combinacoes:
+        _aba_combinacoes(wb, res)
     _aba_dimensionamento(wb, res)
     _aba_verificacao(wb, res)
     _aba_detalhamento(wb, res)
@@ -790,7 +969,7 @@ def _aba_quadro(wb: Workbook, res_projeto) -> None:
     linha = cabecalho(ws, linha, ["Bitola", "Massa", "", "", "", "", "", ""])
     for phi, massa in Q.aco_por_bitola.items():
         linha = linha_tabela(ws, linha,
-                             [f"ø{phi:g} mm", massa, "", "", "", "", "", ""],
+                             [f"ø{num(phi)} mm", massa, "", "", "", "", "", ""],
                              [None, NF["kg"]])
     linha = linha_tabela(ws, linha,
                          ["Total", Q.massa_aco, "", "", "", "", "", ""],

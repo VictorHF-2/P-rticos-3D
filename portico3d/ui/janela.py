@@ -14,30 +14,69 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox,
-                               QDoubleSpinBox, QFileDialog, QLabel,
+                               QDoubleSpinBox, QFileDialog, QInputDialog,
+                               QLabel,
                                QMainWindow, QMenu, QMessageBox,
-                               QPlainTextEdit, QSplitter, QToolButton,
-                               QVBoxLayout, QWidget)
+                               QPlainTextEdit, QPushButton, QSplitter,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from ..arquivo import gravar, ler
 from ..core.combinacoes import caso_efetivo, resolver_combinacoes
 from ..core.envoltoria import envoltoria
 from ..core.estabilidade import gama_z
+from dataclasses import replace
+
 from ..core.modelo import ErroDeModelo, Modelo
 from ..core.montagem import resolver
 from ..core.nbr6118 import (acoes_do_modelo, combinacoes_elu, combinacoes_els,
                             validar_acoes)
 from ..core.resultados import Resultado
+from ..core.dinamica import analisar_modal
 from ..core.segunda_ordem import flambagem, resolver_p_delta
 from .assistente import AssistenteDePortico
 from .conversao import modelo_para_registros, registros_para_modelo
 from .tabelas import PainelDeDados
-from .vista3d import VISTAS_DE_ESFORCO, Vista3D
+from .vista3d import (REPRESENTACOES_DE_DIAGRAMA, VISTAS_DE_ESFORCO, Vista3D,
+                      abrir_vista_interativa_armadura)
 
-VISTAS = ["Modelo", "3D", "Laje", "Armadura", "Deformada",
-          *VISTAS_DE_ESFORCO, "Modo de flambagem"]
+VISTAS = ["Modelo", "3D", "Laje", "Armadura", "Cargas", "Deformada",
+          *VISTAS_DE_ESFORCO, "Modo de flambagem", "Modo de vibração"]
+
+#: As análises que o botão "Análise" roda de uma vez. A lista ao lado da vista
+#: escolhe qual delas está na tela; "Modelo" é o desenho do que foi digitado,
+#: antes (ou sem) qualquer análise.
+ANALISES = ["Modelo", "Cargas", "1ª ordem", "2ª ordem", "Combinações",
+            "Estabilidade", "Flambagem", "Modal"]
+
+#: Nem toda vista cabe em toda análise: o modo de vibração não tem armadura, e
+#: o diagrama de momento não diz nada de uma carga crítica. Cada análise
+#: oferece só as vistas que respondem alguma coisa sobre ela. A armadura vai
+#: onde há dimensionamento por trás — o desenho do modelo e a envoltória das
+#: combinações.
+_ESFORCOS = list(VISTAS_DE_ESFORCO)
+VISTAS_POR_ANALISE = {
+    "Modelo": ["Modelo", "3D", "Laje", "Armadura"],
+    "Cargas": ["Cargas", "Modelo"],
+    "1ª ordem": ["Deformada", *_ESFORCOS, "Modelo"],
+    "2ª ordem": ["Deformada", *_ESFORCOS, "Modelo"],
+    "Combinações": ["Deformada", *_ESFORCOS, "Armadura", "Modelo"],
+    "Estabilidade": ["Deformada", "Modelo"],
+    "Flambagem": ["Modo de flambagem", "Modelo"],
+    "Modal": ["Modo de vibração", "Modelo"],
+}
+
+#: Entrada da lista de casos da vista de Cargas que mostra **todos os casos de
+#: carga juntos** — o permanente, o variável e o vento de uma vez, cada um com
+#: a sua cor —, para ver de relance o que o modelo aplica por inteiro.
+TODOS_OS_CASOS = "todos os casos"
+
+#: As análises que dependem do caso escolhido na caixa Caso. O modal é vibração
+#: livre e o desenho do modelo não analisa nada: para eles a caixa fica
+#: desligada, em vez de oferecer uma escolha que não muda coisa nenhuma.
+ANALISES_COM_CASO = ("Cargas", "1ª ordem", "2ª ordem", "Combinações",
+                     "Estabilidade", "Flambagem")
 
 #: Piso de tamanho da janela, px — o que ainda é utilizável, não o desejável.
 #: Cabe num monitor de 1024x768 descontadas a barra de tarefas e as bordas.
@@ -75,8 +114,22 @@ class Janela(QMainWindow):
         self.setMinimumSize(*JANELA_MINIMA)
 
         self.modelo = Modelo("portico")
+        #: 1ª ordem: os casos do modelo **e** as combinações, por nome.
         self.resultados: dict[str, Resultado] = {}
-        self.flambagem_atual = None
+        #: 2ª ordem (P-Δ) por caso, e a 1ª ordem de cada combinação ELU
+        #: resolvida na estabilidade. Ficam à parte para a 2ª ordem não
+        #: apagar a 1ª do mesmo caso, que era o que acontecia.
+        self.resultados_2a: dict[str, Resultado] = {}
+        self.resultados_estab: dict[str, Resultado] = {}
+        self.flambagens: dict[str, object] = {}
+        #: As combinações geradas por "Análise", por nome — a vista de Cargas
+        #: monta o caso ponderado de cada uma para mostrar o que ela aplica.
+        self._combinacoes: dict[str, object] = {}
+        self.modal_atual = None
+        self._modal_caso_referencia = None
+        #: O texto de cada análise, para mostrar o detalhe quando o usuário a
+        #: escolhe na lista, sem despejar tudo no relatório de uma vez.
+        self._textos: dict[str, str] = {}
         self.caminho: Path | None = None
         self._ultimo_relatorio_de_laje: list[str] | None = None
         # A armadura de um pavimento custa alguns segundos: são os três
@@ -86,9 +139,21 @@ class Janela(QMainWindow):
         #: A envoltória das combinações últimas, compartilhada entre as ações
         #: que precisam dela.
         self._envoltoria = None
+        #: Como a 2ª ordem global entrou em cada combinação ELU.
+        self._tratamento_2a: list = []
+        #: O que "Dimensionar" calculou por último (``vigas``, ``lajes``,
+        #: ``pilares``). É daqui que "Emitir > Pranchas" lê: dimensionar
+        #: atualiza os modelos, e imprimir é uma decisão à parte, que não
+        #: deve obrigar a calcular de novo.
+        self.dimensionamento: dict[str, object] = {}
+        self._assinatura_das_tabelas: str | None = None
+        #: O lançamento por planta de onde o modelo veio, se veio de um.
+        self.lancamento = None
+        self.editor_de_lancamento = None
 
         self.dados = PainelDeDados()
         self.vista = Vista3D()
+        self.vista.definir_callback_selecao(self._ao_selecionar_elemento)
         self.relatorio = QPlainTextEdit()
         self.relatorio.setReadOnly(True)
         self.relatorio.setMaximumHeight(220)
@@ -197,19 +262,17 @@ class Janela(QMainWindow):
                 ("Novo", self.novo, "Ctrl+N"),
                 ("Abrir", self.abrir, "Ctrl+O"),
                 ("Salvar", self.salvar, "Ctrl+S"),
-                ("Assistente", self.assistente, "Ctrl+G")):
+                ("Assistente", self.assistente, "Ctrl+G"),
+                ("Lançamento", self.abrir_lancamento, "Ctrl+L")):
             barra.addAction(self._acao(texto, gatilho, atalho))
         barra.addSeparator()
 
         # As duas ações do dia a dia ficam soltas; o resto vai para menus.
         barra.addAction(self._acao("Aplicar tabelas", self.aplicar, "F5"))
-        barra.addAction(self._acao("Analisar caso", self.analisar, "F9"))
-        self._menu_na_barra(barra, "Análise ▾", [
-            ("Segunda ordem", self.analisar_segunda_ordem, ""),
-            ("Combinações NBR", self.analisar_combinacoes, ""),
-            ("Estabilidade global", self.analisar_estabilidade, ""),
-            ("Flambagem", self.analisar_flambagem, ""),
-        ])
+        # Um botão só: roda todas as análises. Qual delas aparece na tela, e
+        # para qual caso, quem escolhe é a lista ao lado da vista.
+        barra.addAction(self._acao("Análise", self.analisar_tudo, "F9"))
+        self._montar_menu_de_calculo(barra)
         barra.addSeparator()
         self._menu_na_barra(barra, "Dimensionar ▾", [
             ("Pilares", self.dimensionar_pilares, "F7"),
@@ -219,6 +282,8 @@ class Janela(QMainWindow):
         self._menu_na_barra(barra, "Emitir ▾", [
             ("Projeto completo", self.gerar_projeto, "F2"),
             ("Armadura em DXF", self.exportar_armadura, "F3"),
+            ("Pranchas de vigas", self.emitir_pranchas_de_vigas, ""),
+            ("Pranchas de lajes", self.emitir_pranchas_de_lajes, ""),
             ("Reações", self.mostrar_reacoes, "F8"),
         ])
         barra.addSeparator()
@@ -226,6 +291,123 @@ class Janela(QMainWindow):
             ("Salvar relatório", self.salvar_relatorio, ""),
             ("Limpar relatório", self.relatorio.clear, ""),
         ])
+
+    def _montar_menu_de_calculo(self, barra) -> None:
+        """As opções de **como** o modelo é calculado.
+
+        Moram no modelo (``Modelo.calculo``) e vão para o arquivo: um modelo
+        aberto de novo é calculado do mesmo jeito. Mudar uma delas apaga as
+        análises feitas, porque elas foram feitas com a outra.
+        """
+        botao = QToolButton()
+        botao.setText("Cálculo ▾")
+        botao.setPopupMode(QToolButton.InstantPopup)
+        botao.setToolTip("Laje como diafragma ou grelha, e com que esforços "
+                         "as vigas são armadas")
+        menu = QMenu(botao)
+
+        self.acao_diafragma = QAction("Laje como diafragma rígido", self,
+                                      checkable=True)
+        self.acao_diafragma.setToolTip(
+            "Os nós de cada pavimento transladam em X e Y e giram em Z "
+            "juntos: o vento se reparte pela rigidez dos pórticos")
+        self.acao_diafragma.toggled.connect(
+            lambda v: self._mudar_calculo(diafragma=bool(v)))
+        self.acao_grelha = QAction("Lajes em grelha", self, checkable=True)
+        self.acao_grelha.setToolTip(
+            "Cada laje vira uma grelha de barras ligada às vigas: a carga "
+            "chega às vigas pela rigidez, e não pelas áreas a 45°")
+        self.acao_grelha.toggled.connect(
+            lambda v: self._mudar_calculo(grelha=bool(v)))
+        menu.addAction(self.acao_diafragma)
+        menu.addAction(self.acao_grelha)
+        menu.addAction(self._acao("Malha da grelha…", self._pedir_malha))
+        menu.addSeparator()
+
+        self.acao_mesa = QAction("Vigas com mesa colaborante (seção T)",
+                                 self, checkable=True)
+        self.acao_mesa.setToolTip(
+            "A viga é armada como seção T com a laje ao lado (14.6.2.2); a "
+            "análise do pórtico segue com a seção retangular")
+        self.acao_mesa.toggled.connect(
+            lambda v: self._mudar_calculo(mesa_colaborante=bool(v)))
+        menu.addAction(self.acao_mesa)
+
+        vigas = menu.addMenu("Vigas armadas com")
+        grupo = QActionGroup(self)
+        self.acoes_fonte_vigas: dict[str, QAction] = {}
+        for fonte, texto in (
+                ("portico", "Envoltória do pórtico"),
+                ("envolvente", "Pior entre pórtico e viga contínua"),
+                ("motor", "Só a viga contínua (g e q)")):
+            acao = QAction(texto, self, checkable=True)
+            acao.setData(fonte)
+            grupo.addAction(acao)
+            vigas.addAction(acao)
+            acao.toggled.connect(
+                lambda v, f=fonte: v and self._mudar_calculo(fonte_vigas=f))
+            self.acoes_fonte_vigas[fonte] = acao
+
+        botao.setMenu(menu)
+        barra.addWidget(botao)
+        self._sincronizar_calculo()
+
+    def _sincronizar_calculo(self) -> None:
+        """Marca no menu as opções do modelo que está aberto."""
+        c = self.modelo.calculo
+        for acao, valor in ((self.acao_diafragma, c.diafragma),
+                            (self.acao_grelha, c.grelha),
+                            (self.acao_mesa, c.mesa_colaborante)):
+            acao.blockSignals(True)
+            acao.setChecked(valor)
+            acao.blockSignals(False)
+        for fonte, acao in self.acoes_fonte_vigas.items():
+            acao.blockSignals(True)
+            acao.setChecked(fonte == c.fonte_vigas)
+            acao.blockSignals(False)
+        self.acao_grelha.setText(
+            f"Lajes em grelha (malha {c.malha_grelha:g} m)")
+
+    def _mudar_calculo(self, **mudancas) -> None:
+        novo = replace(self.modelo.calculo, **mudancas)
+        if novo == self.modelo.calculo:
+            return
+        self.modelo.calculo = novo
+        # o que foi analisado e dimensionado foi com a opção anterior
+        self._assinatura_das_tabelas = None
+        self._limpar_resultados()
+        self.armaduras.clear()
+        self.dimensionamento.clear()
+        self._envoltoria = None
+        self._sincronizar_calculo()
+        fonte = {"portico": "envoltória do pórtico",
+                 "envolvente": "pior entre pórtico e viga contínua",
+                 "motor": "só a viga contínua"}[novo.fonte_vigas]
+        self.registrar(
+            "Cálculo: diafragma " + ("ligado" if novo.diafragma else
+                                     "desligado")
+            + ", lajes " + (f"em grelha (malha {novo.malha_grelha:g} m)"
+                            if novo.grelha else "como carga (áreas a 45°)")
+            + f", vigas armadas com {fonte}"
+            + (" em seção T" if novo.mesa_colaborante else "")
+            + ". Rode a Análise de novo.")
+        if novo.grelha:
+            from ..core.grelha import avisos_da_grelha
+            try:
+                avisos = avisos_da_grelha(self.modelo)
+            except ErroDeModelo as erro:
+                self._erro(erro)
+                return
+            if avisos:
+                self.registrar("  " + "\n  ".join(avisos))
+
+    def _pedir_malha(self) -> None:
+        valor, ok = QInputDialog.getDouble(
+            self, "Malha da grelha",
+            "Espaçamento-alvo das barras da laje (m):",
+            self.modelo.calculo.malha_grelha, 0.1, 10.0, 2)
+        if ok:
+            self._mudar_calculo(malha_grelha=float(valor))
 
     def _estreitar(self, caixa: QComboBox) -> QComboBox:
         """Impede que uma lista suspensa cresça com o texto do maior item.
@@ -241,8 +423,17 @@ class Janela(QMainWindow):
         return caixa
 
     def _montar_corpo(self) -> None:
+        # A análise escolhe quais vistas existem (``VISTAS_POR_ANALISE``) e que
+        # casos podem ser olhados; a vista e o caso vêm depois dela.
+        self.escolha_analise = self._estreitar(QComboBox())
+        self.escolha_analise.addItems(ANALISES)
+        self.escolha_analise.setToolTip(
+            "Qual análise está na tela. O botão Análise roda todas; aqui se "
+            "escolhe qual olhar")
+        self.escolha_analise.currentTextChanged.connect(
+            self._ao_trocar_analise)
         self.escolha_vista = self._estreitar(QComboBox())
-        self.escolha_vista.addItems(VISTAS)
+        self.escolha_vista.addItems(VISTAS_POR_ANALISE["Modelo"])
         self.escolha_vista.currentTextChanged.connect(self.redesenhar)
         self.escolha_caso = self._estreitar(QComboBox())
         self.escolha_caso.currentTextChanged.connect(self.redesenhar)
@@ -257,10 +448,43 @@ class Janela(QMainWindow):
             "Pavimento a desenhar. Vale nas vistas de Laje e de Armadura, "
             "que são de um pavimento por vez")
         self.escolha_nivel.currentTextChanged.connect(self.redesenhar)
+        # As lajes do modelo 3D: opacas, e escondidas quando o usuário
+        # quiser ver as vigas e os pilares por baixo. Liga e desliga os atores
+        # sem redesenhar, para a câmera não voltar ao início.
+        self.mostrar_lajes = QCheckBox("lajes")
+        self.mostrar_lajes.setChecked(True)
+        self.mostrar_lajes.setToolTip(
+            "Mostrar as lajes no modelo 3D (desmarcar as esconde)")
+        self.mostrar_lajes.toggled.connect(self.vista.definir_lajes_visiveis)
         self.rotulos_nos = QCheckBox("nós")
         self.rotulos_barras = QCheckBox("barras")
         for c in (self.rotulos_nos, self.rotulos_barras):
             c.stateChanged.connect(self.redesenhar)
+
+        # O Diagrama de esforços alterna entre o esqueleto de sempre
+        # ("barras") e o sólido extrudado da seção real ("3D") — deixa óbvio
+        # quando um elemento muito solicitado tem seção pequena. Só é lido
+        # quando a vista escolhida é um componente de esforço.
+        self.representacao_diagrama = self._estreitar(QComboBox())
+        self.representacao_diagrama.addItems(list(REPRESENTACOES_DE_DIAGRAMA))
+        self.representacao_diagrama.currentTextChanged.connect(self.redesenhar)
+
+        # A vista de Armadura abre como janela nativa separada do VTK, não no
+        # widget embutido (ver ``vista3d.VistaArmadura3D``): este botão é o
+        # gatilho, habilitado só quando a vista e o nível fazem sentido.
+        #
+        # Fica **fora** da barra de ferramentas de propósito: a barra
+        # transborda para dentro do botão "»" do Qt quando não cabe tudo (ver
+        # o comentário abaixo), e foi exatamente aí que este botão sumiu de
+        # vista numa janela mais estreita — sendo o último item da lista, é o
+        # primeiro a ser engolido. Uma linha própria acima do desenho, que só
+        # aparece quando a vista é "Armadura", não compete por espaço com o
+        # resto dos controles.
+        self.botao_armadura_3d = QPushButton("Abrir vista 3D da armadura")
+        self.botao_armadura_3d.setEnabled(False)
+        self.botao_armadura_3d.setVisible(False)
+        self.botao_armadura_3d.clicked.connect(self.abrir_armadura_3d)
+        self._ultima_armadura_aberta: tuple[str, float] | None = None
 
         # Os controles do desenho vão numa **segunda barra de ferramentas**, e
         # não numa linha dentro do corpo. A diferença é que a barra transborda
@@ -269,12 +493,15 @@ class Janela(QMainWindow):
         # painel de tabelas, que fixava o piso em 1752 px.
         self.barra_de_vista = self.addToolBar("Desenho")
         self.barra_de_vista.setMovable(False)
-        for rotulo, controle in (("Vista:", self.escolha_vista),
+        for rotulo, controle in (("Análise:", self.escolha_analise),
+                                 ("Vista:", self.escolha_vista),
+                                 (None, self.mostrar_lajes),
                                  ("Caso:", self.escolha_caso),
                                  ("Nível:", self.escolha_nivel),
                                  ("Escala:", self.escala),
                                  ("Rótulos:", self.rotulos_nos),
-                                 (None, self.rotulos_barras)):
+                                 (None, self.rotulos_barras),
+                                 ("Diagrama:", self.representacao_diagrama)):
             if rotulo is not None:
                 self.barra_de_vista.addWidget(QLabel(" " + rotulo + " "))
             self.barra_de_vista.addWidget(controle)
@@ -282,6 +509,7 @@ class Janela(QMainWindow):
         direita = QWidget()
         leiaute = QVBoxLayout(direita)
         leiaute.setContentsMargins(6, 6, 6, 6)
+        leiaute.addWidget(self.botao_armadura_3d)
         leiaute.addWidget(self.vista, 1)
 
         self.divisor = QSplitter(Qt.Horizontal)
@@ -344,35 +572,154 @@ class Janela(QMainWindow):
         except ValueError:
             return None
 
+    def _casos_da_analise(self, analise: str) -> list[str]:
+        """Os casos que a análise escolhida tem para mostrar.
+
+        Só entram os que a análise **de fato resolveu** — um caso em que a 2ª
+        ordem não convergiu, ou em que a estrutura não flamba, não aparece na
+        lista dela, em vez de aparecer e não desenhar nada. Antes de qualquer
+        análise, a 1ª ordem lista os casos do modelo.
+        """
+        casos = list(self.modelo.casos)
+        if analise == "Cargas":
+            return casos + list(self._combinacoes) + [TODOS_OS_CASOS]
+        if analise == "1ª ordem":
+            feitos = [c for c in casos if c in self.resultados]
+            return feitos or casos
+        if analise == "2ª ordem":
+            return [c for c in casos if c in self.resultados_2a]
+        if analise == "Combinações":
+            return [n for n in self.resultados if n not in self.modelo.casos]
+        if analise == "Estabilidade":
+            return list(self.resultados_estab)
+        if analise == "Flambagem":
+            return [c for c in casos if c in self.flambagens]
+        return []
+
     def _atualizar_casos(self) -> None:
+        analise = self.escolha_analise.currentText()
         atual = self.escolha_caso.currentText()
         self.escolha_caso.blockSignals(True)
         self.escolha_caso.clear()
-        self.escolha_caso.addItems(list(self.modelo.casos)
-                                   + [n for n in self.resultados
-                                      if n not in self.modelo.casos])
+        self.escolha_caso.addItems(self._casos_da_analise(analise))
         if atual:
             indice = self.escolha_caso.findText(atual)
             if indice >= 0:
                 self.escolha_caso.setCurrentIndex(indice)
         self.escolha_caso.blockSignals(False)
+        self.escolha_caso.setEnabled(analise in ANALISES_COM_CASO)
+
+    def _atualizar_vistas(self) -> None:
+        """Deixa na lista de vistas só as da análise escolhida."""
+        permitidas = VISTAS_POR_ANALISE[self.escolha_analise.currentText()]
+        atual = self.escolha_vista.currentText()
+        self.escolha_vista.blockSignals(True)
+        self.escolha_vista.clear()
+        self.escolha_vista.addItems(permitidas)
+        if atual in permitidas:
+            self.escolha_vista.setCurrentText(atual)
+        self.escolha_vista.blockSignals(False)
+
+    def _ao_trocar_analise(self, *_args) -> None:
+        """A análise mudou: vistas e casos passam a ser os dela.
+
+        Escreve no relatório o texto da análise escolhida — o detalhe que o
+        botão Análise não despeja de uma vez —, só quando ela já foi rodada.
+        """
+        self._atualizar_vistas()
+        self._atualizar_casos()
+        self.redesenhar()
+        analise = self.escolha_analise.currentText()
+        texto = self._texto_da_analise(analise)
+        if texto:
+            self.registrar("\n" + texto)
+
+    def _texto_da_analise(self, analise: str) -> str:
+        """O resumo da análise para o caso escolhido, se ela já foi rodada."""
+        caso = self.escolha_caso.currentText()
+        if analise == "Cargas":
+            efetivos = self._caso_de_carga(caso)
+            if efetivos is None:
+                return ""
+            if not isinstance(efetivos, list):
+                efetivos = [efetivos]
+            from ..core.auditoria_cargas import resumo_do_caso
+            try:
+                return "\n".join(resumo_do_caso(self.modelo, c, limite=15)
+                                 for c in efetivos)
+            except ErroDeModelo as erro:
+                return str(erro)
+        if analise in ("1ª ordem", "Combinações"):
+            resultado = self.resultados.get(caso)
+            return resultado.resumo() if resultado is not None else ""
+        if analise == "2ª ordem":
+            resultado = self.resultados_2a.get(caso)
+            if resultado is None:
+                return ""
+            return (f"Segunda ordem de '{caso}': convergiu em "
+                    f"{resultado.iteracoes} iterações.\n"
+                    + resultado.resumo())
+        if analise == "Flambagem":
+            f = self.flambagens.get(caso)
+            return str(f) if f is not None else ""
+        return self._textos.get(analise, "")
+
+    def _caso_de_carga(self, nome: str):
+        """O caso que a vista de Cargas mostra: o do modelo ou, para uma
+        combinação, o caso **ponderado** — as ações já multiplicadas pelos
+        fatores da combinação, que é o que de fato é aplicado. Para
+        ``TODOS_OS_CASOS``, a lista de todos os casos do modelo."""
+        if nome == TODOS_OS_CASOS:
+            return list(self.modelo.casos.values())
+        if nome in self.modelo.casos:
+            return self.modelo.casos[nome]
+        combinacao = self._combinacoes.get(nome)
+        if combinacao is None:
+            return None
+        from ..core.combinacoes import caso_efetivo
+        try:
+            return caso_efetivo(self.modelo, combinacao)
+        except ErroDeModelo:
+            return None
+
+    def _mostrar(self, analise: str, vista: str) -> None:
+        """Põe uma análise e uma vista dela na tela."""
+        self.escolha_analise.setCurrentText(analise)
+        if self.escolha_vista.findText(vista) >= 0:
+            self.escolha_vista.setCurrentText(vista)
 
     def _resultado_atual(self) -> Resultado | None:
-        return self.resultados.get(self.escolha_caso.currentText())
+        """O resultado do caso escolhido, **na análise escolhida**."""
+        fonte = {"2ª ordem": self.resultados_2a,
+                 "Estabilidade": self.resultados_estab
+                 }.get(self.escolha_analise.currentText(), self.resultados)
+        return fonte.get(self.escolha_caso.currentText())
+
+    def _limpar_resultados(self) -> None:
+        """O modelo é outro: nada do que foi analisado vale mais."""
+        self.resultados.clear()
+        self.resultados_2a.clear()
+        self.resultados_estab.clear()
+        self.flambagens.clear()
+        self._combinacoes.clear()
+        self.modal_atual = None
+        self._modal_caso_referencia = None
+        self._textos.clear()
 
     # -- ações -------------------------------------------------------------
 
     def novo(self) -> None:
         self.modelo = Modelo("portico")
-        self.resultados.clear()
-        self.flambagem_atual = None
+        self._limpar_resultados()
         self.caminho = None
         self._carregar_nas_tabelas()
+        self._sincronizar_calculo()
         self.registrar("Modelo novo, vazio.")
 
     def abrir(self) -> None:
         caminho, _ = QFileDialog.getOpenFileName(
-            self, "Abrir modelo", "", "Modelo de pórtico (*.json)")
+            self, "Abrir modelo ou lançamento", "",
+            "Modelo de pórtico ou lançamento (*.json)")
         if not caminho:
             return
         try:
@@ -381,11 +728,20 @@ class Janela(QMainWindow):
             self._erro(erro)
             return
         self.caminho = Path(caminho)
-        self.resultados.clear()
-        self.flambagem_atual = None
+        self._limpar_resultados()
         self._carregar_nas_tabelas()
+        self._sincronizar_calculo()
         self.registrar(f"Aberto {caminho}: {len(self.modelo.nos)} nós, "
                        f"{len(self.modelo.barras)} barras.")
+        geracao = self.modelo.__dict__.get("geracao")
+        self.lancamento = self.modelo.__dict__.get("lancamento")
+        if geracao is not None:
+            # Arquivo de lançamento: o modelo foi gerado agora, a partir das
+            # plantas. As tabelas mostram o modelo de cálculo; editar nelas
+            # não volta ao lançamento, e salvar grava o modelo de cálculo.
+            self.registrar(geracao.resumo())
+            self.registrar("O modelo veio de um lançamento por planta: "
+                           "edições nas tabelas não voltam a ele.")
 
     def salvar(self) -> None:
         if not self.aplicar():
@@ -403,17 +759,51 @@ class Janela(QMainWindow):
         self.caminho = Path(caminho)
         self.registrar(f"Salvo em {caminho}.")
 
+    def abrir_lancamento(self) -> None:
+        """Abre o editor de lançamento por planta.
+
+        Abre com o lançamento de onde o modelo atual veio, ou com um novo. O
+        "Gerar modelo" do editor manda o modelo para cá
+        (``_receber_lancamento``); o editor fica aberto ao lado, para
+        lançar, gerar e conferir sem ir e voltar.
+        """
+        from .editor_planta import EditorDeLancamento
+
+        if self.editor_de_lancamento is None:
+            self.editor_de_lancamento = EditorDeLancamento(
+                self.lancamento, ao_gerar=self._receber_lancamento, pai=self)
+        self.editor_de_lancamento.show()
+        self.editor_de_lancamento.raise_()
+
+    def _receber_lancamento(self, geracao, lancamento) -> None:
+        """O editor gerou um modelo: ele passa a ser o modelo da janela,
+        com as opções de cálculo que o usuário já tinha escolhido aqui."""
+        modelo = geracao.modelo
+        modelo.calculo = replace(self.modelo.calculo)
+        self.modelo = modelo
+        self.lancamento = lancamento
+        self._limpar_resultados()
+        self.armaduras.clear()
+        self.dimensionamento.clear()
+        self._envoltoria = None
+        self._assinatura_das_tabelas = None
+        self._carregar_nas_tabelas()
+        self._sincronizar_calculo()
+        self.registrar(geracao.resumo())
+
     def assistente(self) -> None:
         dialogo = AssistenteDePortico(self)
         if dialogo.exec() != AssistenteDePortico.Accepted:
             return
+        calculo = replace(self.modelo.calculo)
         try:
             self.modelo = dialogo.modelo()
         except ErroDeModelo as erro:
             self._erro(erro)
             return
-        self.resultados.clear()
-        self.flambagem_atual = None
+        # o pórtico novo é calculado como o usuário já tinha escolhido
+        self.modelo.calculo = calculo
+        self._limpar_resultados()
         self._carregar_nas_tabelas()
         self.registrar(
             f"Pórtico gerado: {len(self.modelo.nos)} nós, "
@@ -426,17 +816,31 @@ class Janela(QMainWindow):
             registros = {chave: tabela.registros()
                          for chave, tabela in self.dados.tabelas.items()}
             modelo = registros_para_modelo(registros, self.modelo.nome)
+            # As opções de cálculo não moram nas tabelas: passam do modelo
+            # anterior para o novo.
+            modelo.calculo = replace(self.modelo.calculo)
             modelo.validar()
         except ErroDeModelo as erro:
             self._erro(erro)
             return False
+        # Dimensionar vigas e depois lajes aplica as tabelas duas vezes. Se elas
+        # não mudaram, o dimensionamento e a armadura guardados continuam
+        # valendo — e é deles que "Emitir > Pranchas" lê sem recalcular.
+        assinatura = repr((sorted(registros.items()), modelo.calculo))
+        inalterado = assinatura == self._assinatura_das_tabelas
+        self._assinatura_das_tabelas = assinatura
+
         self.modelo = modelo
-        self.resultados.clear()
-        self.flambagem_atual = None
         self._ultimo_relatorio_de_laje = None
-        # o modelo é outro: a armadura guardada é do anterior
-        self.armaduras.clear()
-        self._envoltoria = None
+        if not inalterado:
+            # o modelo é outro: o que foi guardado é do anterior — as análises
+            # inclusive. Com as tabelas iguais elas continuam valendo, e é
+            # isso que deixa "Dimensionar" rodar sem apagar a análise que está
+            # na tela.
+            self._limpar_resultados()
+            self.armaduras.clear()
+            self.dimensionamento.clear()
+            self._envoltoria = None
         self._atualizar_casos()
         self._atualizar_niveis()
         self.redesenhar()
@@ -444,89 +848,165 @@ class Janela(QMainWindow):
                        f"{len(modelo.barras)} barras.")
         return True
 
-    def analisar(self) -> None:
+    def analisar_tudo(self) -> None:
+        """Roda **todas** as análises de uma vez.
+
+        1ª ordem e 2ª ordem para cada caso de carga, as combinações da NBR com
+        a envoltória, a estabilidade global, a flambagem de cada caso e o
+        modal. Quem escolhe o que olhar depois é a lista **Análise** da barra
+        de desenho — cada análise com as vistas que fazem sentido para ela, e
+        com o caso que ela resolveu. O botão não pergunta qual rodar: uma
+        análise que não se aplica ao modelo (sem carga vertical, a flambagem
+        não tem fator positivo) é anotada e não derruba as outras.
+        """
         if not self.aplicar():
             return
-        caso = self.escolha_caso.currentText()
-        if not caso:
+        casos = list(self.modelo.casos)
+        if not casos:
             self.registrar("Não há caso de carga para analisar.")
             return
-        try:
-            self.resultados[caso] = resolver(self.modelo, caso)
-        except ErroDeModelo as erro:
-            self._erro(erro)
-            return
-        self.escolha_vista.setCurrentText("Deformada")
-        self.redesenhar()
-        self.registrar(self.resultados[caso].resumo())
 
-    def analisar_segunda_ordem(self) -> None:
-        if not self.aplicar():
-            return
-        caso = self.escolha_caso.currentText()
-        if not caso:
-            self.registrar("Não há caso de carga para analisar.")
-            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            resultado = resolver_p_delta(self.modelo, caso)
-        except ErroDeModelo as erro:
-            self._erro(erro)
-            return
-        self.resultados[caso] = resultado
-        self.escolha_vista.setCurrentText("Deformada")
-        self.redesenhar()
-        self.registrar(f"Segunda ordem de '{caso}': convergiu em "
-                       f"{resultado.iteracoes} iterações.\n"
-                       + resultado.resumo())
+            self.registrar("Analisando: 1ª ordem, 2ª ordem, combinações, "
+                           "estabilidade, flambagem e modal…")
+            linhas = self._linhas_do_calculo()
+            linhas += self._rodar_primeira_ordem(casos)
+            linhas += self._rodar_segunda_ordem(casos)
+            linhas += self._rodar_combinacoes()
+            linhas += self._rodar_estabilidade()
+            linhas += self._rodar_flambagem(casos)
+            linhas += self._rodar_modal()
+        finally:
+            QApplication.restoreOverrideCursor()
 
-    def analisar_combinacoes(self) -> None:
-        if not self.aplicar():
-            return
+        self.registrar("\n".join(linhas))
+        # Primeira vez: sai do desenho do modelo para a 1ª ordem. Depois, fica
+        # na análise que o usuário estava olhando.
+        if self.escolha_analise.currentText() == "Modelo":
+            self._mostrar("1ª ordem", "Deformada")
+        else:
+            self._ao_trocar_analise()
+
+    def _linhas_do_calculo(self) -> list[str]:
+        """O que o diafragma e a grelha fizeram com o modelo, em poucas linhas
+        — para quem lê o relatório saber com que modelo os números saíram."""
+        linhas = []
+        if self.modelo.calculo.diafragma:
+            from ..core.diafragma import diafragmas
+            grupos = diafragmas(self.modelo)
+            linhas.append(f"Diafragma rígido: {len(grupos)} pavimentos.")
+            linhas += [f"  {d}" for d in grupos if d.excluidos]
+        if self.modelo.calculo.grelha:
+            from ..core.grelha import avisos_da_grelha
+            try:
+                linhas += avisos_da_grelha(self.modelo)
+            except ErroDeModelo as erro:
+                linhas.append(f"Grelha: {erro}")
+        return linhas
+
+    def _rodar_primeira_ordem(self, casos: list[str]) -> list[str]:
+        feitos, falhas = 0, []
+        for caso in casos:
+            try:
+                self.resultados[caso] = resolver(self.modelo, caso)
+                feitos += 1
+            except ErroDeModelo as erro:
+                falhas.append(f"  {caso}: {erro}")
+        return ([f"1ª ordem: {feitos} de {len(casos)} casos resolvidos."]
+                + falhas)
+
+    def _rodar_segunda_ordem(self, casos: list[str]) -> list[str]:
+        feitos, falhas = [], []
+        for caso in casos:
+            try:
+                r = resolver_p_delta(self.modelo, caso)
+            except ErroDeModelo as erro:
+                falhas.append(f"  {caso}: {erro}")
+                continue
+            self.resultados_2a[caso] = r
+            feitos.append(f"{caso} ({r.iteracoes} it.)")
+        return ["2ª ordem (P-Δ): " + (", ".join(feitos)
+                                      or "nenhum caso convergiu")] + falhas
+
+    def _rodar_combinacoes(self) -> list[str]:
+        """As combinações da NBR: as ELU **já com a 2ª ordem global** (o
+        que vai ao dimensionamento), as ELS em 1ª ordem. A envoltória das ELU
+        fica guardada: é ela que "Dimensionar" usa, sem resolver de novo."""
+        from ..core.segunda_ordem_global import (
+            resultados_para_dimensionamento, resumo)
         try:
             acoes = acoes_do_modelo(self.modelo)
             validar_acoes(self.modelo, acoes)
-            combinacoes = combinacoes_elu(acoes) + combinacoes_els(acoes)
-            self.resultados.update(
-                resolver_combinacoes(self.modelo, combinacoes))
-            env = envoltoria(self.modelo, {c.nome: self.resultados[c.nome]
-                                           for c in combinacoes})
+            elu, els = combinacoes_elu(acoes), combinacoes_els(acoes)
+            combinacoes = elu + els
+            casos = {c: self.resultados[c] for c in self.modelo.casos
+                     if c in self.resultados}
+            resultados_elu, tratamento = resultados_para_dimensionamento(
+                self.modelo, elu, casos)
+            self.resultados.update(resultados_elu)
+            self.resultados.update(resolver_combinacoes(self.modelo, els,
+                                                        casos or None))
+            env = envoltoria(self.modelo, resultados_elu)
         except ErroDeModelo as erro:
-            self._erro(erro)
-            return
+            return [f"Combinações: {erro}"]
+        self._combinacoes = {c.nome: c for c in combinacoes}
+        self._envoltoria = env
+        self._tratamento_2a = tratamento
 
-        self._atualizar_casos()
         linhas = [f"{len(combinacoes)} combinações resolvidas "
                   f"({sum(c.tipo == 'ELU' for c in combinacoes)} ELU, "
                   f"{sum(c.tipo.startswith('ELS') for c in combinacoes)} ELS).",
-                  "Envoltória — extremos com esforços concomitantes:"]
+                  "", resumo(tratamento), "",
+                  "Envoltória ELU (a do dimensionamento) — extremos com "
+                  "esforços concomitantes:"]
         for nome, barra in list(env.items())[:12]:
             for componente in ("N", "My", "Mz"):
                 linhas.append("  " + str(barra.extremo(componente, "min")))
         if len(env) > 12:
             linhas.append(f"  ... e mais {len(env) - 12} barras.")
-        self.registrar("\n".join(linhas))
+        self._textos["Combinações"] = "\n".join(linhas)
+        moveis = [t for t in tratamento if t.tratamento != "1ª ordem"]
+        return [f"Combinações: {len(combinacoes)} resolvidas, envoltória "
+                "montada"
+                + (f"; 2ª ordem global em {len(moveis)} combinações ELU "
+                   f"(γz máx {max(t.gama_z for t in moveis):.3f})."
+                   if moveis else "; nós fixos, 1ª ordem.")]
 
-    def analisar_estabilidade(self) -> None:
-        if not self.aplicar():
-            return
+    def _rodar_estabilidade(self) -> list[str]:
         try:
             acoes = acoes_do_modelo(self.modelo)
             validar_acoes(self.modelo, acoes)
             combinacoes = combinacoes_elu(acoes)
         except ErroDeModelo as erro:
-            self._erro(erro)
-            return
+            return [f"Estabilidade: {erro}"]
 
-        linhas = ["Estabilidade global — NBR 6118, itens 15.5.3 e 15.7.2"]
+        from ..core.segunda_ordem_global import modelo_secante
+
+        # O γz é o da rigidez secante do 15.7.3 — a rigidez com que a norma
+        # pede a análise dos esforços globais de 2ª ordem, e a mesma que
+        # decide, nas combinações, se o dimensionamento leva 2ª ordem.
+        secante = modelo_secante(self.modelo)
+        linhas = ["Estabilidade global — NBR 6118, itens 15.5.3 e 15.7.2, "
+                  "γz com a rigidez secante do 15.7.3"]
         pior = None
         for combinacao in combinacoes:
+            caso = None
             try:
-                caso = caso_efetivo(self.modelo, combinacao)
-                self.modelo.casos[caso.nome] = caso
-                g = gama_z(self.modelo, caso, resolver(self.modelo, caso.nome))
+                caso = caso_efetivo(secante, combinacao)
+                # O caso efetivo só existe para esta conta: fica no modelo o
+                # tempo de resolvê-lo e sai, para não aparecer como caso de
+                # carga do usuário nas listas.
+                secante.casos[caso.nome] = caso
+                resultado = resolver(secante, caso.nome)
+                g = gama_z(secante, caso, resultado)
             except ErroDeModelo as erro:
                 linhas.append(f"  {combinacao.nome:<10} sem γz: {erro}")
                 continue
+            finally:
+                if caso is not None:
+                    secante.casos.pop(caso.nome, None)
+            self.resultados_estab[combinacao.nome] = resultado
             linhas.append(
                 f"  {combinacao.nome:<10} γz = {g.valor:.4f}  "
                 f"{'nós fixos' if g.nos_fixos else 'nós móveis'}"
@@ -536,25 +1016,41 @@ class Janela(QMainWindow):
         if pior is not None:
             linhas.append("")
             linhas.append(str(pior))
-        self._atualizar_casos()
-        self.registrar("\n".join(linhas))
+        self._textos["Estabilidade"] = "\n".join(linhas)
+        if pior is None:
+            return ["Estabilidade: nenhuma combinação com γz."]
+        return [f"Estabilidade: γz máximo {pior.valor:.4f} "
+                f"({'nós fixos' if pior.nos_fixos else 'nós móveis'})."]
 
-    def analisar_flambagem(self) -> None:
-        if not self.aplicar():
-            return
-        caso = self.escolha_caso.currentText()
-        if not caso:
-            self.registrar("Não há caso de carga para analisar.")
-            return
+    def _rodar_flambagem(self, casos: list[str]) -> list[str]:
+        feitos, falhas = [], []
+        for caso in casos:
+            try:
+                self.flambagens[caso] = flambagem(self.modelo, caso)
+            except ErroDeModelo as erro:
+                falhas.append(f"  {caso}: {erro}")
+                continue
+            fator = self.flambagens[caso].fator_critico
+            feitos.append(f"{caso} (fator {fator:.3f})")
+        return ["Flambagem: " + (", ".join(feitos)
+                                 or "nenhum caso perde estabilidade")] + falhas
+
+    def _rodar_modal(self) -> list[str]:
+        """Frequências e modos de vibração livre, sem amortecimento.
+
+        Não depende de carga: é vibração livre. O desenho do modo só usa a
+        geometria preparada de um ``Resultado`` — a de qualquer caso resolvido
+        serve —, e é por isso que guarda um caso de referência.
+        """
         try:
-            self.resultados.setdefault(caso, resolver(self.modelo, caso))
-            self.flambagem_atual = flambagem(self.modelo, caso)
+            self.modal_atual = analisar_modal(self.modelo)
         except ErroDeModelo as erro:
-            self._erro(erro)
-            return
-        self.escolha_vista.setCurrentText("Modo de flambagem")
-        self.redesenhar()
-        self.registrar(str(self.flambagem_atual))
+            return [f"Modal: {erro}"]
+        self._modal_caso_referencia = next(iter(self.resultados), None)
+        self._textos["Modal"] = str(self.modal_atual)
+        return [f"Modal: f1 = {self.modal_atual.frequencia_fundamental:.3f} Hz "
+                f"(T1 = {self.modal_atual.periodo_fundamental:.3f} s), "
+                f"{len(self.modal_atual.frequencias)} modos."]
 
     def dimensionar_pilares(self) -> None:
         """Envia os lances verticais ao motor de Pilares, pela envoltória.
@@ -580,14 +1076,66 @@ class Janela(QMainWindow):
         except ErroDeModelo as erro:
             self._erro(erro)
             return
+        self.dimensionamento["pilares"] = verificacoes
         self.registrar("\n" + resumo(verificacoes))
+        self._compatibilizar()
+        self._atualizar_modelos_3d()
+
+    def _compatibilizar(self) -> None:
+        """Continuidade dos pilares e nós viga–pilar, quando os dois motores
+        já rodaram — é a fronteira entre as peças, que nenhum deles vê."""
+        from ..compatibilizacao import nos_viga_pilar, prumadas, resumo
+
+        pilares = self.dimensionamento.get("pilares")
+        vigas = self.dimensionamento.get("vigas")
+        if not pilares or not vigas:
+            return
+        try:
+            p = prumadas(self.modelo, pilares)
+            n = nos_viga_pilar(self.modelo, vigas)
+        except (ErroDeModelo, KeyError, ValueError) as erro:
+            self.registrar(f"Compatibilização: {erro}")
+            return
+        self.dimensionamento["prumadas"] = p
+        self.dimensionamento["nos"] = n
+        self.registrar("\n" + resumo(p, n))
+
+    def _atualizar_modelos_3d(self) -> None:
+        """Refaz a armadura 3D com o que acabou de ser dimensionado.
+
+        É o que "Dimensionar" entrega: o modelo 3D da armadura, pronto para
+        olhar — e **nenhum arquivo**. Gravar prancha é decisão à parte
+        (``Emitir > Pranchas``), e dimensionar não deve perguntar pasta nem
+        escrever desenho. A armadura guardada é descartada porque ficou velha;
+        a do nível escolhido, se houver, é refeita já.
+        """
+        self.armaduras.clear()
+        cota = self._cota_escolhida()
+        if cota is None:
+            self.registrar("Modelo 3D da armadura atualizado — escolha um "
+                           "nível para vê-lo na vista 'Armadura'.")
+            return
+        try:
+            self.armadura_do_nivel(cota)
+        except (ErroDeModelo, ValueError, KeyError) as erro:
+            self.registrar(f"Modelo 3D da cota {cota:g} m não atualizou: "
+                           f"{erro}")
+            return
+        if self.escolha_vista.currentText() == "Armadura":
+            # a janela nativa do VTK bloqueia até ser fechada: recalcular não
+            # pode reabri-la à força, só trocar o aviso embutido
+            self._ultima_armadura_aberta = ("Armadura", cota)
+            self.redesenhar()
+        self.registrar(f"Modelo 3D da armadura da cota {cota:g} m atualizado.")
 
     def dimensionar_vigas(self) -> None:
-        """Reconhece as vigas contínuas, dimensiona e grava os desenhos.
+        """Reconhece as vigas, dimensiona e atualiza o modelo 3D.
 
-        Pergunta a pasta antes de calcular: o desenho é o que o usuário leva
-        embora, e obrigá-lo a repetir o cálculo por não ter escolhido onde
-        gravar seria desperdício.
+        Não pergunta pasta nem grava desenho: a prancha sai em
+        ``Emitir > Pranchas de vigas``, quando o usuário pedir.
+
+        Viga que repousa noutra entra aqui também: nela a de apoio é apoio, e
+        na de apoio ela é carga concentrada.
         """
         from ..continuidade import vigas_continuas
         from ..dimensionamento import resumo_de_vigas, verificar_vigas
@@ -595,18 +1143,13 @@ class Janela(QMainWindow):
         if not self.aplicar():
             return
         cadeias = [v for v in vigas_continuas(self.modelo)
-                   if len(v.apoios) >= 2]
+                   if len(v.suportes) >= 2]
         if not cadeias:
-            self.registrar("Nenhuma viga contínua com dois apoios de pilar.")
+            self.registrar("Nenhuma viga com dois apoios, de pilar ou de "
+                           "outra viga.")
             return
 
-        padrao = str(self.caminho.parent if self.caminho else Path.cwd())
-        pasta = QFileDialog.getExistingDirectory(
-            self, f"Onde gravar os desenhos das {len(cadeias)} vigas", padrao)
-        if not pasta:
-            return
-
-        self.registrar(f"Dimensionando {len(cadeias)} vigas contínuas…")
+        self.registrar(f"Dimensionando {len(cadeias)} vigas…")
         try:
             # A envoltória vai junto, e é o que faz a diferença: sem ela o
             # motor de Vigas dimensiona só para G e Q, e o efeito das ações
@@ -614,19 +1157,22 @@ class Janela(QMainWindow):
             # permanente — não chega à armadura. Com ela, a viga é conferida
             # contra o que o edifício inteiro exige.
             verificacoes = verificar_vigas(
-                self.modelo, pasta_desenhos=pasta,
-                envoltorias=self.envoltoria_atual())
+                self.modelo, envoltorias=self.envoltoria_atual())
         except ErroDeModelo as erro:
             self._erro(erro)
             return
+        self.dimensionamento["vigas"] = verificacoes
         self.registrar("\n" + resumo_de_vigas(verificacoes))
+        self._compatibilizar()
+        self._atualizar_modelos_3d()
 
     def dimensionar_lajes(self) -> None:
-        """Dimensiona as lajes de cada pavimento e grava as plantas de armação.
+        """Dimensiona as lajes de cada pavimento e atualiza o modelo 3D.
 
         Vai por **pavimento**, e não painel a painel, porque a compatibilização
         dos momentos negativos do item 14.7.6.2 acontece entre painéis
-        vizinhos: painel sozinho não tem com quem compatibilizar.
+        vizinhos: painel sozinho não tem com quem compatibilizar. Não grava
+        planta: isso é ``Emitir > Pranchas de lajes``.
         """
         from ..dimensionamento import (cotas_com_laje, resumo_de_lajes,
                                        verificar_lajes)
@@ -638,19 +1184,64 @@ class Janela(QMainWindow):
             self.registrar("O modelo não tem lajes.")
             return
 
-        padrao = str(self.caminho.parent if self.caminho else Path.cwd())
-        pasta = QFileDialog.getExistingDirectory(
-            self, f"Onde gravar as plantas dos {len(cotas)} pavimentos", padrao)
-        if not pasta:
-            return
-
         self.registrar(f"Dimensionando as lajes de {len(cotas)} pavimentos…")
         try:
-            verificacoes = verificar_lajes(self.modelo, pasta_desenhos=pasta)
+            verificacoes = verificar_lajes(self.modelo)
         except ErroDeModelo as erro:
             self._erro(erro)
             return
+        self.dimensionamento["lajes"] = verificacoes
         self.registrar("\n" + resumo_de_lajes(verificacoes))
+        self._atualizar_modelos_3d()
+
+    def _pasta_de_saida(self, titulo: str) -> str:
+        padrao = str(self.caminho.parent if self.caminho else Path.cwd())
+        return QFileDialog.getExistingDirectory(self, titulo, padrao)
+
+    def emitir_pranchas_de_vigas(self) -> None:
+        """Grava a prancha das vigas já dimensionadas — todas lado a lado.
+
+        Usa o último "Dimensionar vigas"; se ainda não houve, dimensiona
+        antes. A pasta é perguntada aqui, e só aqui.
+        """
+        from ..dimensionamento import gravar_pranchas_de_vigas
+
+        if "vigas" not in self.dimensionamento:
+            self.dimensionar_vigas()
+        verificacoes = self.dimensionamento.get("vigas")
+        if not verificacoes:
+            return
+        pasta = self._pasta_de_saida("Onde gravar a prancha das vigas")
+        if not pasta:
+            return
+        try:
+            caminho = gravar_pranchas_de_vigas(verificacoes, pasta)
+        except OSError as erro:
+            self._erro(erro)
+            return
+        self.registrar(f"Prancha das vigas gravada em {caminho}."
+                       if caminho else
+                       "Nenhuma viga dimensionada com sucesso: nada a gravar.")
+
+    def emitir_pranchas_de_lajes(self) -> None:
+        """Grava as plantas de armação dos pavimentos já dimensionados."""
+        from ..dimensionamento import gravar_pranchas_de_lajes
+
+        if "lajes" not in self.dimensionamento:
+            self.dimensionar_lajes()
+        verificacoes = self.dimensionamento.get("lajes")
+        if not verificacoes:
+            return
+        pasta = self._pasta_de_saida("Onde gravar as plantas das lajes")
+        if not pasta:
+            return
+        try:
+            arquivos = gravar_pranchas_de_lajes(verificacoes, pasta)
+        except OSError as erro:
+            self._erro(erro)
+            return
+        self.registrar(f"{len(arquivos)} arquivo(s) das lajes gravado(s) em "
+                       f"{pasta}.")
 
     def envoltoria_atual(self, avisar: bool = True):
         """A envoltória das combinações últimas, calculada uma vez e guardada.
@@ -662,13 +1253,20 @@ class Janela(QMainWindow):
         """
         if self._envoltoria is not None:
             return self._envoltoria
+        from ..core.segunda_ordem_global import (
+            resultados_para_dimensionamento, resumo)
         try:
             acoes = acoes_do_modelo(self.modelo)
             validar_acoes(self.modelo, acoes)
-            resultados = resolver_combinacoes(self.modelo,
-                                              combinacoes_elu(acoes))
+            # Com a 2ª ordem global: 0,95·γz ou P-Δ conforme o γz de cada
+            # combinação (15.7). É isto que pilares e vigas recebem.
+            resultados, tratamento = resultados_para_dimensionamento(
+                self.modelo, combinacoes_elu(acoes))
             self._envoltoria = envoltoria(self.modelo, resultados)
+            self._tratamento_2a = tratamento
             self.resultados.update(resultados)
+            if avisar:
+                self.registrar(resumo(tratamento))
             self._atualizar_casos()
         except ErroDeModelo as erro:
             if avisar:
@@ -767,13 +1365,13 @@ class Janela(QMainWindow):
         """
         resultado = self._resultado_atual()
         if resultado is None:
-            caso = self.escolha_caso.currentText()
-            if not caso:
-                self.registrar("Não há caso de carga para analisar.")
-                return
-            self.analisar()
+            if not self.resultados:
+                # nada foi analisado ainda: o botão Análise roda tudo
+                self.analisar_tudo()
             resultado = self._resultado_atual()
             if resultado is None:
+                self.registrar("Escolha a análise e o caso cujas reações "
+                               "quer ver.")
                 return
         self.registrar("\n" + resultado.reacoes_resumo())
 
@@ -801,6 +1399,23 @@ class Janela(QMainWindow):
     def redesenhar(self) -> None:
         vista = self.escolha_vista.currentText()
         escala = self.escala.value() or None
+        # Cada controle só vale para as vistas a que se refere; os outros ficam
+        # apagados em vez de oferecer uma escolha que não muda o desenho.
+        e_esforco = vista in VISTAS_DE_ESFORCO
+        self.representacao_diagrama.setEnabled(e_esforco)
+        self.escala.setEnabled(e_esforco or vista in (
+            "Deformada", "Modo de flambagem", "Modo de vibração", "Cargas"))
+        self.escolha_nivel.setEnabled(vista in ("Laje", "Armadura"))
+        self.mostrar_lajes.setEnabled(vista == "3D")
+        self.rotulos_nos.setEnabled(vista == "Modelo")
+        self.rotulos_barras.setEnabled(vista == "Modelo")
+        # Só aparece (e só fica habilitado) enquanto a vista de Armadura, com
+        # nível escolhido, está na tela — nas demais, abrir a janela nativa
+        # não faz sentido.
+        self.botao_armadura_3d.setVisible(vista == "Armadura")
+        self.botao_armadura_3d.setEnabled(False)
+        if vista != "Armadura":
+            self._ultima_armadura_aberta = None
         try:
             if vista == "Modelo" or not self.modelo.barras:
                 self.vista.desenhar_modelo(
@@ -831,18 +1446,53 @@ class Janela(QMainWindow):
                     self.registrar("Escolha um nível: a vista de Armadura é "
                                    "de um pavimento por vez.")
                     return
-                self.vista.desenhar_armadura(self.modelo,
-                                             self.armadura_do_nivel(cota))
+                # A vista de Armadura abre como janela nativa separada (ver
+                # ``abrir_armadura_3d``); o widget embutido só avisa que os
+                # dados já foram calculados e guardados no cache.
+                self.vista.preparar_aviso_armadura(
+                    cota, self.armadura_do_nivel(cota))
+                self.botao_armadura_3d.setEnabled(True)
+                # Abre sozinha na primeira vez que se chega a este nível —
+                # troca de pavimento reabre, mas girar o desenho ou mexer
+                # noutro controle da barra (que também chama ``redesenhar``)
+                # não reabre à toa, porque a chave (vista, cota) não mudou.
+                # Some sob QT_QPA_PLATFORM=offscreen (o --autoteste): lá não
+                # há usuário para fechar a janela nativa, que bloqueia até
+                # isso acontecer.
+                chave = (vista, cota)
+                if (chave != self._ultima_armadura_aberta
+                        and QApplication.instance().platformName()
+                        != "offscreen"):
+                    self._ultima_armadura_aberta = chave
+                    self.abrir_armadura_3d()
+                return
+
+            if vista == "Cargas":
+                caso = self._caso_de_carga(self.escolha_caso.currentText())
+                self.vista.desenhar_cargas(self.modelo, caso, escala)
                 return
 
             if vista == "Modo de flambagem":
-                if self.flambagem_atual is None:
+                f = self.flambagens.get(self.escolha_caso.currentText())
+                referencia = (self.resultados.get(f.caso)
+                              if f is not None else None)
+                if f is None or referencia is None:
                     self.vista.desenhar_modelo(self.modelo)
                     return
-                referencia = self.resultados[self.flambagem_atual.caso]
                 self.vista.desenhar_modo(
-                    self.modelo, referencia, self.flambagem_atual.modos[0],
-                    self.flambagem_atual.fator_critico, 0, escala)
+                    self.modelo, referencia, f.modos[0], f.fator_critico, 0,
+                    escala)
+                return
+
+            if vista == "Modo de vibração":
+                referencia = self.resultados.get(self._modal_caso_referencia)
+                if self.modal_atual is None or referencia is None:
+                    self.vista.desenhar_modelo(self.modelo)
+                    return
+                self.vista.desenhar_modo_vibracao(
+                    self.modelo, referencia, self.modal_atual.modos[0],
+                    self.modal_atual.frequencias[0],
+                    self.modal_atual.periodos[0], 0, escala)
                 return
 
             resultado = self._resultado_atual()
@@ -853,9 +1503,89 @@ class Janela(QMainWindow):
             if vista == "Deformada":
                 self.vista.desenhar_deformada(resultado, escala)
             else:
-                self.vista.desenhar_diagrama(resultado, vista, escala)
+                self.vista.desenhar_diagrama(
+                    resultado, vista, escala,
+                    self.representacao_diagrama.currentText())
         except (ErroDeModelo, KeyError, ValueError) as erro:
             self._erro(erro)
+
+    def abrir_armadura_3d(self) -> None:
+        """Abre a janela nativa do VTK com a armadura do nível escolhido.
+
+        Bloqueia até o usuário fechá-la — o mesmo comportamento de
+        ``Plotter.show()`` que Consolos R03 e Lajes R06 já usam para a peça
+        detalhada. ``redesenhar()`` já chama isto sozinha na primeira vez que
+        a vista de Armadura chega a um nível novo (ver o comentário lá); este
+        método continua existindo como o gatilho do botão, para reabrir a
+        mesma janela sem trocar de nível.
+        """
+        cota = self._cota_escolhida()
+        if cota is None:
+            self.registrar("Escolha um nível antes de abrir a vista 3D da "
+                           "armadura.")
+            return
+        armadura = self.armadura_do_nivel(cota)
+        abrir_vista_interativa_armadura(self.modelo, armadura, cota)
+
+    # -- sincronização do 3D com a tabela ativa ------------------------------
+
+    def _tabela_ativa(self) -> str | None:
+        """A chave da tabela que está visível agora nas sub-abas de dados.
+
+        ``None`` quando nada de reconhecível está em foco — o painel de
+        dados sempre mostra alguma sub-aba, mas ler ``currentWidget()`` é
+        mais robusto que supor a ordem das abas.
+        """
+        grupo = self.dados.currentWidget()
+        if grupo is None:
+            return None
+        atual = grupo.currentWidget()
+        for chave, tabela in self.dados.tabelas.items():
+            if tabela is atual:
+                return chave
+        return None
+
+    def _selecionar_linha(self, chave: str, coluna: str, valor: str) -> bool:
+        """Destaca, na tabela ``chave``, a linha cuja coluna ``coluna`` tem
+        ``valor``. Devolve se achou."""
+        tabela = self.dados.tabelas.get(chave)
+        if tabela is None:
+            return False
+        indice = tabela._indice.get(coluna)
+        if indice is None:
+            return False
+        for linha in range(tabela.tabela.rowCount()):
+            item = tabela.tabela.item(linha, indice)
+            if item is not None and item.text().strip() == valor:
+                tabela.tabela.selectRow(linha)
+                tabela.tabela.scrollToItem(item)
+                return True
+        return False
+
+    def _ao_selecionar_elemento(self, info: dict | None) -> None:
+        """Callback central do picking em "Modelo"/"Sólido" (ver
+        ``Vista3D.definir_callback_selecao``): olha qual sub-aba de dados
+        está em foco e destaca, nela, a linha correspondente ao elemento
+        apontado no 3D. O 3D já se destaca e mostra um texto sozinho — isto
+        só soma a sincronização com a tabela, quando ela existe.
+        """
+        if info is None:
+            return
+        chave_ativa = self._tabela_ativa()
+        tipo, nome = info["tipo"], info["nome"]
+
+        if tipo == "barra":
+            barra = self.modelo.barras.get(nome)
+            if chave_ativa == "barras":
+                self._selecionar_linha("barras", "nome", nome)
+            elif chave_ativa == "secoes" and barra is not None:
+                self._selecionar_linha("secoes", "nome", barra.secao)
+            elif chave_ativa == "materiais" and barra is not None:
+                self._selecionar_linha("materiais", "nome", barra.material)
+        elif tipo == "no":
+            if chave_ativa in ("nos", "apoios", "molas"):
+                coluna = "nome" if chave_ativa == "nos" else "no"
+                self._selecionar_linha(chave_ativa, coluna, nome)
 
 
 def abrir_janela(modelo: Modelo | None = None) -> Janela:

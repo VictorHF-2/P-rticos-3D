@@ -71,6 +71,68 @@ def _preparar(doc) -> None:
         estilo.dxf.dimclrt = AMARELO      # texto
 
 
+class _Folha:
+    """O modelspace com uma origem: tudo o que se desenha nela anda junto.
+
+    O desenho de uma viga usa coordenadas próprias (a elevação começa em
+    ``x = 0``). Para pôr várias vigas **lado a lado** num mesmo DXF basta
+    deslocar cada uma, e deslocar na hora de desenhar -- e não depois, movendo
+    entidades já criadas -- é o que mantém certas as cotas associativas: a
+    ``DIMENSION`` guarda a geometria num bloco anônimo que mover a entidade
+    não leva junto. A folha também mede o que foi desenhado, para a viga
+    seguinte saber onde começar.
+    """
+
+    def __init__(self, msp, dx: float = 0.0, dy: float = 0.0) -> None:
+        self.msp, self.dx, self.dy = msp, dx, dy
+        self.x_min = float("inf")
+        self.x_max = float("-inf")
+        self.y_min = float("inf")
+        self.y_max = float("-inf")
+
+    def ponto(self, x: float, y: float, largura: float = 0.0,
+              ancora: str = "left") -> tuple[float, float]:
+        """Ponto na coordenada da folha, registrando o espaço que ocupa."""
+        x, y = x + self.dx, y + self.dy
+        if ancora == "center":
+            esq, dir_ = x - largura / 2.0, x + largura / 2.0
+        elif ancora == "right":
+            esq, dir_ = x - largura, x
+        else:
+            esq, dir_ = x, x + largura
+        self.x_min = min(self.x_min, esq)
+        self.x_max = max(self.x_max, dir_)
+        self.y_min = min(self.y_min, y)
+        self.y_max = max(self.y_max, y)
+        return x, y
+
+    def add_lwpolyline(self, pontos, dxfattribs=None):
+        return self.msp.add_lwpolyline(
+            [self.ponto(*p[:2]) for p in pontos], dxfattribs=dxfattribs)
+
+    def add_line(self, a, b, dxfattribs=None):
+        return self.msp.add_line(self.ponto(*a[:2]), self.ponto(*b[:2]),
+                                 dxfattribs=dxfattribs)
+
+    def add_circle(self, centro, raio, dxfattribs=None):
+        return self.msp.add_circle(self.ponto(*centro[:2]), raio,
+                                   dxfattribs=dxfattribs)
+
+    def add_text(self, texto, height, dxfattribs=None):
+        return self.msp.add_text(texto, height=height,
+                                 dxfattribs=dxfattribs)
+
+    def add_linear_dim(self, base, p1, p2, **kw):
+        return self.msp.add_linear_dim(
+            base=self.ponto(*base[:2]), p1=self.ponto(*p1[:2]),
+            p2=self.ponto(*p2[:2]), **kw)
+
+    def add_radius_dim(self, center, mpoint, **kw):
+        return self.msp.add_radius_dim(
+            center=self.ponto(*center[:2]), mpoint=self.ponto(*mpoint[:2]),
+            **kw)
+
+
 def _polilinha(msp, pol: geometria.Polilinha, dx: float = 0.0,
                dy: float = 0.0) -> None:
     pts = [(p[0] + dx, p[1] + dy) for p in pol.pontos]
@@ -82,8 +144,20 @@ def _polilinha(msp, pol: geometria.Polilinha, dx: float = 0.0,
 def _texto(msp, t: geometria.Texto, dx: float = 0.0, dy: float = 0.0) -> None:
     ent = msp.add_text(t.texto, height=t.altura,
                        dxfattribs={"layer": t.camada, "rotation": t.rotacao})
-    ent.set_placement((t.posicao[0] + dx, t.posicao[1] + dy),
-                      align=_ALINHAMENTO.get(t.ancora, TextEntityAlignment.LEFT))
+    # o texto girado em 90 graus ocupa a altura, não o comprimento, na
+    # horizontal -- a folha só precisa saber até onde o desenho chega
+    larg = 0.0 if t.rotacao else largura_texto(t.texto, t.altura)
+    pos = msp.ponto(t.posicao[0] + dx, t.posicao[1] + dy, larg, t.ancora)
+    ent.set_placement(
+        pos, align=_ALINHAMENTO.get(t.ancora, TextEntityAlignment.LEFT))
+
+
+#: folga, em cm, entre o fim de uma viga (a tabela de aço, à direita) e o
+#: começo da seguinte. Do tamanho de uma seção transversal: o suficiente para o
+#: olho separar as pranchas sem afastá-las a ponto de perder a vizinhança
+FOLGA_ENTRE_VIGAS = 400.0
+#: a mesma folga, entre uma fileira de vigas e a de baixo
+FOLGA_ENTRE_FILEIRAS = 400.0
 
 
 def exportar(res: ResultadoViga, caminho: str, secoes_m=None,
@@ -92,11 +166,81 @@ def exportar(res: ResultadoViga, caminho: str, secoes_m=None,
 
     ``secoes_m`` aceita abscissas ou pares ``(x, descrição)``.
     """
-    from .desenho import normalizar_secoes
+    return exportar_varias([(res, secoes_m, mostrar_estribos)], caminho)
 
+
+def disposicao(medidas: list[tuple[float, float, float, float]],
+               colunas: int = 0) -> list[tuple[float, float]]:
+    """Onde pôr cada viga: o deslocamento ``(dx, dy)`` de cada uma.
+
+    ``medidas`` traz ``(x_min, x_max, y_min, y_max)`` do desenho de cada viga
+    na origem. ``colunas`` é quantas vigas cabem em cada fileira: ``0`` (ou
+    mais que as vigas) é tudo **lado a lado**; ``1`` é **uma sob a outra**;
+    um valor intermediário é uma **grade**. A primeira viga fica onde está
+    (``dx = dy = 0``), as fileiras se alinham pela esquerda dela e, dentro de
+    cada fileira, pela linha de base (o eixo ``y = 0`` de cada elevação).
+    """
+    n = len(medidas)
+    por_fileira = colunas if colunas > 0 else n
+    x_ini = medidas[0][0]
+    saida: list[tuple[float, float]] = [(0.0, 0.0)] * n
+    fundo_anterior = None
+    dy = 0.0
+    for inicio in range(0, n, por_fileira):
+        ids = range(inicio, min(inicio + por_fileira, n))
+        topo = max(medidas[k][3] for k in ids)
+        fundo = min(medidas[k][2] for k in ids)
+        if fundo_anterior is not None:
+            dy = fundo_anterior - FOLGA_ENTRE_FILEIRAS - topo
+        cursor = x_ini
+        for k in ids:
+            dx = cursor - medidas[k][0]
+            saida[k] = (dx, dy)
+            cursor = dx + medidas[k][1] + FOLGA_ENTRE_VIGAS
+        fundo_anterior = fundo + dy
+    return saida
+
+
+def exportar_varias(itens, caminho: str, colunas: int = 0) -> str:
+    """Grava num DXF só o detalhamento de várias vigas.
+
+    ``itens`` é uma lista de ``(res, secoes_m, mostrar_estribos)``. Cada viga é
+    o mesmo desenho que :func:`exportar` faz para uma só -- elevação, vista
+    explodida, seções e tabela de aço --, deslocado para o seu lugar na
+    disposição (ver :func:`disposicao`): por padrão **lado a lado**, cada uma à
+    direita da anterior. Com uma viga o arquivo é idêntico ao de sempre.
+    """
+    itens = list(itens)
+    if not itens:
+        raise ValueError("Nenhuma viga para exportar.")
     doc = ezdxf.new("R2013", setup=True)
     _preparar(doc)
     msp = doc.modelspace()
+
+    lugares = [(0.0, 0.0)] * len(itens)
+    if len(itens) > 1:
+        # o espaço que cada desenho ocupa só se sabe desenhando: um ensaio
+        # num documento descartável mede cada um
+        medidas = []
+        for res, secoes_m, mostrar_estribos in itens:
+            doc_ensaio = ezdxf.new("R2013", setup=True)
+            _preparar(doc_ensaio)
+            ensaio = _Folha(doc_ensaio.modelspace())
+            _desenhar_viga(ensaio, res, secoes_m, mostrar_estribos)
+            medidas.append((ensaio.x_min, ensaio.x_max,
+                            ensaio.y_min, ensaio.y_max))
+        lugares = disposicao(medidas, colunas)
+    for (res, secoes_m, mostrar_estribos), (dx, dy) in zip(itens, lugares):
+        _desenhar_viga(_Folha(msp, dx, dy), res, secoes_m, mostrar_estribos)
+
+    doc.saveas(caminho)
+    return caminho
+
+
+def _desenhar_viga(msp, res: ResultadoViga, secoes_m,
+                   mostrar_estribos: bool) -> None:
+    """Desenha uma viga na ``_Folha`` ``msp`` (o desenho todo, sem gravar)."""
+    from .desenho import normalizar_secoes
 
     el = geometria.montar_elevacao(res, mostrar_estribos)
     for pol in el.contorno + el.apoios + el.estribos + el.barras + el.zonas:
@@ -167,6 +311,8 @@ def exportar(res: ResultadoViga, caminho: str, secoes_m=None,
         dy = y_base
         _polilinha(msp, sec.contorno, dx, dy)
         _polilinha(msp, sec.estribo, dx, dy)
+        if sec.estribo_mesa is not None:
+            _polilinha(msp, sec.estribo_mesa, dx, dy)
         for c in sec.barras:
             msp.add_circle((c.centro[0] + dx, c.centro[1] + dy),
                            max(c.raio, 0.4), dxfattribs={"layer": c.camada})
@@ -179,9 +325,6 @@ def exportar(res: ResultadoViga, caminho: str, secoes_m=None,
         x_atual += largura
 
     _tabela_posicoes(msp, res, el.x_max + 80.0, el.h_max)
-
-    doc.saveas(caminho)
-    return caminho
 
 
 #: largura de um caractere, em frações da altura do texto. Aproximação boa o
@@ -219,7 +362,12 @@ def conferir_sobreposicoes(caminho: str) -> list[str]:
         larg = largura_texto(texto, altura)
         centrado = e.dxf.halign == 1 or e.dxf.valign == 2
         ponto = e.dxf.align_point if (e.dxf.halign or e.dxf.valign)             else e.dxf.insert
-        x0 = ponto.x - larg / 2.0 if centrado else ponto.x
+        if e.dxf.halign == 2:                 # alinhado à direita: termina no ponto
+            x0 = ponto.x - larg
+        elif centrado:
+            x0 = ponto.x - larg / 2.0
+        else:
+            x0 = ponto.x
         caixas.append((x0, ponto.y - altura / 2.0, x0 + larg,
                        ponto.y + altura / 2.0, texto))
     problemas = []

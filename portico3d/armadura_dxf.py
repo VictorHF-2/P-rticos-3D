@@ -47,7 +47,8 @@ def arestas_da_forma(modelo: Modelo, cota: float) -> list[np.ndarray]:
     situar a armadura e para medir cobrimento no CAD.
     """
     from .armadura3d import lances_do_pavimento, vigas_do_pavimento
-    from .core.lajes import _cantos
+    from .core.lajes import (contorno, deslocamento_do_centro,
+                             desnivel_da_viga)
     from .core.montagem import preparar_barras
 
     alvos = list(lances_do_pavimento(modelo, cota))
@@ -68,7 +69,9 @@ def arestas_da_forma(modelo: Modelo, cota: float) -> list[np.ndarray]:
         secao = modelo.secoes[barra.secao]
         if secao.b <= 0.0 or secao.h <= 0.0:
             continue
-        pi, pj = modelo.ponto(barra.no_i), modelo.ponto(barra.no_j)
+        # o topo da viga no nível do pavimento, como na vista 3D
+        dz = np.array([0.0, 0.0, desnivel_da_viga(modelo, nome)])
+        pi, pj = modelo.ponto(barra.no_i) + dz, modelo.ponto(barra.no_j) + dz
         ey, ez = p.R[1], p.R[2]
         cantos = [(-secao.b / 2, -secao.h / 2), (secao.b / 2, -secao.h / 2),
                   (secao.b / 2, secao.h / 2), (-secao.b / 2, secao.h / 2)]
@@ -82,13 +85,13 @@ def arestas_da_forma(modelo: Modelo, cota: float) -> list[np.ndarray]:
         if abs(float(modelo.ponto(laje.no_a)[2]) - cota) > 1e-6:
             continue
         try:
-            cantos, _, _ = _cantos(modelo, laje)
+            base = contorno(modelo, laje)
         except ErroDeModelo:
             continue
-        base = np.array([modelo.ponto(c) for c in cantos])
-        meia = max(laje.espessura, 0.01) / 2.0
+        meia = max(laje.altura, 0.01) / 2.0
+        centro = deslocamento_do_centro(modelo, laje)   # topo = topo das vigas
         for sinal in (-1.0, 1.0):
-            face = base + np.array([0.0, 0.0, sinal * meia])
+            face = base + np.array([0.0, 0.0, centro + sinal * meia])
             saida.append(np.vstack([face, face[:1]]))
     return saida
 

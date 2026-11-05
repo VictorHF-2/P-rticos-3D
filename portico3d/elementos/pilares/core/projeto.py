@@ -168,6 +168,22 @@ def calcular(projeto: Projeto, progresso=None, cancelado=None
             saida.resultados.append(dimensionar(pilar))
         except Exception as exc:                        # noqa: BLE001
             saida.falhas[pilar.nome] = str(exc)
+    # Critério de projeto: basta uma barra tracionada em algum lance para
+    # todas as barras da estrutura levarem a emenda de tração (item
+    # 9.5.2.2.1) -- um comprimento de traspasse só, para não haver na obra
+    # dois comprimentos que se confundem.
+    from .dimensionar import impor_emenda_tracionada
+    origem = next((r for r in saida.resultados
+                   if r.ancoragem is not None and r.ancoragem.tracionada),
+                  None)
+    if origem is not None:
+        motivo = f"lance {origem.pilar.nome}, {origem.ancoragem.motivo}"
+        for r in saida.resultados:
+            for rc in (r.resultados_combinacoes or [r]):
+                impor_emenda_tracionada(rc, motivo)
+        saida.avisos.append(
+            f"Emenda por traspasse de barras tracionadas aplicada a todos os "
+            f"lances do projeto: {motivo}.")
     if progresso is not None:
         progresso(total - saida.interrompido, total, "")
     return saida

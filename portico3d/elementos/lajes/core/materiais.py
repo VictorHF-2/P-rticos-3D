@@ -280,6 +280,19 @@ class Concreto:
         """
         return 0.25 if self.fck <= 50.0 else 0.15
 
+    def x_sobre_d_limite_redistribuido(self, delta: float = 1.0) -> float:
+        """Limite de x/d de quem determina os momentos por **análise
+        elástica** com redistribuição ``delta`` (14.6.4.3): ``x/d <=
+        (delta - 0,44)/1,25`` até C50 e ``(delta - 0,56)/1,25`` acima, e no
+        máximo 0,45 e 0,35 -- o valor de quem não redistribui (``delta =
+        1``). É o que vale com os momentos do ``mef`` da R10; com
+        ``delta = 0,75`` recai nos 0,25 do regime rígido-plástico."""
+        if delta >= 1.0:
+            return 0.45 if self.fck <= 50.0 else 0.35
+        if self.fck <= 50.0:
+            return (delta - 0.44) / 1.25
+        return (delta - 0.56) / 1.25
+
     @property
     def classe(self) -> str:
         return f"C{self.fck:g}"

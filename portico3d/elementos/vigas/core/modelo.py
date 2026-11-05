@@ -15,6 +15,7 @@ Convenções:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field, asdict
 
@@ -145,6 +146,10 @@ class Secao:
 
 TIPOS_APOIO = ("livre", "simples", "engaste", "mola")
 
+#: o que pode estar apoiado na viga, para o limite de deslocamento após a
+#: construção da parede (Tabela 13.3). As chaves de `els.PAREDE_APOIADA`
+PAREDES_APOIADAS = ("alvenaria", "divisoria", "nenhuma")
+
 
 @dataclass
 class Apoio:
@@ -161,6 +166,11 @@ class Apoio:
     largura: float = 20.0     # cm, largura do pilar de apoio
     k_mola: float = 0.0       # kN.m/rad
     nome: str = ""
+    #: altura do pilar disponível abaixo da face inferior da viga, cm. Só é
+    #: lida num engaste de extremidade, onde a armadura negativa pode ter de
+    #: descer no pilar para ancorar (18.3.2.4-d); zero = não informada, e a
+    #: memória declara a altura exigida como condição a conferir
+    altura_pilar_abaixo: float = 0.0
 
     def __post_init__(self) -> None:
         if self.tipo not in TIPOS_APOIO:
@@ -327,7 +337,9 @@ class Config:
     # -- análise ------------------------------------------------------------
     peso_proprio: bool = True
     redistribuicao: float = 1.0   # delta (1,0 = análise elástica sem redistribuir)
-    momento_face_apoio: bool = True   # reduz o momento negativo à face do pilar
+    #: arredonda o pico do diagrama sobre os apoios internos (14.6.3, Figura
+    #: 14.6: ΔM = R·t/8). Era "reduzir à face do apoio", que a norma não prevê
+    arredondar_momento_apoio: bool = True
     #: Engastamento parcial mínimo nos apoios extremos, como fração do momento
     #: do vão adjacente. Não é exigência da NBR 6118 -- é critério de projeto,
     #: usual quando a viga é monolítica com o pilar. 0 desliga.
@@ -382,6 +394,14 @@ class Config:
     #: bitola imposta do estribo, mm, chaveada pelo índice do tramo **como
     #: texto** -- o JSON não guarda chave numérica
     bitolas_estribo: dict = field(default_factory=dict)
+    #: bitola imposta da armadura lateral do tramo, mm, chaveada pelo índice
+    #: do tramo como texto. Cobre as duas fontes de barra lateral que o
+    #: detalhamento gera -- a armadura de pele do item 17.3.5.2.3 e a parcela
+    #: lateral da armadura longitudinal de torção do item 17.5.1.6 --, porque
+    #: as duas ocupam a mesma face e, na tabela de resultados, são "a
+    #: armadura lateral deste tramo" para quem projeta. Ausente ou 0 = o
+    #: programa escolhe
+    bitolas_pele: dict = field(default_factory=dict)
     #: uma única distribuição de estribos por tramo, a mais conservadora entre
     #: as faixas do escalonamento
     uniformizar_estribos: bool = False
@@ -651,6 +671,30 @@ class Viga:
             vistos.append(m.x)
         return saida
 
+    def teto_da_mesa(self, i: int) -> tuple[float, str, float, float]:
+        """``(fator, caso, a em cm, bw + 2·0,1·a em cm)`` do tramo ``i``.
+
+        ``a`` é a distância entre pontos de momento nulo pelos vínculos do
+        tramo (14.6.2.2): ``l`` no biapoiado, ``0,75 l`` com continuidade num
+        lado, ``0,6 l`` nos dois e ``2 l`` no balanço. É o lado da restrição
+        que o programa conhece; ``0,5 b2`` e ``b4`` dependem das lajes.
+        """
+        t = self.tramos[i]
+        internos = sum(1 for k in (i, i + 1)
+                       if 0 < k < len(self.apoios) - 1
+                       and self.apoios[k].tipo != "livre")
+        if (self.apoios[i].tipo == "livre"
+                or self.apoios[i + 1].tipo == "livre"):
+            fator, caso = 2.0, "em balanço"
+        elif internos >= 2:
+            fator, caso = 0.6, "contínuo nos dois apoios"
+        elif internos == 1:
+            fator, caso = 0.75, "contínuo num apoio"
+        else:
+            fator, caso = 1.0, "biapoiado"
+        a_cm = fator * t.L * 100.0
+        return fator, caso, a_cm, t.secao.bw + 2.0 * 0.1 * a_cm
+
     def _conferir_mesa(self, i: int, t: "Tramo") -> list[str]:
         """Confere a largura colaborante declarada -- item 14.6.2.2.
 
@@ -668,20 +712,7 @@ class Viga:
         """
         if t.secao.tipo == "retangular" or t.secao.bf <= t.secao.bw + 1e-9:
             return []
-        internos = sum(1 for k in (i, i + 1)
-                       if 0 < k < len(self.apoios) - 1
-                       and self.apoios[k].tipo != "livre")
-        if (self.apoios[i].tipo == "livre"
-                or self.apoios[i + 1].tipo == "livre"):
-            fator, caso = 2.0, "em balanço"
-        elif internos >= 2:
-            fator, caso = 0.6, "contínuo nos dois apoios"
-        elif internos == 1:
-            fator, caso = 0.75, "contínuo num apoio"
-        else:
-            fator, caso = 1.0, "biapoiado"
-        a_cm = fator * t.L * 100.0
-        teto = t.secao.bw + 2.0 * 0.1 * a_cm
+        fator, caso, a_cm, teto = self.teto_da_mesa(i)
         if t.secao.bf > teto + 1e-6:
             return [av.erro(
                 f"Tramo {i + 1}: largura colaborante bf = {t.secao.bf:g} cm "
@@ -845,8 +876,47 @@ class Viga:
         d["_versao"] = 1
         return d
 
+    def impressao_digital(self) -> str:
+        """Identificação dos dados de entrada: 12 caracteres, em quatro grupos.
+
+        É o SHA-256 dos dados da viga em forma canônica (chaves em ordem,
+        sem espaços), e não do arquivo: o mesmo cálculo dá a mesma impressão
+        mesmo salvo em outro arquivo ou com outro formato de espaços. Qualquer
+        dado que mude o cálculo -- uma carga, uma bitola imposta, o fck --
+        muda a impressão. Vai na memória de cálculo e na planilha, para que um
+        número contestado seja ligado, depois, ao dado que o produziu.
+        """
+        dados = self.para_dict()
+        # campo opcional acrescentado depois: com o valor padrão ele não entra,
+        # para a mesma viga continuar com a mesma impressão de antes
+        for ap in dados.get("apoios", []):
+            if not ap.get("altura_pilar_abaixo"):
+                ap.pop("altura_pilar_abaixo", None)
+        texto = json.dumps(dados, sort_keys=True,
+                           ensure_ascii=False, separators=(",", ":"))
+        h = hashlib.sha256(texto.encode("utf-8")).hexdigest()[:12].upper()
+        return "-".join(h[i:i + 4] for i in range(0, 12, 4))
+
     @staticmethod
     def de_dict(d: dict) -> "Viga":
+        cfg = dict(d.get("config", {}))
+        # `parede_apoiada` já foi um booleano ("há parede apoiada?"), e quatro
+        # projetos de referência ainda o trazem assim. O motor nunca chegou a
+        # ler o booleano: `els.PAREDE_APOIADA.get(parede, ...["alvenaria"])`
+        # trata qualquer valor desconhecido como alvenaria, então `true` sempre
+        # calculou como alvenaria -- só o painel de entrada, que põe o valor
+        # num combo de texto, quebrava ao abrir. Normalizar aqui, com o mesmo
+        # fallback do motor, faz o arquivo abrir sem mudar nenhum resultado
+        if cfg.get("parede_apoiada", "alvenaria") not in PAREDES_APOIADAS:
+            cfg["parede_apoiada"] = "alvenaria"
+        # `momento_face_apoio` ("reduzir o momento negativo à face do apoio") foi
+        # trocado por `arredondar_momento_apoio` (14.6.3): a norma não prevê a
+        # redução à face. O valor antigo vale como a mesma escolha -- quem
+        # pedia a redução passa a ter o arredondamento, que reduz menos --, e o
+        # arquivo antigo abre sem perder nenhum outro dado
+        if "momento_face_apoio" in cfg:
+            antigo = cfg.pop("momento_face_apoio")
+            cfg.setdefault("arredondar_momento_apoio", bool(antigo))
         return Viga(
             nome=d.get("nome", "V1"),
             projeto=d.get("projeto", ""),
@@ -869,7 +939,7 @@ class Viga:
             aco_estribo=Aco(**d.get("aco_estribo",
                                     {"categoria": "CA-60"})),
             ambiente=Ambiente(**d.get("ambiente", {})),
-            config=Config(**d.get("config", {})),
+            config=Config(**cfg),
         )
 
     def salvar(self, caminho: str) -> None:

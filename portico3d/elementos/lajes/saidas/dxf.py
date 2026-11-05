@@ -12,6 +12,8 @@ laje é montada, e o CAD permite mover cada uma para a sua folha.
 As camadas separam o que se sobrepõe no papel:
 
     FORMA / EIXO ..... contorno das lajes e eixos dos apoios
+    SISTEMA .......... sentido do vão das lajes treliçada, alveolar e
+                       nervurada atribuídas na planta (R09)
     VIGA ............. faixa de apoio de cada bordo, tracejada
     ARM_POSITIVA ..... armadura da face inferior, vermelha
     ARM_NEGATIVA ..... armadura da face superior, azul
@@ -48,6 +50,7 @@ VERMELHO, AMARELO, VERDE, AZUL, MAGENTA, CINZA_ACI, PRETO = 1, 2, 3, 5, 6, 9, 8
 CAMADAS = {
     "FORMA": (PRETO, "CONTINUOUS", 35),
     "EIXO": (AZUL, "CENTER", 13),
+    "SISTEMA": (30, "CONTINUOUS", 18),
     "ARM_POSITIVA": (VERMELHO, "CONTINUOUS", 35),
     "ARM_NEGATIVA": (AZUL, "CONTINUOUS", 35),
     "ARM_DISTRIB": (VERDE, "CONTINUOUS", 25),
@@ -123,15 +126,56 @@ def largura_texto(texto: str, altura: float) -> float:
 # Peças do desenho
 # ---------------------------------------------------------------------------
 
+#: Rótulo sem acento do tipo de laje -- o texto do DXF é ASCII.
+_TIPO_ASCII = {"trelicada": "Trelicada", "alveolar": "Alveolar",
+               "nervurada_uni": "Nervurada uni", "nervurada_bi": "Nervurada bi"}
+
+
+def _todas_as_lajes(res) -> list:
+    """As lajes do desenho: as maciças e, depois delas, as especiais."""
+    lajes = [rl.laje for rl in res.lajes]
+    for e in getattr(res, "especiais", []):
+        for nome in e.lajes:
+            laje = res.pavimento.laje(nome)
+            if laje is not None:
+                lajes.append(laje)
+    return lajes
+
+
+def _sentido_do_vao(msp, laje, dx: float, dy: float) -> None:
+    """Seta dupla ao longo do vão da nervura (ou do painel), deslocada do
+    centro -- onde está o rótulo -- para um quarto da largura."""
+    if laje.tipo == "nervurada_bi":
+        return
+    x0, y0, x1, y1 = (v * 100.0 for v in laje.retangulo)
+    eixo = laje.direcao_global(laje.direcao)
+    if eixo == "X":
+        y = y0 + (y1 - y0) * 0.22 + dy
+        a, b = (x0 + 25.0 + dx, y), (x1 - 25.0 + dx, y)
+        s = 12.0
+        pontas = [((a[0] + s, y + s / 2), a, (a[0] + s, y - s / 2)),
+                  ((b[0] - s, y + s / 2), b, (b[0] - s, y - s / 2))]
+    else:
+        x = x0 + (x1 - x0) * 0.22 + dx
+        a, b = (x, y0 + 25.0 + dy), (x, y1 - 25.0 + dy)
+        s = 12.0
+        pontas = [((x + s / 2, a[1] + s), a, (x - s / 2, a[1] + s)),
+                  ((x + s / 2, b[1] - s), b, (x - s / 2, b[1] - s))]
+    msp.add_line(a, b, dxfattribs={"layer": "SISTEMA"})
+    for p1, p2, p3 in pontas:
+        msp.add_lwpolyline([p1, p2, p3], dxfattribs={"layer": "SISTEMA"})
+
+
 def _forma(msp, res, dx: float, dy: float, com_vinculo: bool = True,
            ocupados: list | None = None) -> None:
     """Contorno das lajes, nome, espessura e símbolo de vinculação.
 
     O rótulo do nome da laje entra em ``ocupados`` para que os rótulos de
-    armadura, que nascem no mesmo centro, saibam desviar dele.
+    armadura, que nascem no mesmo centro, saibam desviar dele. Nas lajes
+    especiais o rótulo diz também o sistema e o perfil, e uma seta marca o
+    sentido do vão.
     """
-    for rl in res.lajes:
-        laje = rl.laje
+    for laje in _todas_as_lajes(res):
         x0, y0, x1, y1 = (v * 100.0 for v in laje.retangulo)
         msp.add_lwpolyline(
             [(x0 + dx, y0 + dy), (x1 + dx, y0 + dy), (x1 + dx, y1 + dy),
@@ -145,6 +189,19 @@ def _forma(msp, res, dx: float, dy: float, com_vinculo: bool = True,
             larg = largura_texto(rotulo, altura)
             ocupados.append((cx - larg / 2.0, cy - altura / 2.0,
                              cx + larg / 2.0, cy + altura / 2.0))
+        if laje.especial:
+            sistema = _TIPO_ASCII[laje.tipo] + (
+                f" {laje.perfil}" if laje.perfil else "")
+            if laje.tipo != "nervurada_bi":
+                sistema += f", vao em {laje.direcao_global(laje.direcao)}"
+            alt2 = ALTURA_ROTULO * 0.9
+            cy2 = cy - altura * 1.6
+            _texto(msp, sistema, cx, cy2, alt2, "SISTEMA")
+            if ocupados is not None:
+                larg = largura_texto(sistema, alt2)
+                ocupados.append((cx - larg / 2.0, cy2 - alt2 / 2.0,
+                                 cx + larg / 2.0, cy2 + alt2 / 2.0))
+            _sentido_do_vao(msp, laje, dx, dy)
         if not com_vinculo:
             continue
         for bordo in (1, 2, 3, 4):
@@ -191,8 +248,7 @@ def _vigas(msp, res, dx: float, dy: float) -> None:
     bordo livre. É o que deixa visível até onde a positiva reta pode ir sem
     aflorar na face externa da viga.
     """
-    for rl in res.lajes:
-        laje = rl.laje
+    for laje in _todas_as_lajes(res):
         x0, y0, x1, y1 = (v * 100.0 for v in laje.retangulo)
         for bordo in (1, 2, 3, 4):
             b = laje.bordos[bordo - 1]
@@ -533,6 +589,25 @@ def _quadro_quantidades(msp, res, x0: float, y0: float) -> float:
          f"{q.get('area_total', 0.0):.2f}"],
         ["Taxa de aco", "kg/m2", f"{q.get('taxa_por_m2', 0.0):.2f}"],
     ]
+    if q.get("especiais"):
+        for e in q["especiais"]:
+            sist = _TIPO_ASCII[e['tipo_chave']]
+            linhas.append([f"Aco - {e['nome']} ({sist} {e['perfil']})", "kg",
+                           f"{e['aco_kg']:.1f}"])
+        linhas += [
+            ["Aco - lajes especiais (subtotal)", "kg",
+             f"{q.get('massa_especiais', 0.0):.1f}"],
+            ["Aco - pavimento (macicas + especiais, sem perdas)", "kg",
+             f"{q.get('massa_geral', 0.0):.1f}"],
+            ["Concreto moldado no local - lajes especiais", "m3",
+             f"{q.get('concreto_especiais', 0.0):.2f}"],
+            ["Concreto pre-moldado - paineis alveolares", "m3",
+             f"{q.get('premoldado_especiais', 0.0):.2f}"],
+            ["Area das lajes especiais (vaos livres)", "m2",
+             f"{q.get('area_especiais', 0.0):.2f}"],
+            ["Taxa de aco do pavimento", "kg/m2",
+             f"{q.get('taxa_geral_por_m2', 0.0):.2f}"],
+        ]
     return _bloco_tabela(msp, x0, y0, "QUADRO DE QUANTIDADES", cabecalho,
                          linhas, larguras)
 

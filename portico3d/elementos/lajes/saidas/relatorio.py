@@ -22,8 +22,14 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Cm, Pt, RGBColor
 
 from ..core import avisos as avisos_mod
+from ..core.alveolar import linhas_protensao
+from ..core.atribuicao import modelos_efetivos
+from ..core.nervurada import dimensionar_nervurada
+from ..core.alveolar import resolver as resolver_alveolar
+from ..core.trelicada import dimensionar_trelicada
 from ..core.esforcos import BORDOS_DA_DIRECAO
-from . import auditoria, desenho, graficos
+from . import (auditoria, desenho, graficos, graficos_alveolar,
+               graficos_nervurada, graficos_trelicada, vista3d)
 
 AZUL = RGBColor(0x1F, 0x4E, 0x79)
 CINZA = RGBColor(0x59, 0x59, 0x59)
@@ -112,6 +118,15 @@ def _figura(doc: Document, fig, largura_cm: float = 16.0) -> None:
             pass
 
 
+def _figura_arquivo(doc: Document, caminho: str,
+                    largura_cm: float = 16.0) -> None:
+    """Embute um PNG já gravado -- a vista 3D (``vista3d.renderizar_png``)
+    não devolve uma figura matplotlib para ``_figura`` salvar, já grava o
+    próprio arquivo fora de tela."""
+    doc.add_picture(caminho, width=Cm(largura_cm))
+    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
 def _n(valor, casas: int = 2) -> str:
     if valor is None:
         return "—"
@@ -148,7 +163,10 @@ def _capa(doc: Document, res) -> None:
 
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = p.add_run("Lajes maciças de concreto armado — ABNT NBR 6118")
+    r = p.add_run(
+        "Lajes maciças, treliçadas, alveolares e nervuradas de concreto "
+        "armado — ABNT NBR 6118" if res.especiais
+        else "Lajes maciças de concreto armado — ABNT NBR 6118")
     r.font.size = Pt(12)
     r.font.color.rgb = CINZA
 
@@ -156,8 +174,10 @@ def _capa(doc: Document, res) -> None:
     _tabela(doc, ["Item", "Valor"], [
         ["Pavimento", pav.nome],
         ["Projeto", pav.projeto or "—"],
-        ["Lajes", f"{len(res.lajes)}"],
-        ["Área total", f"{_n(res.area_total)} m²"],
+        ["Lajes", f"{len(res.lajes)} maciça(s)"
+                  + (f" e {sum(len(e.lajes) for e in res.especiais)} "
+                     f"especial(is)" if res.especiais else "")],
+        ["Área total", f"{_n(res.area_total + res.area_especiais)} m²"],
         ["Bordas comuns", f"{len(pav.continuidades)}"],
         ["Concreto", f"{pav.concreto.classe} "
                      f"(agregado {pav.concreto.agregado})"],
@@ -167,8 +187,8 @@ def _capa(doc: Document, res) -> None:
         ["Cobrimento inferior / superior",
          f"{_n(pav.ambiente.cobrimento_nominal, 1)} / "
          f"{_n(pav.ambiente.cobrimento_superior(pav.config.bitola_minima_negativa), 1)} cm"],
-        ["Aço total", f"{_n(res.quantitativo.get('massa_total', 0.0), 1)} kg "
-                      f"({_n(res.quantitativo.get('taxa_por_m2', 0.0))} "
+        ["Aço total", f"{_n(res.quantitativo.get('massa_geral', 0.0), 1)} kg "
+                      f"({_n(res.quantitativo.get('taxa_geral_por_m2', 0.0))} "
                       f"kg/m²)"],
     ], larguras=[6.0, 10.0])
 
@@ -256,6 +276,29 @@ def _dados(doc: Document, res, n: int) -> None:
     _titulo(doc, f"{n}.5 Planta do pavimento", 2)
     _figura(doc, graficos.figura_planta(res))
 
+    if res.especiais:
+        _titulo(doc, f"{n}.6 Lajes treliçadas, alveolares e nervuradas", 2)
+        _paragrafo(doc,
+                   "Estas lajes foram atribuídas na planta: vão, apoios e "
+                   "cargas vêm dos dados acima e da vinculação dos bordos; a "
+                   "seção, a treliça, a protensão e os critérios, do perfil "
+                   "escolhido. Os capítulos de cada sistema trazem o "
+                   "cálculo.", italico=True, cor=CINZA)
+        linhas = []
+        for e in res.especiais:
+            for nome in e.lajes:
+                laje = pav.laje(nome)
+                if laje is None:
+                    continue
+                vao = "—" if laje.tipo == "nervurada_bi" else \
+                    f"em {laje.direcao_global(laje.direcao)}"
+                linhas.append([laje.nome, laje.rotulo_tipo, e.perfil,
+                               _n(laje.a), _n(laje.b), _n(laje.h, 1), vao,
+                               *[_bordo_texto(laje, k) for k in (1, 2, 3, 4)]])
+        _tabela(doc, ["Laje", "Tipo", "Perfil", "a (m)", "b (m)", "h (cm)",
+                      "Vão", "Bordo 1", "Bordo 2", "Bordo 3", "Bordo 4"],
+                linhas)
+
 
 def _classificacao(doc: Document, res, n: int) -> None:
     _titulo(doc, f"{n}. Classificação das lajes")
@@ -276,13 +319,23 @@ def _esforcos(doc: Document, res, n: int) -> None:
                "o de serviço, o regime elástico (§3.1). São dois caminhos "
                "independentes: o primeiro dá a armadura, o segundo dá a "
                "flecha.")
+    if res.mef is not None:
+        _paragrafo(doc,
+                   "As lajes armadas em cruz têm o estado limite último "
+                   "calculado por elementos finitos de placa e Wood-Armer, "
+                   "regime elástico (capítulo seguinte à compatibilização); "
+                   "as armadas em uma direção ficam com o método das faixas. "
+                   "O estado limite de serviço segue pelas tabelas elásticas "
+                   "em todas.", italico=True, cor=CINZA)
 
     for rl in res.lajes:
         esf = rl.esforcos
         cls = esf.classificacao
         _titulo(doc, f"{n}.{res.lajes.index(rl) + 1} {rl.nome}", 2)
 
-        if cls.em_cruz:
+        if cls.em_cruz and esf.metodo == "mef":
+            _esforcos_mef_da_laje(doc, res, rl)
+        elif cls.em_cruz:
             _paragrafo(doc, "Regime rígido-plástico — método das linhas de "
                             "ruptura:")
             linhas = [
@@ -326,7 +379,7 @@ def _esforcos(doc: Document, res, n: int) -> None:
                     [[f.nome, _n(f.bw_vao, 0), _n(f.bw_eng, 0), _n(f.p_d),
                       _n(f.m_vao), _n(f.m_eng)] for f in esf.faixas])
 
-        if esf.m_neg:
+        if esf.m_neg and esf.metodo != "mef":
             _paragrafo(doc, "Momentos negativos dos engastes "
                             "(m'k = -ik . m da direção que o bordo apoia):")
             _tabela(doc, ["Bordo", "Direção que apoia", "i",
@@ -347,6 +400,126 @@ def _esforcos(doc: Document, res, n: int) -> None:
         _tabela(doc, ["Grandeza", "Valor"], linhas, larguras=[9.5, 5.5])
 
     _figura(doc, graficos.figura_momentos(res))
+
+
+def _esforcos_mef_da_laje(doc: Document, res, rl) -> None:
+    """ELU de uma laje em cruz pelos elementos finitos: o que foi adotado e
+    o que as linhas de ruptura dariam."""
+    mef = res.mef
+    lm = mef.laje(rl.nome)
+    esf = rl.esforcos
+    _paragrafo(doc, "Regime elástico — elementos finitos de placa e "
+                    "Wood-Armer (capítulo próprio):")
+    linhas = [r for r in mef.comparativo if r[0] == rl.nome]
+    _tabela(doc, ["Esforço", "Linhas de ruptura", "MEF elástico (WA)",
+                  "Adotado", "MEF sem Mxy"],
+            [[item, _n(ch), _n(ef), _n(ado), _n(sem)]
+             for (_, item, ch, ef, ado, sem, _c) in linhas],
+            larguras=[6.0, 2.6, 2.8, 2.2, 2.4])
+    _paragrafo(doc, f"Carga de cálculo p_d = {_n(lm.p_d)} kN/m²; "
+                    f"deslocamento máximo elástico sob essa carga "
+                    f"{_n(lm.w_max * 1000.0, 2)} mm; máximo |Mxy| "
+                    f"{_n(lm.mxy_max)} kN·m/m"
+                    + (f"; redistribuição δ = {_n(esf.delta_mef)} dos "
+                       f"negativos" if esf.delta_mef < 1.0 else
+                       "; sem redistribuição dos negativos") + ".",
+               italico=True, cor=CINZA)
+
+
+def _mef(doc: Document, res, n: int) -> None:
+    """Capítulo da análise por elementos finitos e Wood-Armer (R10)."""
+    mef = res.mef
+    pav = res.pavimento
+    _titulo(doc, f"{n}. Análise por elementos finitos e Wood-Armer")
+    _paragrafo(doc, (
+        "O pavimento das lajes maciças foi analisado como uma malha única de "
+        "placa de Reissner-Mindlin, com o elemento MITC4 de Bathe-Dvorkin "
+        "(sem travamento por cisalhamento), em regime elástico linear, com "
+        "a carga de cálculo (γg g + γq q) e as paredes como carga linear. A "
+        "viga é um apoio rígido (w = 0 e rotação tangente nula); o engaste "
+        "em elemento rígido anula também a rotação normal; onde duas lajes "
+        "dividem uma viga com a borda comum declarada, os nós são "
+        "contínuos, de modo que a rotação e o momento negativo coincidem "
+        "dos dois lados sem compatibilização à parte. As bordas vizinhas "
+        "se encaixam na linha de centro da viga e as demais ficam a "
+        "a_i = min(t/2 ; 0,3 h) do vão livre (14.7.2.2)."))
+    _paragrafo(doc, (
+        "O dimensionamento segue Wood (1968) e Armer (1968), na forma de "
+        "Parsekian (1996): M*x = Mx + K|Mxy| e M*y = My + |Mxy|/K em cada "
+        "face, com um M* negativo anulado e o outro recalculado. O momento "
+        "negativo de cada bordo vem do equilíbrio dos nós (reação de momento "
+        "do apoio, ou a força interna do painel na viga contínua), que "
+        "converge muito mais depressa que a extrapolação dos pontos de Gauss "
+        "-- numa placa quadrada engastada, 1,4 % contra 23 % de erro com "
+        "elemento de 25 cm. A armadura de cada direção é a do pico da laje, "
+        "e a de cada bordo engastado, o máximo ao longo dele."))
+    _tabela(doc, ["Dado", "Valor"], [
+        ["Elementos; nós", f"{mef.n_elementos}; {mef.n_nos}"],
+        ["Elemento (lado máximo)", f"{_n(mef.tamanho * 100.0, 0)} cm"],
+        ["Ecs; ν", f"{_n(pav.concreto.Ecs, 0)} MPa; 0,20"],
+        ["K de Wood-Armer", _n(mef.k, 2)],
+        ["Redistribuição δ dos negativos", _n(mef.delta, 2)],
+        ["Volvente resistido pelo concreto (Mxyc)",
+         "descontado (NB-1)" if mef.mxyc else "não descontado"],
+        ["x/d limite da flexão",
+         _n(pav.concreto.x_sobre_d_limite_redistribuido(mef.delta), 3)],
+        ["Zona de canto", f"{_n(mef.zona_canto, 2)} do menor vão"],
+        ["Alternância da sobrecarga (xadrez)",
+         ("ligada: envoltória dos positivos entre a carga cheia e os dois "
+          "xadrezes" if mef.cores else "desligada: carga cheia")],
+    ], larguras=[8.0, 7.0])
+
+    _titulo(doc, f"{n}.1 Comparação com as linhas de ruptura", 2)
+    _paragrafo(doc, (
+        "Momentos de cálculo, kN·m/m. A análise elástica não embute a "
+        "redistribuição que as linhas de ruptura trazem por construção "
+        "(graus de engastamento i = 1,5), e por isso dá negativos e "
+        "positivos maiores; a coluna 'Adotado' já traz a redistribuição δ "
+        "escolhida. Nas lajes armadas em uma direção o resultado do MEF só "
+        "informa -- o dimensionamento fica com o método das faixas."))
+    _tabela(doc, ["Laje", "Esforço", "Linhas de ruptura", "MEF elástico",
+                  "MEF adotado", "MEF sem Mxy", "Método"],
+            [[nome, item, _n(ch), _n(ef), _n(ado), _n(sem),
+              "MEF" if cruz else "faixas"]
+             for (nome, item, ch, ef, ado, sem, cruz) in mef.comparativo],
+            larguras=[1.4, 5.0, 2.2, 2.2, 2.2, 2.2, 1.8])
+
+    _titulo(doc, f"{n}.2 Armadura superior de canto", 2)
+    _paragrafo(doc, (
+        "Nos cantos de laje apoiada o momento volvente é máximo e as linhas "
+        "de ruptura, que supõem o canto livre para levantar, não o "
+        "enxergam. O momento superior de Wood-Armer na zona de canto dá a "
+        "armadura das duas direções (face superior); a inferior de canto "
+        "fica coberta pela positiva do vão. Não é detalhada em barras: a "
+        "massa do quantitativo é uma estimativa (As por metro nas duas "
+        "direções, sobre a zona, sem ancoragem)."))
+    cantos = [[lm.nome, f"bordos {c.bordos[0]} e {c.bordos[1]}",
+               _n(c.zona), _n(c.m_topo), _n(c.m_base), _n(c.mxy),
+               (f"{_n(c.As)} cm²/m x e y; {_n(c.massa, 1)} kg"
+                if c.exige and not c.erro else
+                ("não exige (os dois bordos engastados)" if not c.exige
+                 else c.erro))]
+              for lm in mef.lajes.values() for c in lm.cantos]
+    _tabela(doc, ["Laje", "Canto", "Zona (m)", "M* superior", "M* inferior",
+                  "máx |Mxy|", "Armadura superior"],
+            cantos or [["—"] * 7],
+            larguras=[1.3, 2.4, 1.6, 2.0, 2.0, 2.0, 4.7])
+
+    _titulo(doc, f"{n}.3 Mapas", 2)
+    for grandeza in (graficos.GRANDEZAS_MEF[3], graficos.GRANDEZAS_MEF[4],
+                     graficos.GRANDEZAS_MEF[5], graficos.GRANDEZAS_MEF[6],
+                     graficos.GRANDEZAS_MEF[2]):
+        _figura(doc, graficos.figura_mef(res, grandeza), 14.0)
+    _paragrafo(doc, (
+        "Hipóteses e limites: regime elástico linear, sem redistribuição "
+        "além do δ declarado; apoio rígido (sem pilares nem vigas "
+        "deformáveis, hipótese a favor da segurança para Mxy); carga "
+        + ("variável alternada em xadrez para os positivos e cheia para "
+           "negativos e cantos" if mef.cores else
+           "variável cheia em todas as lajes")
+        + "; ELS pelas tabelas elásticas; o "
+        "volvente resistido pelo concreto (Mxyc) é critério da NB-1 e a "
+        "NBR 6118:2026 não o prescreve."), italico=True, cor=CINZA)
 
 
 def _compatibilizacao(doc: Document, res, n: int) -> None:
@@ -371,8 +544,44 @@ def _compatibilizacao(doc: Document, res, n: int) -> None:
                   "Desequilíbrio"],
             [[b.rotulo, _n(b.m_a), _n(b.m_b), _n(b.m_adotado),
               _n(b.d_adotado, 1), _n(b.extensao, 0),
+              "um lado só" if b.unilateral else
               f"{_n(b.desequilibrio)} kN·m/m"] for b in comp.bordas],
             larguras=[4.6, 1.8, 1.8, 1.9, 1.7, 2.0, 2.2])
+    if any(b.unilateral for b in comp.bordas):
+        _paragrafo(doc, (
+            "\"Um lado só\": a vizinha cobre menos de 2/3 do bordo de uma "
+            "das lajes, e esse bordo foi calculado apoiado (Souza & Cunha, "
+            "§3.7.2); a negativa da borda é a do lado engastado, ancorada "
+            "por cima da viga na outra laje."), italico=True, cor=CINZA)
+
+
+def _cantos(doc: Document, res, n: int) -> None:
+    """Armadura superior de canto das linhas de ruptura (R11)."""
+    from ..core.cantos import fator_bifurcacao
+    _titulo(doc, f"{n}. Armadura superior de canto")
+    _paragrafo(doc, (
+        "O mecanismo de charneiras supõe os cantos presos. Num canto de dois "
+        "bordos apoiados, sem armadura superior, o canto levanta e a "
+        "ruptura bifurca antes do vértice: a carga de ruptura cai pelo "
+        "fator k = 1/[1 - 0,45(1 - γ/π)²] = "
+        f"{_n(fator_bifurcacao(), 3)} no canto reto (Souza & Cunha, §5.9). "
+        "O canto recebe armadura superior nas duas direções para "
+        "m' = m·cot²(γ/2) = m (o maior positivo de cálculo da laje), numa "
+        "zona quadrada a partir do vértice de lado igual ao maior entre "
+        "ℓ = √(6m/p)·[1/sen(γ/2) - 1] = 0,414·√(6m/p) e 0,2 do menor vão "
+        "(NB-1/78). d = d da camada superior - 1 cm (as duas direções se "
+        "cruzam). A NBR 6118:2026 não trata do assunto; é armadura de boa "
+        "prática. A massa é estimativa (zona × (zona + 10φ), nas duas "
+        "direções)."))
+    destaques = {i: VERMELHO for i, c in enumerate(res.cantos) if c.erro}
+    _tabela(doc, ["Canto", "m (kN·m/m)", "p_d (kN/m²)", "0,414√(6m/p)",
+                  "0,2 ℓmenor", "Zona (m)", "d (cm)", "Armadura",
+                  "Massa (kg)"],
+            [[c.rotulo, _n(c.m_vao), _n(c.p_d), _n(c.zona_charneira),
+              _n(c.zona_nb1), _n(c.zona), _n(c.d, 1), c.armadura,
+              _n(c.massa, 1)] for c in res.cantos],
+            larguras=[2.6, 1.5, 1.5, 1.6, 1.5, 1.4, 1.2, 3.4, 1.3],
+            destaques=destaques)
 
 
 def _flexao(doc: Document, res, n: int) -> None:
@@ -396,6 +605,63 @@ def _flexao(doc: Document, res, n: int) -> None:
             if f.erro:
                 _paragrafo(doc, f"{f.rotulo}: {f.erro}", cor=VERMELHO)
     _figura(doc, graficos.figura_armaduras(res))
+
+
+def _concentradas(doc: Document, res, n: int) -> None:
+    """Cargas concentradas: efeito nos momentos e punção (R11)."""
+    _titulo(doc, f"{n}. Cargas concentradas e punção")
+    _paragrafo(doc, (
+        "Laje em cruz: o momento de cálculo é o maior entre a carga "
+        "espalhada na área da laje com o fator 1,2 do efeito localizado "
+        "(Souza & Cunha, eq. 1.11) e o momento da carga uniforme somado ao "
+        "do leque de charneiras em volta da carga, m = P_d(1 - 2c/3r)/2π, "
+        "com c = √((dx + h)(dy + h)/π) e r a distância ao apoio mais "
+        "próximo. A flecha usa a carga espalhada multiplicada pelo fator da "
+        "série de Navier (placa apoiada). Laje em uma direção: faixa "
+        "colaborante bw da Tabela A.1.5, com a carga na posição mais "
+        "desfavorável do vão. Nas reações das vigas as cargas entram "
+        "espalhadas na laje."))
+    linhas = []
+    for rl in res.lajes:
+        for e in rl.esforcos.concentradas:
+            if e.bw_vao > 0.0:
+                efeito = (f"bw = {_n(e.bw_vao, 0)} cm (vão), "
+                          f"{_n(e.bw_eng, 0)} cm (engaste); m = "
+                          f"{_n(e.m_vao)} / m' = {_n(e.m_eng)}")
+            else:
+                efeito = (f"c = {_n(e.c)} m, r = {_n(e.r)} m, leque m = "
+                          f"{_n(e.m_leque)}; flecha × {_n(e.k_flecha)}")
+            linhas.append([rl.nome, e.descricao,
+                           f"{_n(e.u)} / {_n(e.v)}",
+                           f"{e.du:g} × {e.dv:g}", _n(e.P_k, 1),
+                           _n(e.P_d, 1), efeito])
+    _tabela(doc, ["Laje", "Carga", "u / v (m)", "Área (cm)", "P_k (kN)",
+                  "P_d (kN)", "Efeito (kN·m/m)"], linhas,
+            larguras=[1.2, 2.6, 1.8, 1.8, 1.5, 1.5, 5.6])
+
+    _titulo(doc, f"{n}.1 Punção (19.5)", 2)
+    _paragrafo(doc, (
+        "Contorno C: τSd = F_Sd/(u0 d) <= τRd2 = 0,27 αv fcd, αv = 1 - "
+        "fck/250. Contorno C' a 2d: τSd = F_Sd/(u1 d) <= τRd1 = 0,13 ke "
+        "(100 ρ fck)^(1/3), ke = 1 + √(20/d) <= 2 (d em cm), ρ = √(ρx ρy) "
+        "<= 0,02 da armadura inferior adotada, d = (dx + dy)/2. Carga "
+        "centrada, sem desconto da carga distribuída dentro do contorno. "
+        "Sem armadura de punção."))
+    pun = [pu for rl in res.lajes for pu in rl.puncoes]
+    destaques = {i: VERMELHO for i, pu in enumerate(pun) if not pu.atende}
+    _tabela(doc, ["Carga", "P_d (kN)", "d (cm)", "u0 (cm)", "τSd/τRd2 C",
+                  "u1 (cm)", "ρ", "τSd/τRd1 C'", "Veredito"],
+            [[pu.rotulo, _n(pu.P_d, 1), _n(pu.d, 1), _n(pu.u0, 0),
+              f"{_n(pu.tau_sd0)} / {_n(pu.tau_rd2)}", _n(pu.u1, 0),
+              _n(pu.rho, 4), f"{_n(pu.tau_sd1)} / {_n(pu.tau_rd1)}",
+              ("OK" if pu.atende else "NÃO OK")
+              + ("" if pu.verificada else " (só C)")] for pu in pun],
+            larguras=[3.2, 1.4, 1.1, 1.2, 2.2, 1.2, 1.3, 2.2, 1.6],
+            destaques=destaques)
+    for pu in pun:
+        if pu.observacao:
+            _paragrafo(doc, f"{pu.rotulo}: {pu.observacao}.",
+                       cor=VERMELHO if not pu.atende else CINZA)
 
 
 def _servico(doc: Document, res, n: int) -> None:
@@ -522,8 +788,26 @@ def _detalhamento(doc: Document, res, n: int) -> None:
     _titulo(doc, f"{n}.3 Plantas de armação", 2)
     _figura(doc, desenho.figura_armadura_positiva(res))
     _figura(doc, desenho.figura_armadura_negativa(res))
-    _titulo(doc, f"{n}.4 Cortes", 2)
-    _figura(doc, desenho.figura_cortes(res))
+    _titulo(doc, f"{n}.4 Modelo 3D", 2)
+    _paragrafo(doc,
+              "Laje em concreto translúcido, armadura superior em vermelho "
+              "e inferior em azul, com o gancho a 90° no comprimento real "
+              "calculado. Esta é uma captura da mesma cena que a tela "
+              "mostra na aba Modelo 3D -- lá ela gira e identifica cada "
+              "posição ao passar o mouse.")
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        caminho_3d = f.name
+    try:
+        vista3d.renderizar_png(res, caminho_3d, tamanho=(1400, 1000))
+        _figura_arquivo(doc, caminho_3d)
+    except Exception as exc:                                # noqa: BLE001
+        _paragrafo(doc, f"(vista 3D indisponível nesta instalação: {exc})")
+    finally:
+        try:
+            os.unlink(caminho_3d)
+        except OSError:
+            pass
 
 
 def _reacoes(doc: Document, res, n: int) -> None:
@@ -533,17 +817,30 @@ def _reacoes(doc: Document, res, n: int) -> None:
                "aproximadas por retas a 45° entre apoios do mesmo tipo, 60° "
                "a partir do engastado e 90° a partir do bordo vizinho ao "
                "livre. É o que as vigas do contorno recebem.")
-    for rl in res.lajes:
-        if rl.reacoes is None:
+    fontes = [(rl.nome, rl.reacoes) for rl in res.lajes]
+    if res.especiais:
+        _paragrafo(doc,
+                   "Nas lajes treliçadas e nervuradas unidirecionais a "
+                   "reação vem da envoltória da faixa (limite superior), "
+                   "dividida entre as lajes que dividem o apoio; no painel "
+                   "alveolar, de V = w L / 2; e na nervurada bidirecional "
+                   "pela mesma partição geométrica da laje maciça, com a "
+                   "carga que a grelha carrega. Só os dois bordos das "
+                   "pontas do vão recebem carga nos sistemas "
+                   "unidirecionais.", italico=True, cor=CINZA)
+        for e in res.especiais:
+            fontes += list(e.reacoes.items())
+    for nome, reac in fontes:
+        if reac is None:
             continue
-        _paragrafo(doc, f"{rl.nome} — carga total de "
-                        f"{_n(rl.reacoes.carga_total, 1)} kN:")
+        _paragrafo(doc, f"{nome} — carga total de "
+                        f"{_n(reac.carga_total, 1)} kN:")
         _tabela(doc, ["Bordo", "Vínculo", "L (m)", "Parcela", "Hahn",
                       "Fonte", "v_g", "v_q", "v_k", "v_d"],
                 [[str(r.bordo), r.vinculo, _n(r.comprimento), _n(r.fracao, 4),
                   _n(r.fracao_hahn, 4) if r.fracao_hahn is not None else "—",
                   r.fonte, _n(r.v_g), _n(r.v_q), _n(r.v_k), _n(r.v_d)]
-                 for r in rl.reacoes.bordos])
+                 for r in reac.bordos])
 
     _titulo(doc, f"{n}.1 Carga por trecho de viga", 2)
     _paragrafo(doc,
@@ -603,10 +900,353 @@ def _quantitativo(doc: Document, res, n: int) -> None:
          f"{_n(q.get('massa_emendas', 0.0), 1)} kg"],
         ["Aço, com 10 % de perdas",
          f"{_n(q['massa_com_perdas'], 1)} kg"],
+        *([["Aço superior de canto (estimativa, fora das barras)",
+            f"{_n(q.get('massa_canto_charneiras', 0.0) + q.get('massa_canto_mef', 0.0), 1)} kg"]]
+          if q.get('massa_canto_charneiras', 0.0)
+          + q.get('massa_canto_mef', 0.0) > 0 else []),
         ["Taxa de aço", f"{_n(q['taxa_por_m2'])} kg/m² "
                         f"({_n(q['taxa_por_m3'], 1)} kg/m³)"],
         ["Peso próprio médio", f"{_n(q['peso_proprio_medio'])} kN/m²"],
     ], larguras=[7.0, 8.0])
+
+    if q.get("especiais"):
+        _titulo(doc, f"{n}.4 Lajes treliçadas, alveolares e nervuradas", 2)
+        _tabela(doc, ["Sistema", "Tipo", "Perfil", "Área (m²)", "Aço (kg)",
+                      "Concreto no local (m³)", "Pré-moldado (m³)"],
+                [[e["nome"], e["tipo"], e["perfil"], _n(e["area"], 2),
+                  _n(e["aco_kg"], 1), _n(e["concreto_m3"], 2),
+                  _n(e["premoldado_m3"], 2) if e["premoldado_m3"] else "—"]
+                 for e in q["especiais"]]
+                + [["Total", "", "", _n(q["area_especiais"], 2),
+                    _n(q["massa_especiais"], 1),
+                    _n(q["concreto_especiais"], 2),
+                    _n(q["premoldado_especiais"], 2)
+                    if q["premoldado_especiais"] else "—"]],
+                larguras=[2.6, 2.6, 2.0, 2.2, 2.0, 3.0, 2.6])
+        _tabela(doc, ["Grandeza", "Valor"], [
+            ["Aço do pavimento (maciças + especiais, sem perdas)",
+             f"{_n(q['massa_geral'], 1)} kg"],
+            ["Área do pavimento", f"{_n(q['area_geral'], 2)} m²"],
+            ["Taxa de aço do pavimento",
+             f"{_n(q['taxa_geral_por_m2'])} kg/m²"],
+        ], larguras=[9.0, 6.0])
+
+
+def _trelicada(doc: Document, res, n: int) -> None:
+    """Capítulo das faixas de laje treliçada (``core/trelicada.py``): a
+    nervura contínua, com negativas e balanços, calculada à parte da laje
+    maciça e com os mesmos materiais e critérios do pavimento."""
+    _faixas(doc, res, n, modelos_efetivos(res.pavimento, res.especiais,
+                                          "trelicada"),
+            "Laje treliçada", False)
+
+
+def _nervurada_uni(doc: Document, res, n: int) -> None:
+    """Capítulo das faixas de laje nervurada unidirecional moldada no local
+    -- o motor da treliçada sem vigota nem treliça."""
+    _faixas(doc, res, n, modelos_efetivos(res.pavimento, res.especiais,
+                                          "nervurada_uni"),
+            "Laje nervurada unidirecional", True)
+
+
+def _faixas(doc: Document, res, n: int, faixas: list, titulo: str,
+            moldada: bool) -> None:
+    pav = res.pavimento
+    _titulo(doc, f"{n}. {titulo}")
+    if moldada:
+        _paragrafo(doc, (
+            "A laje nervurada unidirecional moldada no local é calculada "
+            "pela nervura, na direção das nervuras, desprezadas a rigidez "
+            "transversal e a torção (NBR 6118, 14.7.7). Esforços pela "
+            "equação dos três momentos com alternância da carga variável; "
+            "flexão positiva em seção T com a largura colaborante do item "
+            "14.6.2.2 e negativa com a compressão na nervura ou no trecho "
+            "maciço; cortante como laje (19.4.1) quando o intereixo permite "
+            "(13.2.4.2) e como viga com estribos (17.4.2, modelo I) nos "
+            "demais casos; mesa verificada de 65 a 110 cm de intereixo; "
+            "ancoragem pelos itens 9.4.2 e 18.3.2.4.1; flecha pela rigidez "
+            "equivalente de Branson ponderada (17.3.2.1.1) e fissuração "
+            "pelo item 17.3.3.2. O roteiro é o mesmo da laje treliçada, sem "
+            "a vigota e a treliça; a referência de método é Nepomuceno "
+            "(UFOP) e Bocchi Jr. (USP)."))
+    else:
+        _paragrafo(doc, (
+        "A laje treliçada unidirecional é calculada pela nervura, na "
+        "direção das vigotas, desprezadas a rigidez transversal e a torção "
+        "(NBR 6118, 14.7.7). Esforços pela equação dos três momentos com "
+        "alternância da carga variável; flexão positiva em seção T com a "
+        "largura colaborante do item 14.6.2.2 e negativa com a compressão "
+        "na nervura ou no trecho maciço; cortante como laje (19.4.1) com as "
+        "diagonais da treliça como recurso (19.4.2); ancoragem pelos itens "
+        "9.4.2 e 18.3.2.4.1; flecha pela rigidez equivalente de Branson "
+        "ponderada (17.3.2.1.1) e fissuração pelo item 17.3.3.2. Referência "
+        "de roteiro: material técnico da Estude Engenharia (partes 1 a 3) e "
+        "Manual Técnico de Lajes Treliçadas da ArcelorMittal."))
+    for k, lt in enumerate(faixas, start=1):
+        r = dimensionar_trelicada(lt, pav.concreto, pav.ambiente, pav.config)
+        _titulo(doc, f"{n}.{k} Faixa {lt.nome}", 2)
+        _origem_na_planta(doc, res, lt)
+        g = r.geo
+        _tabela(doc, ["Dado", "Valor"], [
+            ["Enchimento" if moldada else "Treliça / enchimento",
+             f"{lt.enchimento} {lt.largura_bloco:g} × "
+             f"{lt.altura_enchimento:g} cm" if moldada else
+             f"{lt.trelica} / {lt.enchimento} {lt.largura_bloco:g} × "
+             f"{lt.altura_enchimento:g} cm"],
+            ["Mesa; altura total h" if moldada else "Capa; altura total h",
+             f"{lt.capa:g} cm; {g['h']:g} cm"],
+            ["bw; intereixo", f"{g['bw']:g} cm; {g['intereixo']:g} cm"],
+            ["Peso próprio por nervura", f"{_n(g['pp'], 3)} kN/m"],
+            ["Vãos (cm)", " + ".join(f"{v.L:g}" for v in lt.vaos)],
+            ["Balanços (cm)", f"esq. {lt.balanco_esq:g}; dir. "
+                              f"{lt.balanco_dir:g}"],
+            ["Redistribuição δ", _n(lt.delta, 2)],
+            ["Cobrimento inferior", f"{g['c_inf']:g} cm"],
+            ["Estádio I da flecha", "homogeneizado" if
+             lt.inercia_homogeneizada else "seção bruta (17.3.2.1.1)"],
+        ])
+        _titulo(doc, f"{n}.{k}.1 Dimensionamento das seções", 3)
+        linhas = []
+        for rv in r.vaos:
+            f = rv.flexao
+            linhas.append([f"Vão {rv.indice + 1} (+)", _n(f.md, 2),
+                           _n(f.b_comp, 1), _n(f.d, 2), _n(f.x_d, 3),
+                           _n(f.As_nec, 2), _n(f.As_adot, 2),
+                           _n(f.mrd, 2), f.armadura])
+        for ra in r.apoios:
+            if ra.md <= 1e-9:
+                continue
+            f = ra.flexao
+            linhas.append([f"Apoio {ra.indice + 1} (−)", _n(ra.md, 2),
+                           _n(f.b_comp, 1), _n(f.d, 2), _n(f.x_d, 3),
+                           _n(f.As_nec, 2), _n(f.As_adot, 2), _n(f.mrd, 2),
+                           f.armadura])
+        _tabela(doc, ["Seção", "Md (kN·m)", "b (cm)", "d (cm)", "x/d",
+                      "As nec.", "As adot.", "MRd", "Armadura"], linhas)
+        _titulo(doc, f"{n}.{k}.2 Verificações", 3)
+        _tabela(doc, ["Verificação", "Local", "Solicitante", "Resistente",
+                      "Situação", "Item"], r.verificacoes,
+                destaques={i: VERMELHO for i, l in enumerate(r.verificacoes)
+                           if l[4] != "OK"})
+        _titulo(doc, f"{n}.{k}.3 Esforços e desenhos", 3)
+        _figura(doc, graficos_trelicada.figura_esforcos(r))
+        _figura(doc, graficos_trelicada.figura_secao(r), 13.0)
+        _figura(doc, graficos_trelicada.figura_elevacao(r))
+        _titulo(doc, f"{n}.{k}.4 Posições e quantitativo", 3)
+        _tabela(doc, ["Pos.", "Descrição", "Peças", "Ø", "Aço",
+                      "Comp. (cm)", "Massa (kg)"],
+                [[f"N{p.numero}", p.descricao, p.quantidade,
+                  _n(p.phi, 1) if p.phi else "—", p.aco,
+                  _n(p.comprimento, 0), _n(p.massa, 2)]
+                 for p in r.posicoes])
+        q = r.quantitativo
+        _paragrafo(doc, (
+            f"{q['n_nervuras']} nervuras em {_n(q['area'], 2)} m²; "
+            f"{_n(q['concreto_L_m2'], 1)} L/m² de concreto; "
+            f"{_n(q['aco_kg'], 1)} kg de aço ({_n(q['aco_kg_m2'], 2)} "
+            f"kg/m²). Armadura de distribuição na capa: "
+            f"Ø{r.distribuicao['phi']:g} c/{r.distribuicao['s']:.0f}."))
+        for classe, texto in r.avisos:
+            _paragrafo(doc, f"{'Erro' if classe == 'erro' else 'Obs.'}: "
+                            f"{texto}",
+                       cor=VERMELHO if classe == "erro" else CINZA)
+        _avisos_da_atribuicao(doc, res, lt, r)
+
+
+def _origem_na_planta(doc: Document, res, modelo) -> None:
+    """Quando o modelo vem da planta (R09), diz de onde: lajes e perfil."""
+    for e in res.especiais:
+        if e.modelo is modelo:
+            _paragrafo(doc, (
+                f"Atribuída na planta às lajes {', '.join(e.lajes)} "
+                f"(perfil {e.perfil}): vãos, largura dos apoios e cargas "
+                f"vieram da planta; seção, armaduras e critérios, do "
+                f"perfil."), italico=True, cor=CINZA)
+            return
+
+
+def _avisos_da_atribuicao(doc: Document, res, modelo, r) -> None:
+    """Observações que só existem porque o sistema veio da planta -- faixa
+    contínua, vizinhança, engaste de ponta --, sem repetir as do motor."""
+    for e in res.especiais:
+        if e.modelo is not modelo:
+            continue
+        do_motor = {t for _, t in r.avisos}
+        for a in e.avisos:
+            if a.texto in do_motor:
+                continue
+            _paragrafo(doc, f"{'Erro' if a.erro else 'Obs.'}: {a.texto}",
+                       cor=VERMELHO if a.erro else CINZA)
+        return
+
+
+def _alveolar(doc: Document, res, n: int) -> None:
+    """Capítulo dos painéis de laje alveolar protendida
+    (``core/alveolar.py``): calculados à parte da laje maciça, com o
+    concreto pré-moldado e a armadura ativa do próprio painel."""
+    pav = res.pavimento
+    cfg = pav.config
+    _titulo(doc, f"{n}. Laje alveolar")
+    _paragrafo(doc, (
+        "O painel alveolar é protendido por pré-tração, biapoiado, com ou "
+        "sem capa estrutural. Verificam-se: as perdas de protensão (NBR "
+        "6118, 9.6.3 e Anexo A, ou percentuais informados); os comprimentos "
+        "de transferência, de regularização e de ancoragem (9.4.5 e "
+        "9.6.2.3); as tensões no ato da protensão e em serviço, por "
+        "estágio, nas combinações do nível de protensão (13.4.2, Tabela "
+        "13.4); a contraflecha e a flecha total com fluência; a flexão no "
+        "ELU por compatibilidade de deformações, com o pré-alongamento e o "
+        "diagrama bilinear do aço de protensão; e o cortante do painel "
+        "(VRd1 = Vc + Vp e VRd2), nas seções simples e composta. O roteiro "
+        "é o de Gramalho (2013, cap. 5) e Ferro (2020, cap. 2). Os limites "
+        "que vêm da NBR 14861 são os que esses trabalhos transcrevem -- a "
+        "norma não foi consultada diretamente."))
+    for k, l0 in enumerate(modelos_efetivos(pav, res.especiais, "alveolar"),
+                           start=1):
+        r = resolver_alveolar(l0, cfg.gamma_g, cfg.gamma_q)
+        l = r.laje
+        s = r.secao
+        _titulo(doc, f"{n}.{k} Painel {l.nome}", 2)
+        _origem_na_planta(doc, res, l0)
+        _tabela(doc, ["Dado", "Valor"], [
+            ["Vão teórico; altura; capa",
+             f"{_n(l.vao, 2)} m; {_n(l.sec.h, 1)} cm; {_n(l.capa, 1)} cm"],
+            ["Seção", l.sec.origem],
+            ["fck; fckj; fck da capa",
+             f"{l.fck:g}; {l.fckj:g}; {l.fck_capa:g} MPa"],
+            ["Armadura ativa", f"{l.n_cordoalhas} Ø{l.phi:g} {l.aco}"
+             + (" (escolhida pelo programa)" if l.automatica else "")],
+            ["CG da armadura; σpi", f"{_n(l.d_linha, 1)} cm; "
+                                     f"{_n(l.sigma_pi, 0)} MPa"],
+            ["Cargas g2; q", f"{_n(l.g2, 2)}; {_n(l.q, 2)} kN/m²"],
+            ["Nível de protensão", str(l.nivel_protensao)],
+            ["γg; γq", f"{_n(l.gamma_g, 2)}; {_n(l.gamma_q, 2)}"],
+        ])
+        _titulo(doc, f"{n}.{k}.1 Seções", 3)
+        a, c = s["simples"], s["composta"]
+        _tabela(doc, ["Seção", "A (cm²)", "CG a partir da base (cm)",
+                      "I (cm⁴)", "Wi (cm³)", "Ws (cm³)"], [
+            ["Simples (painel)", _n(a["A"] * 1e4, 1), _n(a["yi"] * 100, 2),
+             _n(a["I"] * 1e8, 0), _n(a["Wi"] * 1e6, 0), _n(a["Ws"] * 1e6, 0)],
+            ["Composta (painel + capa)", _n(c["A"] * 1e4, 1),
+             _n(c["yi"] * 100, 2), _n(c["I"] * 1e8, 0),
+             _n(c["Wi"] * 1e6, 0), _n(c["Ws"] * 1e6, 0)]])
+        _titulo(doc, f"{n}.{k}.2 Protensão e perdas", 3)
+        _tabela(doc, ["Item", "Valor", "Observação"],
+                linhas_protensao(r, _n))
+        _titulo(doc, f"{n}.{k}.3 Verificações", 3)
+        _tabela(doc, ["Verificação", "Local", "Solicitante", "Resistente",
+                      "Situação", "Item"], r.verificacoes,
+                destaques={i: VERMELHO for i, x in enumerate(r.verificacoes)
+                           if x[4] != "OK"})
+        f = r.flechas
+        _tabela(doc, ["Flecha", "Valor (cm)"], [
+            ["Protensão no ato", _n(f["protensao_ini"] * 100, 2)],
+            ["Peso do painel no ato", _n(f["peso_ini"] * 100, 2)],
+            ["Líquida no ato", _n(f["inicial"] * 100, 2)],
+            ["Total no tempo infinito", _n(f["total"] * 100, 2)]])
+        _titulo(doc, f"{n}.{k}.4 Desenhos e gráficos", 3)
+        _figura(doc, graficos_alveolar.figura_secao(r), 14.0)
+        _figura(doc, graficos_alveolar.figura_elevacao(r))
+        _figura(doc, graficos_alveolar.figura_tensoes(r))
+        _figura(doc, graficos_alveolar.figura_esforcos(r))
+        q = r.quantitativo
+        _paragrafo(doc, (
+            f"Painel de {_n(q['peso_painel'], 1)} kN "
+            f"({_n(q['volume_painel'], 3)} m³ de concreto), "
+            f"{_n(q['massa_aco'], 1)} kg de cordoalha."))
+        for classe, texto in r.avisos:
+            rot = {"erro": "Erro", "aviso": "Atenção"}.get(classe, "Obs.")
+            _paragrafo(doc, f"{rot}: {texto}",
+                       cor=VERMELHO if classe == "erro" else CINZA)
+        _avisos_da_atribuicao(doc, res, l0, r)
+
+
+def _nervurada_bi(doc: Document, res, n: int) -> None:
+    """Capítulo dos painéis de laje nervurada bidirecional
+    (``core/nervurada.py``)."""
+    pav = res.pavimento
+    _titulo(doc, f"{n}. Laje nervurada bidirecional")
+    _paragrafo(doc, (
+        "O painel nervurado bidirecional moldado no local é analisado por "
+        "dois caminhos -- placa equivalente (NBR 6118, 14.7.7, com os "
+        "coeficientes elásticos das tabelas de placa) e grelha de barras de "
+        "seção T, com três graus de liberdade por nó, como recomenda Bocchi "
+        "Jr. (1995) -- e se adota o maior (ou o escolhido). Nervuras: flexão "
+        "positiva em seção T e negativa nos bordos engastados; cortante "
+        "como laje ou como viga com estribos conforme o intereixo "
+        "(13.2.4.2); flecha pela grelha com a rigidez de Branson de cada "
+        "direção; fissuração pela 17.3.3.2. Mesa: flexão como painel de "
+        "laje maciça apoiado nas nervuras (65 a 110 cm), cortante da mesa e "
+        "cisalhamento da ligação mesa-nervura. Os bordos são vigas "
+        "indeslocáveis; não há faixa maciça modelada nem pilares."))
+    for k, l0 in enumerate(modelos_efetivos(pav, res.especiais,
+                                            "nervurada_bi"), start=1):
+        r = dimensionar_nervurada(l0, pav.concreto, pav.ambiente, pav.config)
+        l = r.laje
+        _titulo(doc, f"{n}.{k} Painel {l.nome}", 2)
+        _origem_na_planta(doc, res, l0)
+        _tabela(doc, ["Dado", "Valor"], [
+            ["Vãos lx; ly", f"{_n(l.lx, 2)} m; {_n(l.ly, 2)} m"],
+            ["Bordos (x=0, x=lx, y=0, y=ly)", "; ".join(l.bordos)],
+            ["Intereixo (real) em x; em y",
+             f"{_n(l.esp_x, 1)} cm; {_n(l.esp_y, 1)} cm "
+             f"({l.nx} × {l.ny} painéis de grelha)"],
+            ["bw; hf; h", f"{l.bw:g} cm; {l.hf:g} cm; {l.h:g} cm"],
+            ["Enchimento", l.enchimento],
+            ["Peso próprio", f"{_n(r.cargas['pp']['total'], 2)} kN/m²"],
+            ["g2; q", f"{_n(l.g2, 2)}; {_n(l.q, 2)} kN/m²"],
+            ["p_d (ELU)", f"{_n(r.cargas['p_d'], 2)} kN/m²"],
+            ["Método dos esforços; kf; kt",
+             f"{l.metodo}; {_n(l.kf, 2)}; {_n(l.kt, 2)}"],
+        ])
+        _titulo(doc, f"{n}.{k}.1 Dimensionamento das seções", 3)
+        linhas = []
+        for d, rd in r.dirs.items():
+            f = rd.flexao
+            linhas.append([f"Positiva // {d}", _n(rd.md_placa, 2),
+                           _n(rd.md_grelha, 2), _n(rd.md, 2),
+                           _n(f.As_nec, 2), _n(f.As_adot, 2), _n(f.mrd, 2),
+                           f.armadura])
+            for kk, sn in rd.neg.items():
+                linhas.append([f"Negativa bordo {kk + 1}", "", "",
+                               _n(rd.md_neg[kk], 2), _n(sn.As_nec, 2),
+                               _n(sn.As_adot, 2), _n(sn.mrd, 2),
+                               sn.armadura])
+        _tabela(doc, ["Seção", "Md placa", "Md grelha", "Md adotado",
+                      "As nec.", "As adot.", "MRd", "Armadura"], linhas)
+        _titulo(doc, f"{n}.{k}.2 Verificações", 3)
+        _tabela(doc, ["Verificação", "Local", "Solicitante", "Resistente",
+                      "Situação", "Item"], r.verificacoes,
+                destaques={i: VERMELHO for i, x in enumerate(r.verificacoes)
+                           if x[4] != "OK"})
+        m = r.mesa
+        _paragrafo(doc, (
+            f"Mesa: m = {_n(m['m'], 2)} kN·m/m no painel de "
+            f"{_n(l.esp_x, 0)} × {_n(l.esp_y, 0)} cm; malha Ø{m['phi']:g} "
+            f"c/{m['s']:.0f} ({_n(m['As_adot'], 2)} cm²/m) nas duas "
+            f"direções."))
+        _titulo(doc, f"{n}.{k}.3 Desenhos", 3)
+        _figura(doc, graficos_nervurada.figura_planta(r), 15.0)
+        _figura(doc, graficos_nervurada.figura_secao(r), 14.0)
+        _figura(doc, graficos_nervurada.figura_diagramas(r))
+        _titulo(doc, f"{n}.{k}.4 Posições e quantitativo", 3)
+        _tabela(doc, ["Pos.", "Descrição", "Peças", "Ø", "Aço",
+                      "Comp. (cm)", "Massa (kg)"],
+                [[f"N{p.numero}", p.descricao, p.quantidade,
+                  _n(p.phi, 1) if p.phi else "—", p.aco,
+                  _n(p.comprimento, 0), _n(p.massa, 2)]
+                 for p in r.posicoes])
+        q = r.quantitativo
+        _paragrafo(doc, (
+            f"{_n(q['area'], 2)} m²; {_n(q['concreto_L_m2'], 1)} L/m² de "
+            f"concreto; {_n(q['aco_kg'], 1)} kg de aço "
+            f"({_n(q['aco_kg_m2'], 2)} kg/m²)."))
+        for classe, texto in r.avisos:
+            _paragrafo(doc, f"{'Erro' if classe == 'erro' else 'Obs.'}: "
+                            f"{texto}",
+                       cor=VERMELHO if classe == "erro" else CINZA)
+        _avisos_da_atribuicao(doc, res, l0, r)
 
 
 def _roteiro(doc: Document, res, n: int) -> None:
@@ -662,13 +1302,28 @@ def gerar(res, caminho: str) -> str:
     _classificacao(doc, res, n); n += 1
     _esforcos(doc, res, n); n += 1
     _compatibilizacao(doc, res, n); n += 1
+    if res.cantos:
+        _cantos(doc, res, n); n += 1
+    if res.mef is not None:
+        _mef(doc, res, n); n += 1
     _flexao(doc, res, n); n += 1
     _servico(doc, res, n); n += 1
     if any(rl.cortantes for rl in res.lajes):
         _cortante(doc, res, n); n += 1
+    if any(rl.laje.cargas_concentradas for rl in res.lajes):
+        _concentradas(doc, res, n); n += 1
     _detalhamento(doc, res, n); n += 1
     _reacoes(doc, res, n); n += 1
     _quantitativo(doc, res, n); n += 1
+    pav = res.pavimento
+    if modelos_efetivos(pav, res.especiais, "trelicada"):
+        _trelicada(doc, res, n); n += 1
+    if modelos_efetivos(pav, res.especiais, "alveolar"):
+        _alveolar(doc, res, n); n += 1
+    if modelos_efetivos(pav, res.especiais, "nervurada_uni"):
+        _nervurada_uni(doc, res, n); n += 1
+    if modelos_efetivos(pav, res.especiais, "nervurada_bi"):
+        _nervurada_bi(doc, res, n); n += 1
     _roteiro(doc, res, n); n += 1
     _pendencias(doc, res, n)
     doc.save(caminho)

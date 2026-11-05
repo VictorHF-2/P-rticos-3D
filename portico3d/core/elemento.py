@@ -167,6 +167,19 @@ def rigidez_geometrica(L: float, N: float, secao: Secao) -> np.ndarray:
 
     Somada à rigidez elástica, ela enrijece a barra tracionada e amolece a
     comprimida, que é o efeito que se quer representar.
+
+    **A recuperação do esforço tem de somar esta matriz, não só a elástica.**
+    Um confronto com o PyNiteFEA no caso da viga-coluna em balanço (P a 50 %
+    da crítica) achou o deslocamento do topo batendo a 13 algarismos com uma
+    barra só — ``Ke + Kg`` e a iteração estavam certas —, mas o **momento
+    recuperado na extremidade** errando a solução fechada em 6,6 %. A causa
+    não era a malha: ``segunda_ordem._esforcos_das_barras`` recuperava o
+    esforço só com ``Ke·D``, sem somar esta ``Kg`` que tinha corrigido o
+    deslocamento. Somada — ``(Ke + Kg)·D`` —, o erro já cai para 0,13 % sem
+    mexer em malha nenhuma; ver ``rigidez_geometrica_refinada`` (abaixo, neste
+    módulo) para o resíduo que sobra, esse sim de malha, e que a condensação estática
+    de sub-elementos resolve por dentro do cálculo, sem o usuário precisar
+    desenhar mais barra nenhuma. Ver ``validacao.p_delta_confrontado_com_pynite``.
     """
     kg = np.zeros((12, 12))
     if N == 0.0:
@@ -195,6 +208,127 @@ def rigidez_geometrica(L: float, N: float, secao: Secao) -> np.ndarray:
     kg[4, 8] = kg[8, 4] = kg[8, 10] = kg[10, 8] = c * L / 10.0
     kg[4, 4] = kg[10, 10] = c * 2.0 * L ** 2 / 15.0
     kg[4, 10] = kg[10, 4] = -c * L ** 2 / 30.0
+
+    return kg
+
+
+#: Sub-elementos por barra na rigidez geométrica refinada. Convergência
+#: medida no caso de referência (viga-coluna em balanço, P a 50 % da
+#: crítica, contra a solução fechada), já com a recuperação somando
+#: ``Kg`` — ver o docstring de ``rigidez_geometrica`` sobre essa correção,
+#: que é a que mais pesa: 1 sub-elemento (ou seja, sem refinar) erra o
+#: momento em 0,16 %; 2 em 0,011 %; **4 em 0,0007 %**; 8 em 0,00005 %.
+#: Quatro já é indistinguível de exato para qualquer projeto, sem inflar o
+#: custo de cada iteração do P-Δ.
+SUBDIVISOES_PADRAO = 4
+
+
+def _bloco_de_flexao(l: float, EI: float, G_As: float, N: float,
+                     sinal: float) -> tuple[np.ndarray, np.ndarray]:
+    """As 4×4 elástica e geométrica de **um** sub-elemento, num só plano.
+
+    A ordem dos graus é ``(v_i, θ_i, v_j, θ_j)`` do plano. ``sinal`` é ``+1``
+    para o plano x–y e ``-1`` para o x–z — a mesma troca de sinal do
+    acoplamento v–θ que ``rigidez_local`` e ``rigidez_geometrica`` já fazem
+    entre os dois planos, aqui como fator em vez de escrita duas vezes.
+    """
+    phi = 12.0 * EI / (G_As * l ** 2) if G_As > 0.0 else 0.0
+    a = 12.0 * EI / (l ** 3 * (1.0 + phi))
+    b = sinal * 6.0 * EI / (l ** 2 * (1.0 + phi))
+    c = (4.0 + phi) * EI / (l * (1.0 + phi))
+    d = (2.0 - phi) * EI / (l * (1.0 + phi))
+    ke = np.array([[a, b, -a, b],
+                  [b, c, -b, d],
+                  [-a, -b, a, -b],
+                  [b, d, -b, c]])
+
+    if N == 0.0:
+        return ke, np.zeros((4, 4))
+    cg = N / l
+    bg = sinal * cg * l / 10.0
+    kg = np.array([[cg * 6.0 / 5.0, bg, -cg * 6.0 / 5.0, bg],
+                  [bg, cg * 2.0 * l ** 2 / 15.0, -bg, -cg * l ** 2 / 30.0],
+                  [-cg * 6.0 / 5.0, -bg, cg * 6.0 / 5.0, -bg],
+                  [bg, -cg * l ** 2 / 30.0, -bg, cg * 2.0 * l ** 2 / 15.0]])
+    return ke, kg
+
+
+def _condensar_cadeia(L: float, EI: float, G_As: float, N: float,
+                      sinal: float, n_sub: int, com_kg: bool) -> np.ndarray:
+    """A 4×4 de um plano de flexão, condensada de uma cadeia de ``n_sub``
+    sub-elementos aos dois nós de ponta — estática, exata dado o ``n_sub``.
+
+    Com ``n_sub == 1`` não há nó interno e a "condensação" é a própria matriz
+    do sub-elemento único, que é a barra inteira: por construção, esta função
+    com ``n_sub=1`` e ``com_kg=True`` reproduz bit a bit o bloco do plano na
+    ``rigidez_local``/``rigidez_geometrica`` de hoje.
+    """
+    l = L / n_sub
+    ngl = 2 * (n_sub + 1)
+    K = np.zeros((ngl, ngl))
+    for e in range(n_sub):
+        ke, kg = _bloco_de_flexao(l, EI, G_As, N, sinal)
+        bloco = ke + kg if com_kg else ke
+        i0 = 2 * e
+        K[i0:i0 + 4, i0:i0 + 4] += bloco
+
+    externos = [0, 1, ngl - 2, ngl - 1]
+    internos = [i for i in range(ngl) if i not in externos]
+    if not internos:
+        return K
+    Kee = K[np.ix_(externos, externos)]
+    Kei = K[np.ix_(externos, internos)]
+    Kie = K[np.ix_(internos, externos)]
+    Kii = K[np.ix_(internos, internos)]
+    return Kee - Kei @ np.linalg.solve(Kii, Kie)
+
+
+def rigidez_geometrica_refinada(L: float, N: float, material: Material,
+                                secao: Secao,
+                                n_sub: int = SUBDIVISOES_PADRAO) -> np.ndarray:
+    """A rigidez geométrica 12×12, com os dois planos de flexão refinados.
+
+    ``rigidez_geometrica`` já dá o deslocamento dos nós exato — é o que
+    convergiu a 13 algarismos contra o PyNiteFEA mesmo com uma barra só,
+    contanto que a recuperação do esforço some esta matriz e não só a
+    elástica (ver o docstring dela). O que sobra depois dessa correção é
+    menor, mas ainda é real: a curvatura *dentro* da barra (o P-δ) não cabe
+    na cúbica de um elemento só, e no caso de referência isso ainda deixava
+    o momento recuperado 0,13–0,16 % longe do fechado. Esta função resolve
+    esse resíduo. Ela não muda a malha que o usuário vê: subdivide a barra
+    **só para montar esta matriz**, condensando os nós internos de volta aos
+    dois de sempre pela mesma álgebra exata de subestruturação (Guyan) que
+    se usaria se a barra tivesse sido desenhada em pedaços — só que sem os
+    pedaços aparecerem em lugar nenhum fora daqui. As duas correções juntas
+    deixam o caso de referência a -0,0007 % do fechado, com uma barra só.
+
+    A técnica: ``Kg_efetiva = condensar(Ke_sub + Kg_sub) - condensar(Ke_sub)``.
+    Subtrair a condensação de ``Ke`` sozinho (sem geometria) em vez de somar o
+    ``Ke`` de sempre é o que torna o resultado exato mesmo que a condensação
+    de ``Ke`` isolado não reproduza precisamente o ``Ke`` de um elemento só —
+    a diferença cancela qualquer resíduo, e só sobra o que a geometria muda.
+
+    Torção e axial não entram na subdivisão: o docstring de
+    ``rigidez_geometrica`` já nota que elas não têm o efeito de curvatura
+    interna que a flexão tem — uma cadeia em série de barras idênticas dá,
+    condensada, a mesma rigidez que uma peça só, tração ou torção. Os dois
+    graus continuam vindo direto da matriz de hoje.
+    """
+    kg = rigidez_geometrica(L, N, secao)
+    if N == 0.0 or n_sub <= 1:
+        return kg
+
+    G_Asy = material.G * secao.Asy if secao.Asy > 0.0 else 0.0
+    G_Asz = material.G * secao.Asz if secao.Asz > 0.0 else 0.0
+
+    for indices, EI, G_As, sinal in (
+            ((1, 5, 7, 11), material.E * secao.Iz, G_Asy, 1.0),
+            ((2, 4, 8, 10), material.E * secao.Iy, G_Asz, -1.0)):
+        com = _condensar_cadeia(L, EI, G_As, N, sinal, n_sub, com_kg=True)
+        sem = _condensar_cadeia(L, EI, G_As, N, sinal, n_sub, com_kg=False)
+        efetiva = com - sem
+        idx = np.array(indices)
+        kg[np.ix_(idx, idx)] = efetiva
 
     return kg
 
