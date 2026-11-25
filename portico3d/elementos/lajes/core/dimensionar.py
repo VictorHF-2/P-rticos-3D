@@ -508,12 +508,9 @@ def _detalhar(rl: ResultadoLaje, pav: Pavimento,
             _conferir_fissuracao(rl, laje, concreto, aco, amb, escolha, f,
                                  m_ser, f"vão {direcao}")
             ancoragens = det.ancorar_positiva(
-                laje, direcao, escolha, f.As_calculada, concreto, aco, amb)
-            rl.ancoragens.extend(ancoragens.values())
-            for a in ancoragens.values():
-                if not a.atende:
-                    rl.avisos.append(av.classificar(
-                        f"{a.rotulo}: {a.observacao}", laje.nome))
+                laje, direcao, escolha, f.As_calculada, concreto, aco, amb,
+                rl.reacoes)
+            _registrar_ancoragens(rl, ancoragens, amb)
             rl.posicoes.append(det.posicoes_positivas(
                 laje, direcao, escolha, proximo(), amb, ancoragens))
     else:
@@ -539,13 +536,16 @@ def _detalhar(rl: ResultadoLaje, pav: Pavimento,
             _conferir_fissuracao(rl, laje, concreto, aco, amb, escolha, f,
                                  faixa.m_vao_ser,
                                  f"vão {direcao} — {faixa.nome}")
+            # a faixa de parede ou de carga concentrada leva mais carga que
+            # a laje média: o que ela tem a mais vai inteiro ao apoio
+            base = next((x for x in esf.faixas if x.nome == "sem parede"),
+                        faixa)
+            acrescimo = max(0.0, (faixa.p_d - base.p_d)
+                            * laje.vao_efetivo(direcao))
             ancoragens = det.ancorar_positiva(
-                laje, direcao, escolha, f.As_calculada, concreto, aco, amb)
-            rl.ancoragens.extend(ancoragens.values())
-            for a in ancoragens.values():
-                if not a.atende:
-                    rl.avisos.append(av.classificar(
-                        f"{a.rotulo}: {a.observacao}", laje.nome))
+                laje, direcao, escolha, f.As_calculada, concreto, aco, amb,
+                rl.reacoes, acrescimo)
+            _registrar_ancoragens(rl, ancoragens, amb)
             pos = det.posicoes_positivas(laje, direcao, escolha, proximo(),
                                          amb, ancoragens)
             # a faixa da parede ocupa a largura bw dela; a faixa sem parede
@@ -678,6 +678,27 @@ def _limite_da_borda(pav: Pavimento, ea: Esforcos, eb: Esforcos
     return None
 
 
+def _registrar_ancoragens(rl: ResultadoLaje, ancoragens: dict,
+                          amb) -> None:
+    """Guarda as ancoragens da positiva e avisa o que não fecha: a
+    ancoragem (9.4.2.5, 18.3.2.4.1) e o prolongamento de 4 cm além do eixo
+    teórico do apoio (20.1) -- este, uma vez por bordo."""
+    rl.ancoragens.extend(ancoragens.values())
+    for bordo, a in ancoragens.items():
+        if not a.atende:
+            rl.avisos.append(av.classificar(
+                f"{a.rotulo}: {a.observacao}", rl.laje.nome))
+        if not a.atende_eixo:
+            texto = (
+                f"{rl.laje.nome}, bordo {bordo}: a armadura positiva passa só "
+                f"{a.alem_do_eixo:.1f} cm do eixo teórico do apoio "
+                f"(t/2 - c = {rl.laje.bordos[bordo - 1].t / 2.0:.1f} - "
+                f"{amb.cobrimento_nominal:.1f}), menos que os 4 cm do item "
+                f"20.1 -- alargue o apoio")
+            if not any(x.texto.startswith(texto[:40]) for x in rl.avisos):
+                rl.avisos.append(av.Aviso(texto, av.ERRO, rl.laje.nome))
+
+
 def _detalhar_continuidades(res: ResultadoPavimento, pav: Pavimento,
                             comp: compat.Compatibilizacao,
                             contador: list[int]) -> None:
@@ -778,12 +799,15 @@ def _detalhar_continuidades(res: ResultadoPavimento, pav: Pavimento,
                                f"(14.6.3)")
         ponta_gancho = det.ponta_gancho_construtiva(
             min(la.h, lb.h), escolha.phi, pav.ambiente)
+        # o eixo da viga: o meio entre as faces das duas lajes
+        eixo_viga = (det._face_bordo_cm(la, borda.bordo_a)
+                     + det._face_bordo_cm(lb, borda.bordo_b)) / 2.0
         pos = det.posicao_negativa(
             la, borda.bordo_a, escolha, contador[0], borda.extensao, True,
             f"armadura única de continuidade: {rotulo_momento} e menor "
             f"altura útil ({borda.d_adotado:.1f} cm), estendida "
             f"{borda.extensao:.0f} cm para cada lado do eixo (§3.3)",
-            ponta_gancho_continuidade=ponta_gancho)
+            ponta_gancho_continuidade=ponta_gancho, centro=eixo_viga)
         pos.laje = f"{borda.laje_a} / {borda.laje_b}"
         # a faixa é a sobreposição real das duas bordas
         seg_a = la.segmento_do_bordo(borda.bordo_a)

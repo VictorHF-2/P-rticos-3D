@@ -314,6 +314,22 @@ class Laje:
     def n_livres(self) -> int:
         return sum(1 for c in self.vinculos if c == LIVRE)
 
+    @property
+    def balanco(self) -> bool:
+        """A laje é um balanço, pela destinação ou pelos vínculos (R12):
+        ``destino="balanco"`` ou três bordos livres -- o quarto, o do apoio,
+        pode ainda estar apoiado antes de a detecção engastá-lo.
+        :attr:`em_balanco` é o caso estrito (o quarto já engastado)."""
+        return self.destino == "balanco" or self.n_livres == 3
+
+    def aceita_continuidade(self, bordo: int) -> bool:
+        """O bordo pode virar borda comum com uma vizinha (R12): num
+        balanço, só o bordo do apoio -- os livres continuam livres mesmo
+        encostados noutra laje (duas sacadas lado a lado, partidas por uma
+        viga que chega por dentro)."""
+        return not (self.balanco
+                    and self.bordos[bordo - 1].vinculo == "livre")
+
     def vao_efetivo(self, direcao: str) -> float:
         """Vão efetivo do item 14.7.2.2, em metros.
 
@@ -844,6 +860,10 @@ class Pavimento:
         sobreposição mínima para valer como borda comum, e serve para não
         transformar dois cantos que se tocam em continuidade.
 
+        Desde a R12, num balanço (:attr:`Laje.balanco`) só o bordo do apoio
+        aceita continuidade: os bordos livres continuam livres, mesmo
+        encostados noutra laje (:meth:`Laje.aceita_continuidade`).
+
         A sobreposição não precisa ser total, mas desde a R11 só engasta o
         lado que tem contato em pelo menos 2/3 do bordo (Souza & Cunha,
         §3.7.2): laje pequena encostando no meio da borda de uma grande
@@ -881,7 +901,9 @@ class Pavimento:
                     continue
                 achadas.extend(c for c in _continuidades_geometricas(
                     la, lb, folga, minimo)
-                    if not (c.parcial_a and c.parcial_b))
+                    if not (c.parcial_a and c.parcial_b)
+                    and la.aceita_continuidade(c.bordo_a)
+                    and lb.aceita_continuidade(c.bordo_b))
         return achadas
 
     def continuidades_rejeitadas(self, folga: float = 0.40,
@@ -912,6 +934,11 @@ class Pavimento:
                 elif all(c.parcial_a and c.parcial_b for c in geo):
                     saida.append((la.nome, lb.nome,
                                   "contato < 2/3 dos dois bordos"))
+                elif not any(la.aceita_continuidade(c.bordo_a)
+                             and lb.aceita_continuidade(c.bordo_b)
+                             for c in geo):
+                    saida.append((la.nome, lb.nome,
+                                  "bordo livre de laje em balanço"))
         return saida
 
     def continuidades_rejeitadas_por_desnivel(

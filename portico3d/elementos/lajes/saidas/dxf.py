@@ -559,6 +559,50 @@ def _tabela_posicoes(msp, res, x0: float, y0: float) -> float:
                          linhas, larguras)
 
 
+def notas_gerais(res) -> list[str]:
+    """As notas gerais da prancha (R13): materiais, cobrimentos e o que
+    garante a posição das barras na concretagem (20.1). Em ASCII, como o
+    resto do texto do DXF."""
+    pav = res.pavimento
+    amb = pav.ambiente
+    phis = [p.phi for p in res.todas_posicoes if p.face == "superior"]
+    c_sup = amb.cobrimento_superior(max(phis) if phis else 0.0)
+    return [
+        f"1. Concreto C{pav.concreto.fck:g} (fck = {pav.concreto.fck:g} MPa); "
+        f"aco {pav.aco.categoria}; classe de agressividade {amb.caa}.",
+        f"2. Cobrimento nominal: {amb.cobrimento_nominal:g} cm na face "
+        f"inferior e {c_sup:g} cm na superior (7.4.7). Garantir com "
+        f"espacadores.",
+        "3. Armadura negativa mantida na posicao de projeto por caranguejos "
+        "(ou outro suporte), a primeira linha a cerca de 30 cm da face da "
+        "viga, sob pena de fissuras e flechas excessivas (20.1).",
+        "4. Armadura positiva levada inteira ate os apoios, sem "
+        "escalonamento, prolongada no minimo 4 cm alem do eixo teorico do "
+        "apoio (20.1).",
+        f"5. Ganchos a 90 graus com pino de dobramento de "
+        f"{PINO_TEXTO.get(pav.aco.categoria, '5 P')} (Tabela 9.1); ponta "
+        f"da negativa igual a h - 2c.",
+        "6. Medidas em cm. Conferir a armacao antes da concretagem.",
+    ]
+
+
+#: Pino de dobramento das barras finas da laje (Ø < 20 mm), Tabela 9.1.
+PINO_TEXTO = {"CA-25": "4 P", "CA-50": "5 P", "CA-60": "6 P"}
+
+
+def _bloco_notas(msp, res, x0: float, y0: float) -> float:
+    """As notas gerais, uma por linha, abaixo do quadro de quantidades."""
+    altura = ALTURA_TABELA * 2.0
+    _texto(msp, "NOTAS GERAIS", x0, y0 + altura * 1.6, ALTURA_TITULO,
+           "TEXTO", ancora="left")
+    y = y0
+    for nota in notas_gerais(res):
+        _texto(msp, nota, x0, y - altura / 2.0, ALTURA_TABELA, "TEXTO",
+               ancora="left")
+        y -= altura
+    return y
+
+
 def _quadro_quantidades(msp, res, x0: float, y0: float) -> float:
     """Quadro de quantidades: aço, concreto e forma, no próprio DXF.
 
@@ -660,7 +704,8 @@ def exportar(res, caminho: str) -> str:
     # tabela de posições e, abaixo dela, o quadro de quantidades: os dois
     # embaixo da planta de formas, na mesma coluna, como numa prancha
     fim = _tabela_posicoes(msp, res, base_x, base_y - 120.0)
-    _quadro_quantidades(msp, res, base_x, fim - 120.0)
+    fim = _quadro_quantidades(msp, res, base_x, fim - 120.0)
+    _bloco_notas(msp, res, base_x, fim - 120.0)
     doc.saveas(caminho)
     return caminho
 

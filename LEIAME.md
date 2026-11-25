@@ -1237,7 +1237,16 @@ viga, seção de pilar ou laje) não acha barra fora do concreto.
 
 Conferências: seção 53 de `validacao.py`.
 
-**Atualização de 25/11/2026.** O achado do Vigas R04 foi corrigido lá
+**Atualização de 25/11/2026 — Lajes.** Os três achados do Lajes R11 foram
+corrigidos lá na R12 e entraram com a recópia da R13. Uma consequência na
+ponte: o programa de Lajes passou a recusar continuidade em bordo livre de
+balanço, e a ponte entregava a laje em balanço com os quatro bordos livres
+(o do lado apoiado virava engastado na continuidade). Agora o bordo do lado
+apoiado entra "apoiado" e os outros três livres; a continuidade com a laje
+de dentro o engasta como antes. Na nova rodada as lajes dos três pavimentos
+saem com as mesmas posições, vínculos e veredito do programa isolado.
+
+**Atualização de 25/11/2026 — Vigas.** O achado do Vigas R04 foi corrigido lá
 (`e1afab0`) e entrou com a recópia `motor-2026-11-25`; a mesa da viga de
 borda agora é a seção L do próprio motor (`Secao.lado_mesa`), e a mola dos
 pilares é a do 14.6.6.1 feita pelo motor. Na nova rodada a viga que o
@@ -2083,7 +2092,7 @@ uma tag por revisão — e as pastas de revisão (`Vigas R04`, `Pilares R05`,
 
 | Cópia | Commit de origem | Situação |
 |---|---|---|
-| Lajes | `05e344c` (tag R11 de `Lajes/Programa`) | idêntica, confrontada |
+| Lajes | `bb50307` (motor da tag R13 de `Lajes/Programa`) | recopiada em 25/11; idêntica, confrontada |
 | Vigas | `1508440` (tag `motor-2026-11-25` de `Vigas/Programa`) | recopiada em 25/11; idêntica, confrontada |
 | Pilares | `97c23ad` (tag `motor-2026-11-25` de `Pilares/Programa`) | recopiada em 25/11; idêntica, confrontada |
 
@@ -2145,7 +2154,7 @@ peças); as interfaces ficaram de fora.
 |---|---|---|
 | Vigas | `motor-2026-11-25` (25/11) | seção L; barra pela mínima cortada pelo diagrama; solidariedade viga-pilar do 14.6.6.1; apoio em outra viga (18.3.6); itens complementares e furos na alma. Antes (R04, 03/11): arredondamento R·t/8 sobre o apoio (14.6.3) no lugar da redução à face; ancoragem das negativas e da torção nos extremos; ductilidade com o aço adotado; costura em faixas |
 | Pilares | `motor-2026-11-25` (25/11) | dimensionar 1,6 a 20 vezes mais rápido, resultado idêntico; incêndio, ações, seções vazadas (não usados aqui); interação do 17.2.5 desligada por padrão; arranjo por custo. Antes (R05, 05/11): várias combinações por pilar com armadura comum; método geral; elipse do momento mínimo; desaprumo no balanço; busca exata dos arranjos (com processos paralelos, desligáveis por `PILARES_SEM_PARALELO`) |
-| Lajes | Lajes R11 (2026-11-05) | laje em balanço reconhecida pelo destino; fissuração nas bordas comuns; nervurada, alveolar, MEF de placa (não usados aqui) |
+| Lajes | Lajes R13 (25/11) | R12: negativa da borda comum centrada no eixo da viga, balanço reconhecido também pelos vínculos, bordo livre de balanço sem continuidade (sacadas vizinhas); R13: ancoragem no apoio pelo 18.3.2.4, ℓb ≥ 25Ø, 4 cm além do eixo. Antes (R11, 05/11): laje em balanço reconhecida pelo destino; fissuração nas bordas comuns; nervurada, alveolar, MEF de placa (não usados aqui) |
 
 Do Pilares ficou de fora o `compat_pcalc.py`: é o modo de
 compatibilidade com o PCalc, que não é verificação pela NBR, e o motor o

@@ -105,9 +105,24 @@ def _momento_negativo(esf: Esforcos, bordo: int) -> float:
     return esf.m_neg.get(bordo, 0.0)
 
 
+def _meia_folga(pav: Pavimento, c: Continuidade) -> float:
+    """Metade da distância entre as faces das duas lajes na borda comum, cm
+    -- a meia largura da viga que passa entre elas, medida na planta."""
+    from .detalhamento import _face_bordo_cm
+    la, lb = pav.laje(c.laje_a), pav.laje(c.laje_b)
+    if la is None or lb is None:
+        return 0.0
+    return abs(_face_bordo_cm(la, c.bordo_a)
+               - _face_bordo_cm(lb, c.bordo_b)) / 2.0
+
+
 def _extensao(pav: Pavimento, c: Continuidade) -> float:
-    """Um quarto do maior dos vãos menores das duas lajes, em cm (§3.3) --
-    ou até a extremidade livre, se um dos lados for um balanço.
+    """Um quarto do maior dos vãos menores das duas lajes, em cm (§3.3),
+    para cada lado do **eixo** da viga -- ou até a extremidade livre, se um
+    dos lados for um balanço (:attr:`Laje.balanco`: pela destinação ou
+    pelos vínculos, desde a R12; antes só ``destino="balanco"`` contava).
+    Do eixo até a ponta do balanço vão a meia largura da viga e o vão livre
+    do balanço (R12: antes faltava a meia viga).
 
     A borda comum de um balanço com a laje vizinha é a única armadura do
     balanço: se ela parasse em um quarto do vão (a regra normal, pensada
@@ -122,11 +137,12 @@ def _extensao(pav: Pavimento, c: Continuidade) -> float:
     extensao = 0.25 * max(menores) * 100.0 if menores else 0.0
     cobrimento = pav.ambiente.cobrimento_nominal
     for laje, bordo in ((la, c.bordo_a), (lb, c.bordo_b)):
-        if laje is None or laje.destino != "balanco":
+        if laje is None or not laje.balanco:
             continue
         direcao = _direcao_do_bordo(bordo)
         vao_livre = (laje.a if direcao == "a" else laje.b) * 100.0
-        extensao = max(extensao, vao_livre - cobrimento)
+        extensao = max(extensao,
+                       _meia_folga(pav, c) + vao_livre - cobrimento)
     return extensao
 
 

@@ -175,6 +175,13 @@ def roteiro(res) -> list[Verificacao]:
                           + (f" + gancho {_n(a.ponta_gancho, 0)} cm"
                              if a.com_gancho else ""),
                 f">= lb,nec = {_n(a.lb_nec, 1)} cm", a.atende))
+            if a.criterio != "vao" or a.alem_do_eixo:
+                if "negativa" in a.rotulo:
+                    continue
+                linhas.append(Verificacao(
+                    "20.1", "Positiva além do eixo teórico do apoio",
+                    a.rotulo, f"t/2 - c = {_n(a.alem_do_eixo, 1)} cm",
+                    ">= 4,0 cm", a.atende_eixo))
 
     # -- §1.7: razão mínima entre momento de borda e de vão ----------------
     for rl in res.lajes:
@@ -297,7 +304,9 @@ def metodologia(res) -> list[tuple[str, str]]:
          "Bitola limitada a h/8 e espaçamento a min(2h ; 20 cm) na armadura "
          "principal e 33 cm na de distribuição (20.1). Armadura positiva "
          "levada inteira ao apoio, sem escalonamento, prolongada 4 cm além "
-         "do eixo teórico. Armadura de continuidade estendida um quarto do "
+         "do eixo teórico; no apoio extremo ancora (aℓ/d)·VSd com os "
+         "mínimos r + 5,5 Ø e 60 mm, no intermediário 10 Ø (18.3.2.4). "
+         "Armadura de continuidade estendida um quarto do "
          "maior dos vãos menores para cada lado do eixo, e de contorno um "
          "quinto do vão menor (§3.3)."),
     ]

@@ -755,6 +755,16 @@ def _detalhamento(doc: Document, res, n: int) -> None:
     ancoragens = [a for rl in res.lajes for a in rl.ancoragens]
     if ancoragens:
         _titulo(doc, f"{n}.1 Ancoragem no apoio de extremidade", 2)
+        _paragrafo(doc, (
+            "A positiva ancora no apoio o que o item 18.3.2.4 pede, aplicado "
+            "à laje por analogia com os elementos lineares: no apoio "
+            "extremo (bordo apoiado), a força F = (aℓ/d)·VSd com aℓ = d "
+            "(17.4.2.2-c), com comprimento não menor que r + 5,5 Ø nem que "
+            "60 mm (18.3.2.4.1, r pela Tabela 9.1); no apoio intermediário "
+            "(bordo engastado), 10 Ø (18.3.2.4-c). ℓb não fica abaixo de "
+            "25 Ø (9.4.2.4). Em todo apoio a positiva passa pelo menos 4 cm "
+            "além do eixo teórico (20.1): ela entra t − c a partir da face, "
+            "e o eixo está a t/2."))
         _tabela(doc, ["Onde", "Ø", "lb", "lb,nec", "Disponível", "Gancho",
                       "Observação"],
                 [[a.rotulo, _n(a.phi, 1), _n(a.lb, 1), _n(a.lb_nec, 1),

@@ -1562,12 +1562,22 @@ def _laje_em_balanco(modelo: Modelo, laje, ml):
     # do balanço, ``compatibilizacao._extensao``) e que vale o h mínimo de
     # 10 cm do 13.2.4.1. Os vínculos sozinhos não bastam — sem o destino, a
     # negativa parava a um quarto do vão, antes da borda.
-    return ml.Laje(
+    # O bordo do lado apoiado entra "apoiado" e os outros três livres: desde
+    # a R12 o programa de Lajes só aceita continuidade no bordo de um
+    # balanço que não é livre (``Laje.aceita_continuidade``), e é a
+    # continuidade com a laje de dentro que o engasta.
+    deles = ml.Laje(
         nome=laje.nome, a=livre_x, b=livre_y, destino="balanco",
         h=max(laje.espessura, 0.01) * M_PARA_CM, x=x0, y=y0,
         orientacao="X" if livre_x >= livre_y else "Y",
         bordos=[ml.Bordo(vinculo="livre", t=t) for _ in range(4)],
         permanente_extra=laje.permanente, variavel=laje.acidental)
+    face = {"+y": "baixo", "-y": "cima", "+x": "esquerda",
+            "-x": "direita"}[laje.sentido]
+    for k, bordo in enumerate(deles.bordos, start=1):
+        if deles.face_do_bordo(k) == face:
+            bordo.vinculo = "apoiado"
+    return deles
 
 
 def faixas_trelicadas(modelo: Modelo, cota: float, fck: float | None = None

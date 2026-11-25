@@ -65,13 +65,14 @@ PROCEDENCIA = {
     },
     "lajes": {
         "programa": "Lajes",
-        "revisao": "Lajes R11",
+        "revisao": "Lajes R13",
         "repositorio": "Lajes/Programa",
         "pacote": "lajes",
-        "commit": "05e344cd597c0d1c220c9c7eda7ea1dc963f4434",   # tag R11
-        "origem": "Lajes/Lajes R11/Programa/lajes",
+        # o motor é o da tag R13 (db40707); bb50307 só acrescenta o README
+        "commit": "bb50307bd4de5cc7dc2119bc06f84795083a1339",
+        "origem": "",
         "partes": ("core", "saidas"),
-        "copiado_em": "2026-11-05",
+        "copiado_em": "2026-11-25",
     },
     "vento": {
         "programa": "NBR-6123",

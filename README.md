@@ -46,7 +46,7 @@ da casa:
 |---|---|---|
 | Pilares | ABNT NBR 6118:2026 | **Pilares em Concreto Armado**, tag `motor-2026-11-25` |
 | Vigas contínuas | ABNT NBR 6118:2026 | **Dimensionador de Vigas**, tag `motor-2026-11-25` |
-| Lajes maciças, em balanço e treliçadas | ABNT NBR 6118:2026 | **Lajes de Concreto Armado**, revisão R11 |
+| Lajes maciças, em balanço e treliçadas | ABNT NBR 6118:2026 | **Lajes de Concreto Armado**, revisão R13 |
 | Vento | ABNT NBR 6123:2023 | **NBR-6123** (cálculo de S2 e das forças) |
 
 Nenhum dimensionamento de peça é reescrito aqui. Os motores são **cópias
@@ -253,7 +253,7 @@ montada à mão:
 |---|---|
 | Vigas (24 cadeias) | a viga que o Pórticos monta, aberta no programa de Vigas, dá resultado **idêntico** (momentos, regiões e cada posição de armadura); seções T, apoios e molas montados à mão batem exatamente |
 | Pilares (214 verificações) | mesmo Nd, mesmos momentos de topo e base e **mesmo arranjo** em todas, contra o programa de Pilares no commit da cópia |
-| Lajes (3 pavimentos) | posições, vínculos e larguras de apoio idênticos, menos nas duas lajes em balanço lado a lado, que o programa de Lajes engasta pela borda lateral livre (achado passado à janela dele) |
+| Lajes (3 pavimentos) | posições, vínculos e veredito idênticos em todas, inclusive nas duas lajes em balanço lado a lado |
 | Armadura 3D | nenhum ponto de barra fora do concreto |
 
 O relatório, as entradas no formato de cada programa e as imagens ficam em
@@ -404,6 +404,8 @@ autoteste e os temporários do Python e do Office.
 | 25/11/2026 | Motor de Vigas recopiado (`motor-2026-11-25`): seção L na viga de borda, barra pela mínima cortada pelo diagrama, solidariedade viga-pilar do 14.6.6.1, apoio em outra viga pelo 18.3.6; corrigida a altura da viga apoiada passada ao motor (ia em cm × 100) |
 | 25/11/2026 | Cache e paralelismo dos motores: no edifício de 3 pavimentos o fluxo pilares + vigas + lajes + armadura 3D dos três pavimentos caiu de 33 min para 4 min, com resultado idêntico |
 | 25/11/2026 | Motor de Pilares recopiado (`motor-2026-11-25`, 1,6 a 20 vezes mais rápido, resultado idêntico bit a bit no programa de Pilares); os 214 arranjos do edifício de 3 pavimentos não mudaram. Autoteste de 18 para 2,5 min; verificação contra os programas isolados de 23 para 2 min |
+| 25/11/2026 | Motor de Lajes recopiado (R13): negativa da borda comum no eixo da viga, balanço pelos vínculos, sacadas vizinhas sem engaste lateral (R12) e ancoragem no apoio pelo 18.3.2.4 (R13); a laje em balanço entra com o bordo do lado apoiado "apoiado"; lajes do edifício de 3 pavimentos idênticas às do programa isolado |
+| 25/11/2026 | **R04**: os três motores de elemento recopiados de commits e confrontados com eles (Vigas e Pilares `motor-2026-11-25`, Lajes R13); cache e paralelismo dos motores; edifício de 3 pavimentos idêntico aos programas isolados em pilares, lajes e na viga montada; 751 conferências em 2,5 min |
 
 ## Limites de escopo
 

@@ -33,4 +33,4 @@ __all__ = ["Apoio", "Barra", "CargaDistribuida", "CargaNodal", "CasoDeCarga",
 
 #: A revisão, como nos demais programas da pasta: é ela que nomeia o
 #: pacote de distribuição.
-__version__ = "R03"
+__version__ = "R04"

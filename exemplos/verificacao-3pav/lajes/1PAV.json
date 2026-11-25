@@ -391,9 +391,9 @@
           "h_viga": 40.0
         },
         {
-          "vinculo": "engastado",
+          "vinculo": "livre",
           "grau": 1.5,
-          "vizinha": "L9.1PAV",
+          "vizinha": "",
           "t": 20.0,
           "h_viga": 40.0
         },
@@ -429,9 +429,9 @@
       "orientacao": "X",
       "bordos": [
         {
-          "vinculo": "engastado",
+          "vinculo": "livre",
           "grau": 1.5,
-          "vizinha": "L8.1PAV",
+          "vizinha": "",
           "t": 20.0,
           "h_viga": 40.0
         },
@@ -549,14 +549,6 @@
       "bordo_a": 4,
       "laje_b": "L9.1PAV",
       "bordo_b": 2,
-      "parcial_a": false,
-      "parcial_b": false
-    },
-    {
-      "laje_a": "L8.1PAV",
-      "bordo_a": 3,
-      "laje_b": "L9.1PAV",
-      "bordo_b": 1,
       "parcial_a": false,
       "parcial_b": false
     }

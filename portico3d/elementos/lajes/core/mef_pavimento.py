@@ -221,6 +221,9 @@ def _retangulos(macicas: list[Laje]) -> dict[str, list[float]]:
     for i, la in enumerate(macicas):
         for lb in macicas[i + 1:]:
             for c in _continuidades_geometricas(la, lb, 0.40, 0.30):
+                if not (la.aceita_continuidade(c.bordo_a)
+                        and lb.aceita_continuidade(c.bordo_b)):
+                    continue
                 fa = la.face_do_bordo(c.bordo_a)
                 fb = lb.face_do_bordo(c.bordo_b)
                 unir((la.nome, chave_da_face[fa]),

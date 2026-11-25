@@ -61,8 +61,34 @@ def fbd(concreto: Concreto, aco: Aco, phi_mm: float,
 
 
 def lb(concreto: Concreto, aco: Aco, phi_mm: float) -> float:
-    """Comprimento de ancoragem básico, cm (9.4.2.4): ``phi/4 . fyd/fbd``."""
-    return (phi_mm / 10.0) / 4.0 * aco.fyd_kNcm2 / fbd(concreto, aco, phi_mm)
+    """Comprimento de ancoragem básico, cm (9.4.2.4): ``phi/4 . fyd/fbd``,
+    nunca menos que ``25 phi`` (R13: o piso faltava; governa a partir de
+    ~C45 em CA-50)."""
+    phi = phi_mm / 10.0
+    return max(phi / 4.0 * aco.fyd_kNcm2 / fbd(concreto, aco, phi_mm),
+               25.0 * phi)
+
+
+#: Diâmetro do pino de dobramento, em bitolas (Tabela 9.1):
+#: ``categoria -> (Ø < 20 mm, Ø >= 20 mm)``.
+PINO_DOBRAMENTO = {"CA-25": (4.0, 5.0), "CA-50": (5.0, 8.0),
+                   "CA-60": (6.0, 6.0)}
+
+#: Prolongamento mínimo da positiva além do eixo teórico do apoio (20.1), cm.
+PROLONGAMENTO_EIXO = 4.0
+
+
+def raio_dobramento(aco: Aco, phi_mm: float) -> float:
+    """Raio interno de curvatura do gancho, cm: metade do pino da Tabela
+    9.1."""
+    menor, maior = PINO_DOBRAMENTO.get(aco.categoria, (5.0, 8.0))
+    return (menor if phi_mm < 20.0 else maior) * phi_mm / 10.0 / 2.0
+
+
+def minimo_apoio_extremo(aco: Aco, phi_mm: float) -> float:
+    """Os dois mínimos de 18.3.2.4.1 além de lb,nec, cm: ``r + 5,5 Ø`` e
+    60 mm."""
+    return max(raio_dobramento(aco, phi_mm) + 5.5 * phi_mm / 10.0, 6.0)
 
 
 def lb_minimo(concreto: Concreto, aco: Aco, phi_mm: float,
@@ -88,12 +114,21 @@ class ResultadoAncoragem:
     razao_As: float = 1.0
     atende: bool = True
     observacao: str = ""
+    #: (R13) o que se ancora no apoio: "extremo" (18.3.2.4-b, força
+    #: (aℓ/d)·VSd), "intermediario" (18.3.2.4-c, 10 Ø) ou "vao" (força do
+    #: vão inteiro, o critério de antes da R13)
+    criterio: str = "vao"
+    forca: float = 0.0              # kN/m, a força ancorada no apoio extremo
+    #: (R13) quanto a barra passa do eixo teórico do apoio (20.1: >= 4 cm)
+    alem_do_eixo: float = 0.0
+    atende_eixo: bool = True
 
 
 def verificar_positiva(rotulo: str, phi_mm: float, As_calc: float,
                        As_ef: float, disponivel: float,
                        ponta_disponivel: float, concreto: Concreto,
-                       aco: Aco) -> ResultadoAncoragem:
+                       aco: Aco, minimo: float = 0.0,
+                       fixo: float | None = None) -> ResultadoAncoragem:
     """Ancoragem da positiva no apoio: reta quando fecha, gancho quando não.
 
     Em dois tempos, nesta ordem, porque a ordem **é** a regra:
@@ -114,6 +149,10 @@ def verificar_positiva(rotulo: str, phi_mm: float, As_calc: float,
     executável: nesse caso o programa **não** desenha um gancho de mentira
     -- avisa que a laje é fina demais para socorrer aquela bitola, e a barra
     fica reta e reprovada, para a decisão voltar para o projetista.
+
+    ``minimo`` (cm) soma os mínimos de 18.3.2.4.1 no apoio extremo
+    (``r + 5,5 Ø`` e 60 mm); ``fixo`` (cm) substitui o cálculo pelo
+    comprimento que a norma aceita no apoio intermediário (10 Ø, 18.3.2.4-c).
     """
     res = ResultadoAncoragem(rotulo=rotulo, phi=phi_mm, disponivel=disponivel)
     res.razao_As = min(1.0, As_calc / As_ef) if As_ef > 0.0 else 1.0
@@ -121,7 +160,10 @@ def verificar_positiva(rotulo: str, phi_mm: float, As_calc: float,
 
     # -- 1. reta, que é a regra ---------------------------------------------
     lb_min_reta = lb_minimo(concreto, aco, phi_mm)
-    lb_nec_reta = max(ALFA_RETA * res.lb * res.razao_As, lb_min_reta)
+    lb_nec_reta = max(ALFA_RETA * res.lb * res.razao_As, lb_min_reta,
+                      minimo)
+    if fixo is not None:
+        lb_min_reta = lb_nec_reta = fixo
     if disponivel >= lb_nec_reta - 1e-9:
         res.lb_min, res.lb_nec = lb_min_reta, lb_nec_reta
         res.atende = True
@@ -132,7 +174,10 @@ def verificar_positiva(rotulo: str, phi_mm: float, As_calc: float,
 
     # -- 2. não fechou reta: dobra a ponta a 90° nesta extremidade ----------
     res.lb_min = lb_minimo(concreto, aco, phi_mm, com_gancho=True)
-    res.lb_nec = max(ALFA_GANCHO * res.lb * res.razao_As, res.lb_min)
+    res.lb_nec = max(ALFA_GANCHO * res.lb * res.razao_As, res.lb_min,
+                     minimo)
+    if fixo is not None:
+        res.lb_min = res.lb_nec = fixo
     ponta_minima = PONTA_MINIMA_GANCHO * phi_mm / 10.0
     if ponta_disponivel < ponta_minima - 1e-9:
         res.atende = False

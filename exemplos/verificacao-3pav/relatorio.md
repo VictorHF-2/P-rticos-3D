@@ -4,7 +4,7 @@ Programas isolados:
 
 - vigas: Vigas/Programa no commit 1508440 (Vigas motor-2026-11-25)
 - pilares: Pilares/Programa no commit 97c23ad (Pilares motor-2026-11-25)
-- lajes: Lajes/Programa no commit 05e344c (Lajes R11)
+- lajes: Lajes/Programa no commit bb50307 (Lajes R13)
 
 Modelo: 54 nós, 96 barras, 27 lajes. Avisos da geração: nenhum
 
@@ -249,47 +249,26 @@ Comparação 2 — **o que o pórtico muda**: momentos de projeto com a envoltó
 
 ### 1PAV (cota 3 m)
 
-- posições: Pórticos 36, isolado 37 — DIFEREM
-- vínculos: DIFEREM; larguras de apoio: DIFEREM
+- posições: Pórticos 36, isolado 36 — iguais
+- vínculos: iguais; larguras de apoio: DIFEREM
 - aprovado: Pórticos True (0 erros), isolado True (0 erros)
-  - L8.1PAV: isolado ('livre', 'engastado', 'engastado', 'livre') × Pórticos ('livre', 'engastado', 'livre', 'livre')
-  - L9.1PAV: isolado ('engastado', 'engastado', 'livre', 'livre') × Pórticos ('livre', 'engastado', 'livre', 'livre')
   - L8.1PAV: t isolado (15.0, 20.0, 20.0, 20.0) × Pórticos (20.0, 20.0, 20.0, 20.0)
-  - só no Pórticos: ('L8.1PAV', 'inferior', 'X', 4.2, 15.0, 9, 10.0, 387.5)
-  - só no Pórticos: ('L9.1PAV', 'inferior', 'X', 4.2, 15.0, 9, 412.5, 887.5)
-  - só no isolado:  ('L8.1PAV', 'inferior', 'X', 4.2, 15.0, 9, 10.0, 397.5)
-  - só no isolado:  ('L8.1PAV / L9.1PAV', 'superior', 'X', 6.3, 17.0, 8, -87.5, 867.5)
-  - só no isolado:  ('L9.1PAV', 'inferior', 'X', 4.2, 15.0, 9, 402.5, 887.5)
 ### 2PAV (cota 6 m)
 
-- posições: Pórticos 36, isolado 37 — DIFEREM
-- vínculos: DIFEREM; larguras de apoio: DIFEREM
+- posições: Pórticos 36, isolado 36 — iguais
+- vínculos: iguais; larguras de apoio: DIFEREM
 - aprovado: Pórticos True (0 erros), isolado True (0 erros)
-  - L8.2PAV: isolado ('livre', 'engastado', 'engastado', 'livre') × Pórticos ('livre', 'engastado', 'livre', 'livre')
-  - L9.2PAV: isolado ('engastado', 'engastado', 'livre', 'livre') × Pórticos ('livre', 'engastado', 'livre', 'livre')
   - L8.2PAV: t isolado (15.0, 20.0, 20.0, 20.0) × Pórticos (20.0, 20.0, 20.0, 20.0)
-  - só no Pórticos: ('L8.2PAV', 'inferior', 'X', 4.2, 15.0, 9, 10.0, 387.5)
-  - só no Pórticos: ('L9.2PAV', 'inferior', 'X', 4.2, 15.0, 9, 412.5, 887.5)
-  - só no isolado:  ('L8.2PAV', 'inferior', 'X', 4.2, 15.0, 9, 10.0, 397.5)
-  - só no isolado:  ('L8.2PAV / L9.2PAV', 'superior', 'X', 6.3, 17.0, 8, -87.5, 867.5)
-  - só no isolado:  ('L9.2PAV', 'inferior', 'X', 4.2, 15.0, 9, 402.5, 887.5)
 ### COB (cota 9 m)
 
-- posições: Pórticos 36, isolado 37 — DIFEREM
-- vínculos: DIFEREM; larguras de apoio: DIFEREM
+- posições: Pórticos 36, isolado 36 — iguais
+- vínculos: iguais; larguras de apoio: DIFEREM
 - aprovado: Pórticos True (0 erros), isolado True (0 erros)
-  - L8.COB: isolado ('livre', 'engastado', 'engastado', 'livre') × Pórticos ('livre', 'engastado', 'livre', 'livre')
-  - L9.COB: isolado ('engastado', 'engastado', 'livre', 'livre') × Pórticos ('livre', 'engastado', 'livre', 'livre')
   - L8.COB: t isolado (15.0, 20.0, 20.0, 20.0) × Pórticos (20.0, 20.0, 20.0, 20.0)
-  - só no Pórticos: ('L8.COB', 'inferior', 'X', 4.2, 15.0, 9, 10.0, 387.5)
-  - só no Pórticos: ('L9.COB', 'inferior', 'X', 4.2, 15.0, 9, 412.5, 887.5)
-  - só no isolado:  ('L8.COB', 'inferior', 'X', 4.2, 15.0, 9, 10.0, 397.5)
-  - só no isolado:  ('L8.COB / L9.COB', 'superior', 'X', 6.3, 17.0, 8, -87.5, 867.5)
-  - só no isolado:  ('L9.COB', 'inferior', 'X', 4.2, 15.0, 9, 402.5, 887.5)
 
 ## Pilares
 
-Pórticos: 214 verificações de lance (37 s)
+Pórticos: 214 verificações de lance (38 s)
 
 | Lance | combinação | Nd (kN) | Mx base/topo (kN·cm) | My base/topo (kN·cm) | arranjo Pórticos | arranjo isolado | resultado |
 |---|---|---|---|---|---|---|---|
@@ -516,4 +495,4 @@ Pórticos: 214 verificações de lance (37 s)
 
 ## Resumo
 
-Vigas com diferença: 15; pavimentos de laje com diferença: 3; verificações de pilar com diferença: 0. Tempo: 116 s.
+Vigas com diferença: 15; pavimentos de laje com diferença: 0; verificações de pilar com diferença: 0. Tempo: 119 s.

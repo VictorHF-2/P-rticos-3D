@@ -581,7 +581,8 @@ def posicao_negativa(laje: Laje, bordo: int, escolha: Escolha, numero: int,
                      rotulo_extra: str = "",
                      ancoragem: "anc.ResultadoAncoragem | None" = None,
                      tipo: str | None = None,
-                     ponta_gancho_continuidade: float = 0.0) -> Posicao:
+                     ponta_gancho_continuidade: float = 0.0,
+                     centro: float | None = None) -> Posicao:
     """Armadura negativa de um bordo.
 
     A barra corre perpendicular ao bordo -- na direção que o bordo apoia --,
@@ -598,7 +599,9 @@ def posicao_negativa(laje: Laje, bordo: int, escolha: Escolha, numero: int,
     camada de desenho (o padrão é inferido de ``continua``, e existe para o
     engaste em elemento rígido: ele não continua para uma vizinha, mas é
     armadura calculada como as outras, não o mínimo construtivo do contorno
-    -- por isso pede ``tipo="negativa"`` explícito).
+    -- por isso pede ``tipo="negativa"`` explícito). ``centro`` (cm) é o eixo
+    da viga da borda comum -- o meio entre as faces das duas lajes; sem ele,
+    a face desta laje.
     """
     if tipo is None:
         tipo = "negativa" if continua else "contorno"
@@ -611,10 +614,12 @@ def posicao_negativa(laje: Laje, bordo: int, escolha: Escolha, numero: int,
     face_val = _face_bordo_cm(laje, bordo)
 
     if continua:
-        # a barra atravessa para a laje vizinha: o centro é a borda comum de
-        # verdade (a face física), não a face externa de uma viga -- não há
-        # apoio a embutir, e por isso nenhum cobrimento a respeitar aqui
-        p_ini, p_fim = face_val - extensao_cada_lado, face_val + \
+        # a barra atravessa para a laje vizinha, simétrica em relação ao
+        # eixo da viga (R12: antes era a face desta laje, e do lado da
+        # vizinha a barra entrava uma largura de viga a menos); não há apoio
+        # a embutir, e por isso nenhum cobrimento a respeitar aqui
+        eixo_viga = face_val if centro is None else centro
+        p_ini, p_fim = eixo_viga - extensao_cada_lado, eixo_viga + \
             extensao_cada_lado
     else:
         # desenhada só até a face externa da viga (metade da largura do
@@ -719,7 +724,8 @@ def conferir_posicao(pos: Posicao, laje: Laje, cfg: Config) -> list[str]:
 
 def ancorar_positiva(laje: Laje, direcao: str, escolha: Escolha,
                      As_calculada: float, concreto: Concreto, aco: Aco,
-                     ambiente: Ambiente
+                     ambiente: Ambiente, reacoes=None,
+                     acrescimo_reacao: float = 0.0
                      ) -> dict[int, anc.ResultadoAncoragem]:
     """Ancoragem da armadura positiva nos dois apoios da direção.
 
@@ -734,6 +740,24 @@ def ancorar_positiva(laje: Laje, direcao: str, escolha: Escolha,
     fecha ``lb,nec``, aquela ponta ganha gancho a 90° com a ponta que cabe
     entre as duas faces (:func:`ponta_gancho_construtiva`) -- ver
     :func:`anc.verificar_positiva`, que é quem decide reta ou gancho.
+
+    **O que se ancora (R13).** Com as ``reacoes`` da laje, cada apoio
+    ancora o que o 18.3.2.4 pede -- a regra de elementos lineares, usada
+    aqui por analogia, como o 14.6.3:
+
+    * bordo **apoiado** é apoio extremo (18.3.2.4-b): a força
+      ``F = (aℓ/d)·VSd`` com ``aℓ = d`` -- o maior valor que a decalagem
+      admite (17.4.2.2-c), e o exato na laje sem armadura transversal --,
+      e o comprimento não fica abaixo de ``r + 5,5 Ø`` nem de 60 mm
+      (18.3.2.4.1). ``acrescimo_reacao`` (kN/m) soma a carga a mais de uma
+      faixa de parede ou de carga concentrada, inteira neste apoio;
+    * bordo **engastado** é apoio intermediário (18.3.2.4-c): 10 Ø, porque
+      ali não há momento positivo.
+
+    Sem ``reacoes``, ancora a força do vão inteiro, o critério anterior
+    (mais severo). Em todo bordo com apoio, confere também o prolongamento
+    de 4 cm além do eixo teórico do apoio (20.1): a barra entra ``t - c`` a
+    partir da face, e o eixo está a ``t/2``.
     """
     saida = {}
     c = ambiente.cobrimento_nominal
@@ -743,8 +767,29 @@ def ancorar_positiva(laje: Laje, direcao: str, escolha: Escolha,
         if b.vinculo == "livre":
             continue
         disponivel = _avanco_ancoragem(laje, bordo, c)
-        saida[bordo] = anc.verificar_positiva(
-            f"{laje.nome}, direção {direcao}, bordo {bordo}", escolha.phi,
-            As_calculada, escolha.As_efetiva, disponivel, ponta, concreto,
-            aco)
+        rotulo = f"{laje.nome}, direção {direcao}, bordo {bordo}"
+        r = reacoes.do_bordo(bordo) if reacoes is not None else None
+        if r is None:
+            res = anc.verificar_positiva(
+                rotulo, escolha.phi, As_calculada, escolha.As_efetiva,
+                disponivel, ponta, concreto, aco)
+        elif b.vinculo == "engastado":
+            res = anc.verificar_positiva(
+                rotulo, escolha.phi, As_calculada, escolha.As_efetiva,
+                disponivel, ponta, concreto, aco,
+                fixo=10.0 * escolha.phi / 10.0)
+            res.criterio = "intermediario"
+            res.observacao += " (apoio intermediário, 10 Ø, 18.3.2.4-c)"
+        else:
+            forca = r.v_d + acrescimo_reacao
+            res = anc.verificar_positiva(
+                rotulo, escolha.phi, forca / aco.fyd_kNcm2,
+                escolha.As_efetiva, disponivel, ponta, concreto, aco,
+                minimo=anc.minimo_apoio_extremo(aco, escolha.phi))
+            res.criterio, res.forca = "extremo", forca
+            res.observacao += (f" (apoio extremo, F = VSd = {forca:.1f} "
+                               f"kN/m, 18.3.2.4-b)")
+        res.alem_do_eixo = _t_apoio(laje, bordo) / 2.0 - c
+        res.atende_eixo = res.alem_do_eixo >= anc.PROLONGAMENTO_EIXO - 1e-9
+        saida[bordo] = res
     return saida
