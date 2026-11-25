@@ -46,7 +46,7 @@ da casa:
 |---|---|---|
 | Pilares | ABNT NBR 6118:2026 | **Pilares em Concreto Armado**, tag `motor-2026-11-25` |
 | Vigas contínuas | ABNT NBR 6118:2026 | **Dimensionador de Vigas**, tag `motor-2026-11-25` |
-| Lajes maciças, em balanço e treliçadas | ABNT NBR 6118:2026 | **Lajes de Concreto Armado**, revisão R13 |
+| Lajes maciças, em balanço e treliçadas | ABNT NBR 6118:2026 | **Lajes de Concreto Armado**, revisão R14 |
 | Vento | ABNT NBR 6123:2023 | **NBR-6123** (cálculo de S2 e das forças) |
 
 Nenhum dimensionamento de peça é reescrito aqui. Os motores são **cópias
@@ -213,7 +213,7 @@ O detalhe de cada decisão, com o porquê e a conferência que a trava, está no
 
 ### O autoteste
 
-`py main.py --autoteste <pasta>` roda **785 conferências** e o autoteste da
+`py main.py --autoteste <pasta>` roda **786 conferências** e o autoteste da
 janela, sem abrir nada na tela (cerca de 3 minutos). O motor de Pilares é a parte lenta; os
 lances vão em paralelo (um processo por núcleo) e cada resultado de motor
 fica guardado na sessão pela impressão da entrada, de modo que a armadura 3D
@@ -440,6 +440,7 @@ autoteste e os temporários do Python e do Office.
 | 25/11/2026 | **R04**: os três motores de elemento recopiados de commits e confrontados com eles (Vigas e Pilares `motor-2026-11-25`, Lajes R13); cache e paralelismo dos motores; edifício de 3 pavimentos idêntico aos programas isolados em pilares, lajes e na viga montada; 751 conferências em 2,5 min |
 | 25/11/2026 | Pranchas: folhas A1/A0 com moldura, carimbo e notas; planta de forma por pavimento; armação de lajes, vigas e pilares em janelas na escala legível de cada desenho; quadro de quantidades. As cotas dos desenhos dos motores chegavam ao DXF sem o bloco de geometria (o AUDIT do CAD as apagava) — agora vêm explodidas. 773 conferências |
 | 25/11/2026 | **R05**: pranchas completas — lances de pilar iguais numa vista só (36 lances → 6 vistas no edifício de 3 pavimentos, 43 → 29 folhas), posições numeradas por folha, resumo do aço em cada folha de armação, cortes esquemáticos A-A e B-B com a linha de corte nas plantas de forma; 785 conferências em 2,5 min |
+| 25/11/2026 | Motor de Lajes recopiado (R14): DXF da laje treliçada, pedido daqui. Cada faixa treliçada ganha a sua vista na folha de lajes da cota (planta de forma com as vigotas, armação, corte típico da nervura, tabela), e as vigotas entram no resumo do aço da folha em linha própria; 786 conferências |
 
 ## Limites de escopo
 
@@ -459,9 +460,7 @@ autoteste e os temporários do Python e do Office.
 - **Desenho**: as vigas de um pavimento são desenhadas com o topo nivelado
   (como na obra); o cálculo põe todos os eixos na cota do pavimento. As
   pranchas têm cortes esquemáticos, não cortes cotados nem detalhes
-  típicos (escada, nó, ancoragens); a numeração das posições é por folha; a
-  laje treliçada não tem folha de armação, porque o programa de Lajes não a
-  desenha em DXF (pedido feito à janela dele).
+  típicos (escada, nó, ancoragens); a numeração das posições é por folha.
 - **Motores copiados**: o que cada um não cobre, este programa também não
   cobre; ver o README de cada programa de origem.
 

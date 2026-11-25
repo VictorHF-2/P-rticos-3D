@@ -22,7 +22,7 @@ ou, direto no Python:
 ```
 py main.py                             abre a janela
 py main.py modelo.json --janela        abre a janela já com um modelo
-py main.py --autoteste                 roda as 785 conferências de referência
+py main.py --autoteste                 roda as 786 conferências de referência
 py main.py modelo.json [caso]          resolve um caso e imprime o resumo
 py main.py modelo.json --envoltoria    gera as combinações da NBR 6118,
                                        resolve todas e imprime a envoltória
@@ -43,7 +43,7 @@ subia e quebrava na primeira exportação.
 Tabelas à esquerda, desenho à direita, relatório embaixo. O caminho é montar,
 analisar e ler o resultado, e a interface existe só para encurtá-lo: não há
 uma linha de mecânica nela, e é de propósito — tudo continua no `core`, que é
-o que as 785 conferências cobrem.
+o que as 786 conferências cobrem.
 
 **A janela cabe em qualquer tela.** O tamanho de abertura sai da área útil
 da tela desta máquina — já sem a barra de tarefas —, a janela é centrada nela,
@@ -2092,7 +2092,7 @@ uma tag por revisão — e as pastas de revisão (`Vigas R04`, `Pilares R05`,
 
 | Cópia | Commit de origem | Situação |
 |---|---|---|
-| Lajes | `bb50307` (motor da tag R13 de `Lajes/Programa`) | recopiada em 25/11; idêntica, confrontada |
+| Lajes | `fcc6aba` (tag R14 de `Lajes/Programa`) | recopiada em 25/11; idêntica, confrontada |
 | Vigas | `1508440` (tag `motor-2026-11-25` de `Vigas/Programa`) | recopiada em 25/11; idêntica, confrontada |
 | Pilares | `97c23ad` (tag `motor-2026-11-25` de `Pilares/Programa`) | recopiada em 25/11; idêntica, confrontada |
 
@@ -2338,8 +2338,15 @@ desenho que os agrupou), menos vistas que lances; numeração por folha sem
 repetir entre vistas e sem buraco; o resumo do aço de todas as folhas igual
 à soma do aço que os motores calcularam.
 
-**Pendente.** Cortes cotados e detalhes típicos; folha da laje treliçada
-(pedido à janela do Lajes para desenhá-la em DXF).
+**Laje treliçada (Lajes R14, 25/11).** O programa de Lajes passou a
+desenhar a treliçada em DXF (`saidas/dxf_trelicada.py`, pedido daqui), no
+padrão das maciças, e a guardar `quantitativo["por_bitola"]` e
+`quantitativo["trelicas"]`. Cada faixa treliçada aprovada vira uma vista na
+folha de lajes da cota; as vigotas entram no resumo do aço em linha própria
+(`vigota <designação>`), porque não são barra de bitola. A conferência do
+resumo passou a somar o `aco_kg` de cada faixa.
+
+**Pendente.** Cortes cotados e detalhes típicos.
 
 ## A ponte com o dimensionamento
 

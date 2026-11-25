@@ -65,11 +65,11 @@ PROCEDENCIA = {
     },
     "lajes": {
         "programa": "Lajes",
-        "revisao": "Lajes R13",
+        "revisao": "Lajes R14",
         "repositorio": "Lajes/Programa",
         "pacote": "lajes",
-        # o motor é o da tag R13 (db40707); bb50307 só acrescenta o README
-        "commit": "bb50307bd4de5cc7dc2119bc06f84795083a1339",
+        # tag R14: DXF da laje treliçada (pedido do Pórticos)
+        "commit": "fcc6aba3407629dd94d037524c14e35f1a649daa",
         "origem": "",
         "partes": ("core", "saidas"),
         "copiado_em": "2026-11-25",

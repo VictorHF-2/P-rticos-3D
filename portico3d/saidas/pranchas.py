@@ -181,6 +181,9 @@ class Vista:
     posicoes: tuple[int, int] = (0, 0)
     #: As peças que a vista representa (os lances iguais de pilar).
     membros: list[str] = field(default_factory=list)
+    #: Vigotas treliçadas da vista: ``{designação: [comprimento m, massa
+    #: kg]}`` — não são barra de bitola e têm linha própria no resumo.
+    trelicas: dict = field(default_factory=dict)
 
     @property
     def largura(self) -> float:                    # mm de papel, com a margem
@@ -217,8 +220,10 @@ class Grupo:
         aço (este com as bitolas de todas as vistas do grupo, que é o maior
         que uma folha dele pode precisar)."""
         bitolas = {phi for v in self.vistas for phi in v.aco}
+        vigotas = {d for v in self.vistas for d in v.trelicas}
         return _altura_notas(self.notas) + (
-            altura_resumo(len(bitolas)) if self.com_aco else 0.0)
+            altura_resumo(len(bitolas) + len(vigotas)) if self.com_aco
+            else 0.0)
 
 
 @dataclass
@@ -253,6 +258,21 @@ class Folha:
                 d[0] += c
                 d[1] += m
         return dict(sorted(soma.items()))
+
+    @property
+    def trelicas(self) -> dict[str, list[float]]:
+        """As vigotas treliçadas da folha: ``{designação: [m, kg]}``."""
+        soma: dict[str, list[float]] = {}
+        for v, _, _ in self.itens:
+            for nome, (c, m) in v.trelicas.items():
+                d = soma.setdefault(str(nome), [0.0, 0.0])
+                d[0] += c
+                d[1] += m
+        return dict(sorted(soma.items()))
+
+    @property
+    def linhas_resumo(self) -> int:
+        return len(self.aco) + len(self.trelicas)
 
 
 def altura_resumo(n_bitolas: int) -> float:
@@ -1193,13 +1213,13 @@ def _carimbo(folha: Folha, lay, projeto, revisao: str) -> None:
 
 def _resumo_aco(folha: Folha, lay) -> None:
     """O resumo do aço da folha, por bitola, logo acima do carimbo."""
-    aco = folha.aco
-    if not folha.com_aco or not aco:
+    aco, vigotas = folha.aco, folha.trelicas
+    if not folha.com_aco or not (aco or vigotas):
         return
     W, _ = FORMATOS[folha.formato]
     x0 = W - MARGEM - CARIMBO_L
     passo = H_TEXTO * 1.7
-    topo = MARGEM + CARIMBO_H + altura_resumo(len(aco))
+    topo = MARGEM + CARIMBO_H + altura_resumo(folha.linhas_resumo)
     at = {"layer": "PR-TABELA"}
     lay.add_lwpolyline([(x0, MARGEM + CARIMBO_H), (x0 + CARIMBO_L,
                         MARGEM + CARIMBO_H), (x0 + CARIMBO_L, topo),
@@ -1211,6 +1231,9 @@ def _resumo_aco(folha: Folha, lay) -> None:
     total = 0.0
     for phi, (c, m) in aco.items():
         linhas.append((_cm(phi).replace(",0", ""), _n(c, 1), _n(m, 1)))
+        total += m
+    for nome, (c, m) in vigotas.items():
+        linhas.append((f"vigota {nome}", _n(c, 1), _n(m, 1)))
         total += m
     linhas.append(("TOTAL", "", _n(total, 1)))
     linhas.append(("TOTAL + 10 % (perdas)", "", _n(1.10 * total, 1)))
@@ -1234,7 +1257,7 @@ def _notas(folha: Folha, lay) -> None:
         return
     W, _ = FORMATOS[folha.formato]
     x0 = W - MARGEM - CARIMBO_L
-    resumo = altura_resumo(len(folha.aco)) if folha.com_aco else 0.0
+    resumo = altura_resumo(folha.linhas_resumo) if folha.com_aco else 0.0
     y = MARGEM + CARIMBO_H + resumo + _altura_notas(folha.notas) - 6.0
     _texto_papel(folha, lay, "NOTAS", x0 + 2, y, H_TITULO)
     y -= H_TEXTO * 2.2
@@ -1305,9 +1328,13 @@ def _aco_por_bitola(por_bitola: dict | None, fator: int = 1) -> dict:
     """``{phi: [comprimento m, massa kg]}`` a partir do ``por_bitola`` dos
     motores de Vigas e de Lajes."""
     saida = {}
-    for phi, d in (por_bitola or {}).items():
-        saida[float(phi)] = [float(d.get("comprimento", 0.0)) * fator,
-                             float(d.get("massa", 0.0)) * fator]
+    for chave, d in (por_bitola or {}).items():
+        try:
+            chave = float(chave)
+        except (TypeError, ValueError):
+            chave = str(chave)                 # a designação da vigota
+        saida[chave] = [float(d.get("comprimento", 0.0)) * fator,
+                        float(d.get("massa", 0.0)) * fator]
     return saida
 
 
@@ -1366,6 +1393,7 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
     from ..core.lajes import nivel_do_pavimento
     from ..dimensionamento import gravar_desenhos
     from ..elementos.lajes.saidas import dxf as dxf_laje
+    from ..elementos.lajes.saidas import dxf_trelicada
     from ..elementos.pilares.saidas import dxf as dxf_pilar
 
     modelo = projeto.modelo
@@ -1376,14 +1404,16 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
     px, py = posicoes_de_corte(modelo)
     marcas = [("A", "x", py), ("B", "y", px)]
 
-    def vista_importada(arquivo, titulo, aco=None) -> Vista | None:
+    def vista_importada(arquivo, titulo, aco=None, trelicas=None
+                        ) -> Vista | None:
         r = _importar(doc, Path(arquivo), cursor.x, cursor.y)
         if r is None:
             return None
         caixa, h, entidades = r
         cursor.ocupar(caixa)
         return escolher_escala(Vista(titulo, caixa, escala_legivel(h),
-                                     entidades=entidades, aco=aco or {}))
+                                     entidades=entidades, aco=aco or {},
+                                     trelicas=trelicas or {}))
 
     def escala_que_cabe(largura_cm, altura_cm, reserva, extra) -> int:
         for e in (50, 75, 100, 125, 150, 200, 250):
@@ -1419,9 +1449,7 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
                       "A-A e B-B: linhas dos cortes esquemáticos."]
             if planta.trelicadas:
                 notas.append("TR: laje treliçada, verificada por faixa de "
-                             "nervura; o detalhamento dela está na memória "
-                             "de cálculo (o programa de Lajes não a desenha "
-                             "em DXF).")
+                             "nervura; armação na folha de lajes da cota.")
             if fck:
                 notas.append(f"Concreto fck = {_n(fck, 0)} MPa.")
             notas_h = _altura_notas(notas)
@@ -1441,7 +1469,29 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
         cursor.proxima_linha()
         lajes = []
         for pav in projeto.lajes:
-            if abs(pav.cota - z) > 1e-6 or not pav.passou or pav.resultado is None:
+            if abs(pav.cota - z) > 1e-6 or not pav.passou:
+                continue
+            # as faixas treliçadas: uma vista por faixa
+            for faixa in getattr(pav, "trelicadas", []):
+                if not faixa.passou:
+                    continue
+                destino = temp / "lajes" / f"{z:g}-{faixa.nome}.dxf"
+                destino.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    dxf_trelicada.exportar([faixa.resultado], str(destino))
+                except Exception:                            # noqa: BLE001
+                    continue
+                if destino.exists():
+                    q = getattr(faixa.resultado, "quantitativo", None) or {}
+                    v = vista_importada(
+                        destino, f"LAJE TRELIÇADA {faixa.nome} — {rotulo}",
+                        _aco_por_bitola(q.get("por_bitola")),
+                        {str(k): [float(d.get("comprimento", 0.0)),
+                                  float(d.get("massa", 0.0))]
+                         for k, d in (q.get("trelicas") or {}).items()})
+                    if v is not None:
+                        lajes.append(v)
+            if pav.resultado is None:
                 continue
             destino = temp / "lajes" / f"{z:g}.dxf"
             destino.parent.mkdir(parents=True, exist_ok=True)

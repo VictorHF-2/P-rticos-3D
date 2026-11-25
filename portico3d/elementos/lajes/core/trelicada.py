@@ -1616,7 +1616,42 @@ def _detalhar(res, lt, concreto, ambiente, cfg, env, elementos, ini, c_inf,
         concreto_L_m2=(inter * lt.capa + lt.bw * lt.altura_enchimento)
         / 1e4 / (inter / 100.0) * 1000.0,
         aco_kg=massa, aco_kg_m2=massa / area if area > 0 else 0.0,
-        comprimento_total=comp_total)
+        comprimento_total=comp_total,
+        por_bitola=quantitativo_por_bitola(pos),
+        trelicas=quantitativo_trelicas(pos, lt.trelica))
+
+
+def quantitativo_por_bitola(posicoes: list) -> dict:
+    """``{Ø: {comprimento (m), massa (kg), posicoes, emendas,
+    massa_emendas}}`` das barras -- o formato do quantitativo das maciças,
+    para o resumo do aço da prancha. As vigotas (Ø 0) ficam de fora, em
+    :func:`quantitativo_trelicas`."""
+    saida: dict = {}
+    for p in posicoes:
+        if p.phi <= 0.0:
+            continue
+        d = saida.setdefault(p.phi, {"comprimento": 0.0, "massa": 0.0,
+                                     "posicoes": 0, "emendas": 0,
+                                     "massa_emendas": 0.0})
+        d["comprimento"] += p.quantidade * p.comprimento / 100.0
+        d["massa"] += p.massa
+        d["posicoes"] += 1
+    return dict(sorted(saida.items()))
+
+
+def quantitativo_trelicas(posicoes: list, designacao: str) -> dict:
+    """``{designação: {comprimento (m), massa (kg), posicoes}}`` das vigotas
+    treliçadas (as posições de Ø 0)."""
+    saida: dict = {}
+    for p in posicoes:
+        if p.phi > 0.0:
+            continue
+        d = saida.setdefault(designacao, {"comprimento": 0.0, "massa": 0.0,
+                                          "posicoes": 0})
+        d["comprimento"] += p.quantidade * p.comprimento / 100.0
+        d["massa"] += p.massa
+        d["posicoes"] += 1
+    return saida
 
 
 # ---------------------------------------------------------------------------

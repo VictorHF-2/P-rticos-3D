@@ -7065,10 +7065,15 @@ def _pranchas_ponta_a_ponta(m, vig, pil, laj) -> list[Conferencia]:
     esperado += sum(float((v.resultado.quantitativo or {}).get(
         "massa_total", 0.0)) for v in laj
         if v.passou and v.resultado is not None)
+    # treliçada: as barras e as vigotas, que somam o aço da faixa
+    esperado += sum(float((f.resultado.quantitativo or {}).get("aco_kg", 0.0))
+                    for v in laj if v.passou for f in v.trelicadas
+                    if f.passou)
     esperado += sum(qp.calcular(_arranjo_adotado(por_barra[b])[0].resultado
                                 ).massa_aco for b in membros)
     nas_folhas = sum(m for f in folhas if f.com_aco
-                     for _, m in f.aco.values())
+                     for _, m in list(f.aco.values())
+                     + list(f.trelicas.values()))
     return [
         Conferencia("pranchas: todo lance de pilar numa vista, uma vez só",
                     float(sorted(membros) == sorted(por_barra)
@@ -7085,13 +7090,16 @@ def _pranchas_ponta_a_ponta(m, vig, pil, laj) -> list[Conferencia]:
                     float(len(formas)), float(len(pr.cotas_dos_pavimentos(m)))),
         Conferencia("pranchas: toda viga dimensionada está numa folha",
                     float(vigas <= titulos), 1.0),
-        # a treliçada é verificada por faixa, e o programa de Lajes não a
-        # desenha em DXF: só o pavimento de lajes maciças tem folha
-        Conferencia("pranchas: uma folha de lajes por pavimento de laje "
-                    "maciça",
-                    float(sum(t.startswith("LAJES") for t in titulos)),
+        # uma vista por pavimento de lajes maciças e uma por faixa
+        # treliçada (o DXF da treliçada é do Lajes R14)
+        Conferencia("pranchas: as lajes maciças de cada cota numa vista",
+                    float(sum(t.startswith("LAJES —") for t in titulos)),
                     float(len([v for v in laj
                                if v.passou and v.resultado is not None]))),
+        Conferencia("pranchas: cada faixa treliçada numa vista",
+                    float(sum(t.startswith("LAJE TRELIÇADA") for t in titulos)),
+                    float(sum(f.passou for v in laj if v.passou
+                              for f in v.trelicadas))),
         Conferencia("pranchas: nenhum texto sobre outro, nenhuma janela "
                     "sobre outra, sobre o carimbo ou fora da moldura",
                     float(len(pr.sobreposicoes(folhas))), 0.0),
