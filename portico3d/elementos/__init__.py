@@ -41,24 +41,24 @@ from __future__ import annotations
 PROCEDENCIA = {
     "pilares": {
         "programa": "Pilares",
-        "revisao": "Pilares motor-2026-11-25",
+        "revisao": "Pilares motor-2026-11-25b",
         "repositorio": "Pilares/Programa",
         "pacote": "pilares",
-        # tag motor-2026-11-25: dimensionar 1,6 a 20 vezes mais rápido,
-        # resultado idêntico bit a bit, pedido pelo Pórticos
-        "commit": "97c23adb974051dcce3e348f9733cc7440ccdba0",
+        # tag motor-2026-11-25b: a 25 (dimensionar mais rápido, bit a bit)
+        # com os imports relativos do relatorio.py, pedidos pelo Pórticos
+        "commit": "61e311347eb3284e7b8c3d3bc9f6b02bae93df44",
         "origem": "",
         "partes": ("core", "saidas"),
         "copiado_em": "2026-11-25",
     },
     "vigas": {
         "programa": "Vigas",
-        "revisao": "Vigas motor-2026-11-25",
+        "revisao": "Vigas motor-2026-11-25b",
         "repositorio": "Vigas/Programa",
         "pacote": "vigas",
-        # tag motor-2026-11-25: barra pela mínima cortada pelo diagrama e
-        # seção L, pedidas pelo Pórticos
-        "commit": "1508440b74f57deab49891ae10171ba27ff1db1f",
+        # tag motor-2026-11-25b: a 25 (barra pela mínima, seção L) com a
+        # camada BARRA declarada no DXF, pedidos pelo Pórticos
+        "commit": "9c1f4d2af1f6a635304e46201db358b4a63c5379",
         "origem": "",
         "partes": ("core", "saidas"),
         "copiado_em": "2026-11-25",

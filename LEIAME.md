@@ -2093,8 +2093,8 @@ uma tag por revisão — e as pastas de revisão (`Vigas R04`, `Pilares R05`,
 | Cópia | Commit de origem | Situação |
 |---|---|---|
 | Lajes | `fcc6aba` (tag R14 de `Lajes/Programa`) | recopiada em 25/11; idêntica, confrontada |
-| Vigas | `1508440` (tag `motor-2026-11-25` de `Vigas/Programa`) | recopiada em 25/11; idêntica, confrontada |
-| Pilares | `97c23ad` (tag `motor-2026-11-25` de `Pilares/Programa`) | recopiada em 25/11; idêntica, confrontada |
+| Vigas | `9c1f4d2` (tag `motor-2026-11-25b` de `Vigas/Programa`) | recopiada em 25/11; idêntica, confrontada |
+| Pilares | `61e3113` (tag `motor-2026-11-25b` de `Pilares/Programa`) | recopiada em 25/11; idêntica, confrontada |
 
 Desde 25/11 as três cópias vêm de um commit e são confrontadas com ele.
 
@@ -2345,6 +2345,14 @@ padrão das maciças, e a guardar `quantitativo["por_bitola"]` e
 folha de lajes da cota; as vigotas entram no resumo do aço em linha própria
 (`vigota <designação>`), porque não são barra de bitola. A conferência do
 resumo passou a somar o `aco_kg` de cada faixa.
+
+**Recópia `motor-2026-11-25b` de Pilares e Vigas (25/11).** Os dois achados
+das recópias anteriores, corrigidos nas origens: o `saidas/relatorio.py` do
+Pilares com imports relativos (os absolutos `from pilares...` quebravam em
+qualquer cópia com outro nome de pacote) e a camada `BARRA` declarada no
+DXF do Vigas (o ezdxf avisava a camada inexistente). Nenhuma mudança de
+cálculo: o autoteste e a verificação contra os programas isolados saíram
+iguais.
 
 **Pendente.** Cortes cotados e detalhes típicos.
 

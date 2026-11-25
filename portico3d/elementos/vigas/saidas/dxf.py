@@ -30,6 +30,9 @@ CAMADAS = {
     "ARMADURA_INF": (1, "CONTINUOUS", 50),
     "PELE": (6, "CONTINUOUS", 35),
     "ESTRIBO": (3, "CONTINUOUS", 25),
+    # barra cortada na seção transversal (o círculo): armadura como as
+    # ARMADURA_*, na mesma espessura, em cor própria por servir às duas faces
+    "BARRA": (4, "CONTINUOUS", 50),
     "TEXTO": (AMARELO, "CONTINUOUS", 13),
     "COTAS": (AMARELO, "CONTINUOUS", 13),
     "EIXO": (5, "CENTER", 13),
@@ -158,6 +161,20 @@ def _texto(msp, t: geometria.Texto, dx: float = 0.0, dy: float = 0.0) -> None:
 FOLGA_ENTRE_VIGAS = 400.0
 #: a mesma folga, entre uma fileira de vigas e a de baixo
 FOLGA_ENTRE_FILEIRAS = 400.0
+
+
+def camadas_nao_declaradas(caminho: str) -> list[str]:
+    """Camadas usadas por alguma entidade do DXF e ausentes da tabela de
+    camadas -- o ezdxf avisa ao abrir e alguns CADs acusam erro no AUDIT."""
+    import ezdxf
+    doc = ezdxf.readfile(caminho)
+    declaradas = {c.dxf.name.upper() for c in doc.layers}
+    usadas = set()
+    for bloco in doc.blocks:
+        for e in bloco:
+            if e.dxf.hasattr("layer"):
+                usadas.add(e.dxf.layer)
+    return sorted(c for c in usadas if c.upper() not in declaradas)
 
 
 def exportar(res: ResultadoViga, caminho: str, secoes_m=None,

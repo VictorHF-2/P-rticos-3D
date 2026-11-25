@@ -1298,7 +1298,7 @@ def _dimensionamento(doc: Document, res: ResultadoPilar, n: int) -> None:
 def _combinacoes(doc: Document, res: ResultadoPilar, n: int) -> None:
     """As combinações de esforços, verificadas com a mesma armadura."""
     if res.metodos_pior:
-        from pilares.core.dimensionar import ROTULOS_METODO
+        from ..core.dimensionar import ROTULOS_METODO
         _titulo(doc, f"{n}. Métodos de 2ª ordem — caso mais conservador")
         _paragrafo(doc,
                    "Critério de projeto: todos os métodos de 2ª ordem que a "
@@ -1343,7 +1343,7 @@ def _combinacoes(doc: Document, res: ResultadoPilar, n: int) -> None:
 
 def _acoes(doc: Document, res: ResultadoPilar, n: int) -> None:
     """As ações características e de onde as combinações saíram."""
-    from pilares.core.acoes import GAMMA_F
+    from ..core.acoes import GAMMA_F
     p = res.pilar
     _titulo(doc, f"{n}. Ações e combinações (11.7 e 11.8)")
     gd, gf, gq, geq = GAMMA_F.get(p.config.combinacao, GAMMA_F["normais"])

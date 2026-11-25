@@ -44,8 +44,8 @@ da casa:
 
 | Elemento | Norma | Motor copiado de |
 |---|---|---|
-| Pilares | ABNT NBR 6118:2026 | **Pilares em Concreto Armado**, tag `motor-2026-11-25` |
-| Vigas contínuas | ABNT NBR 6118:2026 | **Dimensionador de Vigas**, tag `motor-2026-11-25` |
+| Pilares | ABNT NBR 6118:2026 | **Pilares em Concreto Armado**, tag `motor-2026-11-25b` |
+| Vigas contínuas | ABNT NBR 6118:2026 | **Dimensionador de Vigas**, tag `motor-2026-11-25b` |
 | Lajes maciças, em balanço e treliçadas | ABNT NBR 6118:2026 | **Lajes de Concreto Armado**, revisão R14 |
 | Vento | ABNT NBR 6123:2023 | **NBR-6123** (cálculo de S2 e das forças) |
 
@@ -441,6 +441,7 @@ autoteste e os temporários do Python e do Office.
 | 25/11/2026 | Pranchas: folhas A1/A0 com moldura, carimbo e notas; planta de forma por pavimento; armação de lajes, vigas e pilares em janelas na escala legível de cada desenho; quadro de quantidades. As cotas dos desenhos dos motores chegavam ao DXF sem o bloco de geometria (o AUDIT do CAD as apagava) — agora vêm explodidas. 773 conferências |
 | 25/11/2026 | **R05**: pranchas completas — lances de pilar iguais numa vista só (36 lances → 6 vistas no edifício de 3 pavimentos, 43 → 29 folhas), posições numeradas por folha, resumo do aço em cada folha de armação, cortes esquemáticos A-A e B-B com a linha de corte nas plantas de forma; 785 conferências em 2,5 min |
 | 25/11/2026 | Motor de Lajes recopiado (R14): DXF da laje treliçada, pedido daqui. Cada faixa treliçada ganha a sua vista na folha de lajes da cota (planta de forma com as vigotas, armação, corte típico da nervura, tabela), e as vigotas entram no resumo do aço da folha em linha própria; 786 conferências |
+| 25/11/2026 | Motores de Pilares e Vigas recopiados (`motor-2026-11-25b`): os dois achados passados às janelas deles — imports relativos no relatório do Pilares e a camada BARRA declarada no DXF do Vigas; cálculo inalterado |
 
 ## Limites de escopo
 

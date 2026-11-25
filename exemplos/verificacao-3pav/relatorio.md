@@ -2,9 +2,9 @@
 
 Programas isolados:
 
-- vigas: Vigas/Programa no commit 1508440 (Vigas motor-2026-11-25)
-- pilares: Pilares/Programa no commit 97c23ad (Pilares motor-2026-11-25)
-- lajes: Lajes/Programa no commit bb50307 (Lajes R13)
+- vigas: Vigas/Programa no commit 9c1f4d2 (Vigas motor-2026-11-25b)
+- pilares: Pilares/Programa no commit 61e3113 (Pilares motor-2026-11-25b)
+- lajes: Lajes/Programa no commit fcc6aba (Lajes R14)
 
 Modelo: 54 nós, 96 barras, 27 lajes. Avisos da geração: nenhum
 
@@ -268,7 +268,7 @@ Comparação 2 — **o que o pórtico muda**: momentos de projeto com a envoltó
 
 ## Pilares
 
-Pórticos: 214 verificações de lance (38 s)
+Pórticos: 214 verificações de lance (37 s)
 
 | Lance | combinação | Nd (kN) | Mx base/topo (kN·cm) | My base/topo (kN·cm) | arranjo Pórticos | arranjo isolado | resultado |
 |---|---|---|---|---|---|---|---|
@@ -495,4 +495,4 @@ Pórticos: 214 verificações de lance (38 s)
 
 ## Resumo
 
-Vigas com diferença: 15; pavimentos de laje com diferença: 0; verificações de pilar com diferença: 0. Tempo: 119 s.
+Vigas com diferença: 15; pavimentos de laje com diferença: 0; verificações de pilar com diferença: 0. Tempo: 114 s.
