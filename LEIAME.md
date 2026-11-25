@@ -2064,6 +2064,23 @@ compara **byte a byte** com a origem quando ela está ao alcance. Cópia editada
 à mão deixa de ser cópia e vira um garfo silencioso — a conferência existe para
 que isso não passe.
 
+**Procedência pelo commit (25/11/2026).** Os programas de origem viraram
+repositórios git — `Vigas/Programa`, `Pilares/Programa`, `Lajes/Programa`,
+uma tag por revisão — e as pastas de revisão (`Vigas R04`, `Pilares R05`,
+`Lajes R11`) deixaram de existir. A `PROCEDENCIA` ganhou `repositorio`,
+`pacote` e `commit`, e o autoteste confronta a cópia com o commit por
+`git show`, comparando o conteúdo sem o fim de linha:
+
+| Cópia | Commit de origem | Situação |
+|---|---|---|
+| Lajes | `05e344c` (tag R11 de `Lajes/Programa`) | idêntica, confrontada |
+| Vigas | — | feita da pasta `Vigas R04` em 03/11, antes de o estado virar commit; nenhum commit é idêntico (o mais próximo difere em 3 arquivos) |
+| Pilares | — | feita da pasta `Pilares R05` em 05/11, idem (o mais próximo difere em 5) |
+
+Para as duas sem commit, o autoteste diz que a origem está fora de alcance
+em vez de acusar diferença. Recopiar de um commit (e com isso confrontá-las)
+muda resultado e fica para quando for pedido.
+
 Vieram o `core/` e o `saidas/` (é do `saidas/` que saem os desenhos das
 peças); as interfaces ficaram de fora.
 

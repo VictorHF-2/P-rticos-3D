@@ -2660,26 +2660,52 @@ def motores_de_elemento_copiados() -> list[Conferencia]:
             f"elementos: {elemento} tem arquivos copiados",
             float(len(copiados) > 0), 1.0))
 
-        origem = raiz / dados["origem"] if raiz else None
-        if origem is None or not origem.is_dir():
+        # A origem é um commit do repositório do programa (os programas de
+        # elemento viraram repositórios git, uma tag por revisão) ou, nas
+        # cópias anteriores a isso, uma pasta. A pasta de revisão não existe
+        # mais depois que o programa virou repositório: aí a cópia só se
+        # confronta pelo commit.
+        repositorio = (raiz / dados["repositorio"]
+                       if raiz and dados.get("repositorio") else None)
+        commit = dados.get("commit", "")
+        ler = None
+        if repositorio is not None and commit and \
+                (repositorio / ".git").exists():
+            def ler(caminho_relativo: str, _r=repositorio, _c=commit):
+                r = subprocess.run(
+                    ["git", "-C", str(_r), "show",
+                     f"{_c}:{dados['pacote']}/{caminho_relativo}"],
+                    capture_output=True)
+                return r.stdout if r.returncode == 0 else None
+        else:
+            origem = raiz / dados["origem"] if raiz and dados.get("origem") \
+                else None
+            if origem is not None and origem.is_dir():
+                def ler(caminho_relativo: str, _o=origem):
+                    p = _o / caminho_relativo
+                    return p.read_bytes() if p.exists() else None
+        if ler is None:
             conferencias.append(Conferencia(
-                f"elementos: origem de {elemento} fora de alcance, "
-                "cópia não confrontada", 0.0, 0.0))
+                f"elementos: origem de {elemento} fora de alcance "
+                f"({dados['revisao']}), cópia não confrontada", 0.0, 0.0))
             continue
 
         diferentes = []
         for parte, arquivo in copiados:
-            par = (origem / parte / arquivo.name) if parte else (origem
-                                                                 / arquivo.name)
-            if not par.exists():
+            original = ler(f"{parte}/{arquivo.name}" if parte
+                           else arquivo.name)
+            if original is None:
                 # O ``__init__.py`` vazio é criação nossa, para o pacote
                 # existir; ele não vem da origem e não conta como diferença.
                 if arquivo.name == "__init__.py" and not arquivo.read_bytes():
                     continue
                 diferentes.append(arquivo.name)
                 continue
-            if (hashlib.sha256(arquivo.read_bytes()).digest()
-                    != hashlib.sha256(par.read_bytes()).digest()):
+            # o git pode devolver com outro fim de linha (autocrlf): compara
+            # o conteúdo, não o \r
+            if (hashlib.sha256(arquivo.read_bytes().replace(b"\r\n", b"\n"))
+                    .digest() != hashlib.sha256(
+                        original.replace(b"\r\n", b"\n")).digest()):
                 diferentes.append(arquivo.name)
         conferencias.append(Conferencia(
             f"elementos: {elemento} idêntico a {dados['revisao']}",
