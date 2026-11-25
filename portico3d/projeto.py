@@ -189,7 +189,7 @@ def gerar(projeto: Projeto, pasta, nome: str | None = None) -> list[str]:
     Um memorial, um quadro de quantidades, uma prancha. Cada um falha por si:
     faltar o ezdxf não pode impedir que a memória de cálculo saia.
     """
-    from .saidas import desenho_unico, memoria, quantitativos
+    from .saidas import memoria, pranchas, quantitativos
 
     destino = Path(pasta)
     destino.mkdir(parents=True, exist_ok=True)
@@ -198,7 +198,7 @@ def gerar(projeto: Projeto, pasta, nome: str | None = None) -> list[str]:
     arquivos = []
     for gerador, sufixo in ((memoria.gerar, "memória de cálculo.docx"),
                             (quantitativos.gerar, "quadro de quantidades.xlsx"),
-                            (desenho_unico.gerar, "desenhos.dxf")):
+                            (pranchas.gerar, "desenhos.dxf")):
         caminho = destino / f"{base} — {sufixo}"
         try:
             arquivos.append(str(gerador(projeto, caminho)))

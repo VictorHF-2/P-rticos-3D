@@ -16,7 +16,7 @@ ele saiu nem procurar dentro de ``dist``. Ela é limpa e reescrita a cada
 construção, de propósito — duas versões convivendo ali seria justamente o que
 o nome promete que não acontece.
 
-A verificação do passo 4 não é rápida: são as 751 conferências mais o
+A verificação do passo 4 não é rápida: são as 773 conferências mais o
 autoteste da janela, cerca de 45 minutos por executável (o motor de
 Pilares é a parte lenta). É o preço de saber
 que o que foi empacotado calcula igual ao que roda em Python — que é a única
@@ -96,7 +96,7 @@ def verificar(executavel: Path) -> None:
         raise SystemExit(f"não encontrei {executavel}")
     destino = RAIZ / "autoteste-exe" / executavel.stem
     destino.mkdir(parents=True, exist_ok=True)
-    executar(f"verificando {executavel.name} (751 conferências, demora)",
+    executar(f"verificando {executavel.name} (773 conferências, demora)",
              [str(executavel), "--autoteste", str(destino)], tempo=4 * 3600)
 
 

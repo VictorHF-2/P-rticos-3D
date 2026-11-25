@@ -213,7 +213,7 @@ O detalhe de cada decisão, com o porquê e a conferência que a trava, está no
 
 ### O autoteste
 
-`py main.py --autoteste <pasta>` roda **751 conferências** e o autoteste da
+`py main.py --autoteste <pasta>` roda **773 conferências** e o autoteste da
 janela, sem abrir nada na tela (cerca de 3 minutos). O motor de Pilares é a parte lenta; os
 lances vão em paralelo (um processo por núcleo) e cada resultado de motor
 fica guardado na sessão pela impressão da entrada, de modo que a armadura 3D
@@ -335,11 +335,30 @@ No Windows também dá para abrir pelo `Iniciar_Porticos.bat`.
 |---|---|
 | `memória de cálculo.docx` | metodologia, modelo, esforços, estabilidade global, reações, pilares, vigas, confronto com a envoltória, lajes e quantitativos |
 | `quadro de quantidades.xlsx` | resumo, quantidades por tipo de peça, aço por bitola e o veredito peça a peça |
-| `desenhos.dxf` | prancha com todas as peças detalhadas, por tipo, e o quadro de quantidades |
+| `desenhos.dxf` | as pranchas: uma folha (layout) por prancha, A1 ou A0, com moldura, carimbo e notas; por pavimento, a planta de forma, a armação das lajes e a armação das vigas; depois os pilares, lance a lance, e o quadro de quantidades. O espaço do modelo guarda tudo em verdadeira grandeza (cm) |
 | armadura em DXF | a armadura do pavimento em 3D, uma polilinha por barra, com a fôrma |
 | modelo `.json` | o modelo de barras ou o lançamento, para reabrir |
 
 ![Armadura da cobertura vista de cima](docs/armadura-planta.png)
+
+### As pranchas
+
+A **planta de forma** é desenhada aqui, a 1:50 (ou na menor escala que
+caiba): o contorno de vigas e pilares em planta, com cada face recortada
+onde entra em outra viga ou num pilar; pilar hachurado chega por baixo do
+pavimento, com X nasce nele; nome e seção de cada viga e pilar, nome e
+espessura de cada laje, cotas entre eixos de pilar e as notas no carimbo.
+
+As folhas de **armação** mostram, em janelas na escala, os desenhos que os
+programas de Vigas, Lajes e Pilares fazem. A escala de cada uma sai da
+altura do texto do desenho, para que ele saia com pelo menos 1,6 mm no
+papel: 1:10 no pilar, 1:25 na viga, 1:50 nas lajes. Quando o desenho não
+cabe na A1 nessa escala, a folha passa a A0 — a folha cresce antes de o
+texto encolher.
+
+![Planta de forma do 1º pavimento do edifício de 3 pavimentos](docs/prancha-forma.png)
+
+![Folha de armação de vigas, A0 a 1:25](docs/prancha-vigas.png)
 
 ## Organização do repositório
 
@@ -370,7 +389,7 @@ portico3d/
   armadura3d.py             a armadura do pavimento no espaço
   armadura_dxf.py           a armadura em DXF 3D
   projeto.py                o projeto completo (memória, quantitativos, pranchas)
-  saidas/                   memória, quantitativos e desenho único
+  saidas/                   memória, quantitativos e pranchas
   validacao.py              as conferências do autoteste
   ui/                       janela, tabelas, vista 3D, editor de planta, assistente
 ```
@@ -406,6 +425,7 @@ autoteste e os temporários do Python e do Office.
 | 25/11/2026 | Motor de Pilares recopiado (`motor-2026-11-25`, 1,6 a 20 vezes mais rápido, resultado idêntico bit a bit no programa de Pilares); os 214 arranjos do edifício de 3 pavimentos não mudaram. Autoteste de 18 para 2,5 min; verificação contra os programas isolados de 23 para 2 min |
 | 25/11/2026 | Motor de Lajes recopiado (R13): negativa da borda comum no eixo da viga, balanço pelos vínculos, sacadas vizinhas sem engaste lateral (R12) e ancoragem no apoio pelo 18.3.2.4 (R13); a laje em balanço entra com o bordo do lado apoiado "apoiado"; lajes do edifício de 3 pavimentos idênticas às do programa isolado |
 | 25/11/2026 | **R04**: os três motores de elemento recopiados de commits e confrontados com eles (Vigas e Pilares `motor-2026-11-25`, Lajes R13); cache e paralelismo dos motores; edifício de 3 pavimentos idêntico aos programas isolados em pilares, lajes e na viga montada; 751 conferências em 2,5 min |
+| 25/11/2026 | Pranchas: folhas A1/A0 com moldura, carimbo e notas; planta de forma por pavimento; armação de lajes, vigas e pilares em janelas na escala legível de cada desenho; quadro de quantidades. As cotas dos desenhos dos motores chegavam ao DXF sem o bloco de geometria (o AUDIT do CAD as apagava) — agora vêm explodidas. 773 conferências |
 
 ## Limites de escopo
 
@@ -423,7 +443,11 @@ autoteste e os temporários do Python e do Office.
 - **Dinâmica**: análise modal; espectro de resposta (NBR 15421), análise no
   tempo e inelástica não são feitos.
 - **Desenho**: as vigas de um pavimento são desenhadas com o topo nivelado
-  (como na obra); o cálculo põe todos os eixos na cota do pavimento.
+  (como na obra); o cálculo põe todos os eixos na cota do pavimento. As
+  pranchas ainda não têm cortes, detalhes típicos nem numeração das
+  posições única no edifício (cada programa de elemento numera as suas); a
+  laje treliçada não tem folha de armação, porque o programa de Lajes não a
+  desenha em DXF.
 - **Motores copiados**: o que cada um não cobre, este programa também não
   cobre; ver o README de cada programa de origem.
 

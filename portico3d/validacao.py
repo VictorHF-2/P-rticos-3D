@@ -6999,6 +6999,175 @@ def lancamento_dimensiona_ponta_a_ponta() -> list[Conferencia]:
                     1.0),
         Conferencia("lançamento ponta a ponta: os nós viga–pilar atendem",
                     float(all(n.ok for n in nos_viga_pilar(m, vig))), 1.0),
+    ] + _pranchas_ponta_a_ponta(m, vig, pil, laj)
+
+
+def _pranchas_ponta_a_ponta(m, vig, pil, laj) -> list[Conferencia]:
+    """As pranchas do mesmo exemplo: uma forma por pavimento, toda viga e
+    todo lance dimensionados numa folha, nada sobreposto, e o arquivo passa
+    no AUDIT do ezdxf sem correção (cota sem bloco seria apagada pelo CAD)."""
+    import ezdxf
+
+    from .compatibilizacao import prumadas
+    from .projeto import Projeto
+    from .saidas import pranchas as pr
+
+    projeto = Projeto(modelo=m, pilares=pil, vigas=vig, lajes=laj,
+                      prumadas=prumadas(m, pil))
+    doc, folhas = pr.documento(projeto)
+    titulos = {v.titulo for f in folhas for v, _, _ in f.itens}
+    formas = [f for f in folhas if f.conteudo.startswith("PLANTA DE FORMA")]
+    vigas = {f"VIGA {v.nome}" for v in vig if v.passou}
+    lances = {f"PILAR {v.barra}" for v in pil if v.passou}
+    auditoria = doc.audit()
+    layouts = [l for l in doc.layouts if l.name != "Model"]
+    com_janela = sum(1 for l in layouts if len(l.query("VIEWPORT")) > 1)
+    return [
+        Conferencia("pranchas: uma planta de forma por pavimento",
+                    float(len(formas)), float(len(pr.cotas_dos_pavimentos(m)))),
+        Conferencia("pranchas: toda viga dimensionada está numa folha",
+                    float(vigas <= titulos), 1.0),
+        Conferencia("pranchas: todo lance de pilar está numa folha",
+                    float(lances <= titulos), 1.0),
+        # a treliçada é verificada por faixa, e o programa de Lajes não a
+        # desenha em DXF: só o pavimento de lajes maciças tem folha
+        Conferencia("pranchas: uma folha de lajes por pavimento de laje "
+                    "maciça",
+                    float(sum(t.startswith("LAJES") for t in titulos)),
+                    float(len([v for v in laj
+                               if v.passou and v.resultado is not None]))),
+        Conferencia("pranchas: nenhum texto sobre outro, nenhuma janela "
+                    "sobre outra, sobre o carimbo ou fora da moldura",
+                    float(len(pr.sobreposicoes(folhas))), 0.0),
+        Conferencia("pranchas: uma folha (layout) por prancha, todas com "
+                    "janela", float(com_janela), float(len(folhas))),
+        Conferencia("pranchas: o AUDIT não acha erro nem corrige nada",
+                    float(len(auditoria.errors) + len(auditoria.fixes)), 0.0),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 50b. Pranchas: planta de forma e diagramação das folhas
+# ---------------------------------------------------------------------------
+
+def planta_de_forma_do_pavimento() -> list[Conferencia]:
+    """A planta de forma do primeiro pavimento do exemplo residencial.
+
+    Cada pilar, viga e laje da cota com o rótulo; nenhum rótulo sobre outro;
+    nenhuma face de viga passando por dentro de pilar; hachura só nos
+    pilares que chegam por baixo; as cotas parciais entre eixos são as
+    distâncias entre os pilares, medidas no modelo.
+    """
+    import ezdxf
+
+    from .continuidade import _eh_vertical, vigas_continuas
+    from .lancamento import gerar
+    from .saidas import pranchas as pr
+
+    m = gerar(_lancamento_exemplo()).modelo
+    z = pr.cotas_dos_pavimentos(m)[0]
+    planta = pr.planta_de_forma(m, z)
+    doc = ezdxf.new("R2010", setup=True)
+    doc.styles.add("PORTICOS", font="arial.ttf")
+    msp = doc.modelspace()
+    reg = pr._Registro()
+    pr.desenhar_forma(msp, planta, 50, (0.0, 0.0), reg)
+    rotulos = [t[4] for t in reg.textos]
+
+    # o que há na cota, direto do modelo
+    nos_pilar, chegam = set(), set()
+    for b in m.barras.values():
+        if not _eh_vertical(m, b):
+            continue
+        for no in (b.no_i, b.no_j):
+            if abs(float(m.ponto(no)[2]) - z) < 1e-6:
+                nos_pilar.add(no)
+                outro = b.no_j if no == b.no_i else b.no_i
+                if float(m.ponto(outro)[2]) < z:
+                    chegam.add(no)
+    nomes_vigas = {vc.nome for vc in vigas_continuas(m)
+                   if abs(float(m.ponto(vc.nos[0])[2]) - z) < 1e-6}
+    nomes_lajes = {pr._base(n) for n, l in m.lajes.items()
+                   if abs(float(m.ponto(l.no_a)[2]) - z) < 1e-6}
+    nomes_pilares = {pr._base(b) for b, *_ in planta.pilares}
+
+    sobre = 0
+    caixas = reg.textos
+    for i in range(len(caixas)):
+        for j in range(i + 1, len(caixas)):
+            a, b = caixas[i], caixas[j]
+            if not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1]
+                    or b[3] <= a[1]):
+                sobre += 1
+
+    dentro = 0
+    for linha in msp.query("LINE[layer=='FORMA-CONTORNO']"):
+        meio = (np.array(linha.dxf.start)[:2] + np.array(linha.dxf.end)[:2]) / 2
+        for _, r, *_ in planta.pilares:
+            w = meio - r.c
+            if abs(float(w @ r.u)) < r.a - 0.5 and abs(float(w @ r.v)) < r.b - 0.5:
+                dentro += 1
+
+    xs = sorted({round(float(m.ponto(n)[0]) * 100.0, 1) for n in nos_pilar})
+    vaos = {pr._cm(b - a) for a, b in zip(xs, xs[1:])}
+    cotas = {e.dxf.text for e in msp.query("TEXT[layer=='FORMA-COTA']")}
+    return [
+        Conferencia("forma: todos os pilares da cota desenhados",
+                    float(len(planta.pilares)), float(len(nos_pilar))),
+        Conferencia("forma: cada pilar com nome e seção",
+                    float(all(any(r.startswith(n + " / ") for r in rotulos)
+                              for n in nomes_pilares)), 1.0),
+        Conferencia("forma: cada viga contínua da cota com nome e seção",
+                    float(all(any(r.startswith(n + " ") for r in rotulos)
+                              for n in nomes_vigas)), 1.0),
+        Conferencia("forma: cada laje com nome e espessura",
+                    float(all(any(r.startswith(n + " / h=") for r in rotulos)
+                              for n in nomes_lajes)), 1.0),
+        Conferencia("forma: nenhum rótulo sobre outro", float(sobre), 0.0),
+        Conferencia("forma: nenhuma face de viga por dentro de pilar",
+                    float(dentro), 0.0),
+        Conferencia("forma: hachura só nos pilares que chegam por baixo",
+                    float(len(msp.query("HATCH"))), float(len(chegam))),
+        Conferencia("forma: as cotas parciais são os vãos entre pilares",
+                    float(vaos <= cotas), 1.0),
+    ]
+
+
+def diagramacao_das_folhas() -> list[Conferencia]:
+    """A escala sai do texto do desenho e a folha cresce antes do texto
+    encolher; as vistas não se sobrepõem nem invadem o carimbo."""
+    from .saidas import pranchas as pr
+
+    def vista(w_cm, h_cm, texto_cm, nome="V"):
+        return pr.escolher_escala(pr.Vista(nome, (0.0, 0.0, w_cm, h_cm),
+                                           pr.escala_legivel(texto_cm)))
+
+    pilar = vista(268, 378, 2.0)
+    viga = vista(1963, 1457, 5.0)
+    curta = vista(700, 900, 5.0)
+    lajes = vista(4770, 2357, 8.0)
+    grupo = pr.Grupo("TESTE", [vista(700, 900, 5.0, f"V{i}")
+                               for i in range(5)])
+    folhas = pr.empacotar(grupo)
+    for i, f in enumerate(folhas, 1):
+        f.numero, f.total = i, len(folhas)
+    return [
+        Conferencia("folhas: pilar (texto de 2 cm) a 1:10", float(pilar.escala),
+                    10.0),
+        Conferencia("folhas: viga (texto de 5 cm) a 1:25", float(viga.escala),
+                    25.0),
+        Conferencia("folhas: lajes (texto de 8 cm) a 1:50", float(lajes.escala),
+                    50.0),
+        Conferencia("folhas: a viga que não cabe na A1 a 1:25 vai para a A0 "
+                    "na mesma escala",
+                    float(viga.formato == "A0" and viga.escala == 25), 1.0),
+        Conferencia("folhas: a que cabe fica na A1",
+                    float(curta.formato == "A1"), 1.0),
+        Conferencia("folhas: cinco vistas de 28x36 cm na A1 — duas por "
+                    "folha, a quinta na terceira",
+                    float([len(f.itens) for f in folhas] == [2, 2, 1]), 1.0),
+        Conferencia("folhas: nenhuma janela sobre outra ou sobre o carimbo",
+                    float(len(pr.sobreposicoes(folhas))), 0.0),
     ]
 
 
@@ -7545,7 +7714,8 @@ def conferir(pasta=None) -> list[Conferencia]:
                   laje_em_balanco_no_portico,
                   pilar_girado_e_apoios_das_lajes,
                   topo_das_vigas_nivelado,
-                  secao_l_e_barra_pela_minima):
+                  secao_l_e_barra_pela_minima,
+                  planta_de_forma_do_pavimento, diagramacao_das_folhas):
         conferencias.extend(prova())
     if pasta is not None:
         conferencias.extend(ida_e_volta_json(pasta))

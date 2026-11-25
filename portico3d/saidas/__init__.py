@@ -4,7 +4,8 @@ saidas
 Os três arquivos que se entrega do edifício.
 
 ``memoria`` grava a memória de cálculo em Word, ``quantitativos`` o quadro de
-quantidades em Excel e ``desenho_unico`` a prancha em DXF. Os três leem o mesmo
+quantidades em Excel e ``pranchas`` os desenhos em DXF (folhas com carimbo,
+forma e armação por pavimento). Os três leem o mesmo
 :class:`~portico3d.projeto.Projeto` e não calculam nada: quem calcula é o
 ``core`` e os motores de elemento copiados.
 

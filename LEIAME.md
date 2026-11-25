@@ -22,7 +22,7 @@ ou, direto no Python:
 ```
 py main.py                             abre a janela
 py main.py modelo.json --janela        abre a janela já com um modelo
-py main.py --autoteste                 roda as 751 conferências de referência
+py main.py --autoteste                 roda as 773 conferências de referência
 py main.py modelo.json [caso]          resolve um caso e imprime o resumo
 py main.py modelo.json --envoltoria    gera as combinações da NBR 6118,
                                        resolve todas e imprime a envoltória
@@ -43,7 +43,7 @@ subia e quebrava na primeira exportação.
 Tabelas à esquerda, desenho à direita, relatório embaixo. O caminho é montar,
 analisar e ler o resultado, e a interface existe só para encurtá-lo: não há
 uma linha de mecânica nela, e é de propósito — tudo continua no `core`, que é
-o que as 751 conferências cobrem.
+o que as 773 conferências cobrem.
 
 **A janela cabe em qualquer tela.** O tamanho de abertura sai da área útil
 da tela desta máquina — já sem a barra de tarefas —, a janela é centrada nela,
@@ -2238,6 +2238,64 @@ Depois disso o programa de Pilares otimizou o próprio motor (pedido
 daqui) e ele foi recopiado (`motor-2026-11-25`): os pilares do mesmo
 edifício caíram de 266 s para 37 s (no script de verificação), e o autoteste inteiro, de 18 para
 2,5 minutos.
+
+## As pranchas (2026-11-25)
+
+`saidas/pranchas.py` substitui o "desenho único" (um DXF com todas as peças
+lado a lado no espaço do modelo) por pranchas de verdade: o arquivo
+`desenhos.dxf` do projeto completo tem o espaço do modelo em verdadeira
+grandeza, em centímetros, e **uma folha (layout) por prancha**, com moldura
+(margens da NBR 10068), carimbo de 178 mm e as vistas em janelas
+(*viewports*) na escala.
+
+**Ordem.** Por pavimento: planta de forma, armação das lajes, armação das
+vigas; depois os pilares, prumada a prumada e de baixo para cima (o arranjo
+de cada lance é o adotado, `_arranjo_adotado`); por último o quadro de
+quantidades. As vistas de um mesmo conteúdo são empacotadas por linhas, na
+ordem, desviando do carimbo e das notas; a folha com uma vista só a leva ao
+centro.
+
+**Escala.** Os programas de elemento escrevem o texto em centímetros do
+modelo — 2 cm no pilar, 5 cm na viga, 8 cm no pavimento de lajes —, cada
+um supondo uma escala de impressão. A vista vai na maior redução em que o
+texto predominante sai com pelo menos 1,6 mm (`TEXTO_MIN`): 1:10, 1:25 e
+1:50. Se não cabe na A1, a folha passa a A0 na mesma escala; só se nem a A0
+bastar a escala cresce. No edifício de 3 pavimentos: 3 formas A1 a 1:50, 3
+folhas de lajes A0 a 1:50, 18 folhas de vigas A0 a 1:25 (uma ou duas vigas
+por folha), 18 de pilares A1 a 1:10 (dois lances por folha) e o quadro —
+43 folhas, geradas em 10 s.
+
+**Planta de forma.** Desenhada aqui (`planta_de_forma`, `desenhar_forma`):
+cada face de viga e cada borda de laje é recortada pelos retângulos das
+outras vigas e dos pilares (recorte de segmento contra retângulo, sem
+dependência nova); a viga avança, em cada ponta, meia largura da viga
+transversal que chega ao nó, para fechar o canto. Pilar com os eixos locais
+da barra (o girado sai girado); hachura se chega por baixo, X se nasce no
+pavimento. Os rótulos (nome e seção; nas lajes, nome e h, "TR" na
+treliçada) procuram, entre posições candidatas, uma que não caia sobre
+outro rótulo nem sobre pilar. Cotas entre eixos de pilar por cima e pela
+esquerda, e a total entre faces extremas.
+
+**Cotas dos motores.** O importador do ezdxf trazia as cotas (DIMENSION)
+sem o bloco anônimo da geometria: no CAD o AUDIT as apagava (567 no
+edifício de 3 pavimentos). Antes de importar, as cotas são explodidas na
+origem (linhas, setas, textos). O mesmo valia para o DXF do "Dimensionar
+vigas" (`desenho_unico`), corrigido também. Camadas que os desenhos usam
+sem declarar (o "BARRA" do Vigas) são criadas no destino.
+
+**Conferências** (seção 50b e o fim de `lancamento_dimensiona_ponta_a_ponta`):
+na planta de forma do exemplo residencial, todo pilar, viga e laje da cota
+com rótulo, nenhum rótulo sobre outro, nenhuma face de viga por dentro de
+pilar, hachura só nos pilares que chegam por baixo, cotas parciais iguais
+aos vãos entre pilares medidos no modelo; na diagramação, as escalas 1:10,
+1:25 e 1:50 pelos textos de 2, 5 e 8 cm, a viga que não cabe na A1 indo
+para a A0 na mesma escala, o empacotamento de cinco vistas em 2 + 2 + 1;
+no projeto ponta a ponta, uma forma por pavimento, toda viga e todo lance
+numa folha, nenhuma sobreposição e o AUDIT sem erro nem correção.
+
+**Pendente.** Cortes e detalhes típicos; numeração única das posições no
+edifício; folha da laje treliçada (o programa de Lajes não a desenha em
+DXF); agrupar pilares iguais numa só vista.
 
 ## A ponte com o dimensionamento
 
