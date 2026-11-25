@@ -71,7 +71,7 @@ from ..core import ganchos as gk
 from . import estilo
 from .geometria import (
     _contorno_secao, _parte_reta_do_gancho, _y_barra, barra_com_dobras,
-    cantos_da_mesa, grampo_em_u, retangulo_arredondado)
+    cantos_da_mesa, laco_da_mesa, grampo_em_u, retangulo_arredondado)
 
 #: Raio mínimo do tubo de armadura, cm -- metade da bitola já dá um tubo fino
 #: mas visível, e proporcional entre bitolas diferentes; abaixo desse piso um
@@ -414,22 +414,21 @@ def construir_cena(plotter, res) -> dict[str, tuple[str, str]]:
         secao_z = trechos[min(z.trecho, len(trechos) - 1)].secao
         if secao_z.tipo == "retangular" or secao_z.bf <= secao_z.bw + 1e-9:
             continue
-        aba = (secao_z.bf - secao_z.bw) / 2.0
-        z0 = (secao_z.h - secao_z.hf) if secao_z.tipo == "T" else 0.0
+        y_laco, z_laco, y1_laco, z1_laco = laco_da_mesa(secao_z, cob)
         raio_est = (viga.aco.diametro_dobramento_estribo(z.phi) / 2.0
                    + z.phi / 20.0)
         gancho = 0.0 if not cfg.gancho_estribo else max(5.0 * z.phi / 10.0,
                                                         5.0)
-        local = retangulo_arredondado(secao_z.bf - 2.0 * cob,
-                                      secao_z.hf - 2.0 * cob, raio_est,
+        local = retangulo_arredondado(y1_laco - y_laco,
+                                      z1_laco - z_laco, raio_est,
                                       gancho)
         pecas_mesa = []
         for k in range(n):
             xcm = x0cm + k * passo
             i_tr = al.trecho_em(viga, xcm / 100.0)
             pecas_mesa.append(_tubo(
-                [(xcm, bases_l[i_tr] - aba + cob + u,
-                  bases_v[i_tr] + z0 + cob + v) for u, v in local],
+                [(xcm, bases_l[i_tr] + y_laco + u,
+                  bases_v[i_tr] + z_laco + v) for u, v in local],
                 _raio_barra(z.phi)))
         nome = f"estribomesa_{z.tramo}_{z.trecho}_{z.x_ini:.2f}"
         plotter.add_mesh(_juntar(pecas_mesa), color=cor_estribo, name=nome,

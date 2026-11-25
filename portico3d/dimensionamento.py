@@ -37,7 +37,6 @@ esforços e material — o veredito é dele.
 from __future__ import annotations
 
 import math
-from contextlib import contextmanager
 
 from dataclasses import dataclass, field
 
@@ -202,23 +201,34 @@ def verificar_pilares(modelo: Modelo, envoltorias: dict[str, EnvoltoriaBarra],
     edifício, uma seção mal declarada não pode impedir que as outras sejam
     verificadas.
     """
-    from .elementos.pilares.core.dimensionar import dimensionar
+    from .cache_motores import dimensionar_pilares
 
     alvos = barras if barras is not None else barras_verticais(modelo)
-    saida = []
+    # Primeiro todos os pilares a dimensionar, depois o motor de uma vez:
+    # assim os que não estão no cache vão em paralelo, um lance por núcleo
+    # (``cache_motores``), e os que estão nem chegam ao motor.
+    itens = []                        # (barra, esforços, Pilar ou erro)
     for barra in alvos:
         if barra not in envoltorias:
             continue
         for esforcos in esforcos_do_lance(modelo, envoltorias[barra], barra):
             try:
-                pilar = montar_pilar(modelo, barra, esforcos, fck)
-                resultado = dimensionar(pilar)
+                itens.append((barra, esforcos,
+                              montar_pilar(modelo, barra, esforcos, fck)))
             except (ErroDeModelo, ValueError, ZeroDivisionError) as erro:
-                saida.append(VerificacaoDePilar(barra, esforcos.combinacao,
-                                                esforcos, erro=str(erro)))
-                continue
+                itens.append((barra, esforcos, str(erro)))
+    pilares = [p for _, _, p in itens if not isinstance(p, str)]
+    resultados = iter(dimensionar_pilares(pilares))
+    saida = []
+    for barra, esforcos, pilar in itens:
+        if isinstance(pilar, str):
             saida.append(VerificacaoDePilar(barra, esforcos.combinacao,
-                                            esforcos, resultado=resultado))
+                                            esforcos, erro=pilar))
+            continue
+        resultado, erro = next(resultados)
+        saida.append(VerificacaoDePilar(barra, esforcos.combinacao,
+                                        esforcos, resultado=resultado,
+                                        erro=erro))
     return saida
 
 
@@ -312,62 +322,6 @@ def _cargas_da_viga(modelo: Modelo, viga, casos: dict[str, str]) -> list:
     return cargas
 
 
-def rigidez_dos_pilares(modelo: Modelo, viga, indice: int) -> float:
-    """Rigidez à rotação que os pilares dão à viga naquele apoio, kN·m/rad.
-
-    É a peça que faltava. O programa de Vigas **já previa** isto — o seu
-    ``Apoio`` tem o tipo ``mola`` com ``k_mola``, e o próprio docstring dele
-    diz "útil para representar a rigidez dos pilares" —, e a ponte vinha
-    passando ``simples``, jogando fora a solidariedade viga-pilar que o
-    pórtico conhece. É o modelo simplificado de viga contínua da NBR 6118:
-    apoio que não é rótula, e sim mola com a rigidez dos lances que chegam.
-
-    A conta é a clássica ``4EI/ℓ`` somada sobre os lances que chegam ao nó, de
-    baixo e de cima. O que exige cuidado é **qual** inércia: o pilar resiste
-    girando no plano vertical que contém a viga, e a inércia que vale é a do
-    eixo horizontal perpendicular a esse plano. Decompondo esse eixo nos eixos
-    locais do lance,
-
-        k = 4E/ℓ · (Iy·(n·ey)² + Iz·(n·ez)²),   n = versor(direção × ẑ)
-
-    o que, no caso corrente — viga em X, pilar prumado —, dá ``4E·Iz/ℓ``, com
-    Iz medindo a dimensão do pilar **na direção da viga**. É o resultado que se
-    espera: pilar 20×60 com os 60 cm no rumo da viga trava muito mais que o
-    mesmo pilar virado.
-    """
-    from .continuidade import _eh_vertical
-
-    if indice >= len(viga.apoios):
-        return 0.0
-    no = viga.nos[viga.apoios[indice]]
-    direcao = np.array(viga.direcao, dtype=float)
-    n = np.cross(direcao, np.array([0.0, 0.0, 1.0]))
-    norma = float(np.linalg.norm(n))
-    if norma < 1e-9:                       # viga vertical não existe aqui
-        return 0.0
-    n = n / norma
-
-    from .core.montagem import preparar_barras
-    preparadas = preparar_barras(modelo)
-
-    k = 0.0
-    for nome, barra in modelo.barras.items():
-        if not _eh_vertical(modelo, barra) or no not in (barra.no_i, barra.no_j):
-            continue
-        secao = modelo.secoes.get(barra.secao)
-        material = modelo.materiais.get(barra.material)
-        comprimento = modelo.comprimento(nome)
-        if secao is None or material is None or comprimento <= 0.0:
-            continue
-        p = preparadas.get(nome)
-        if p is None:
-            continue
-        ey, ez = p.R[1], p.R[2]
-        inercia = secao.Iy * float(n @ ey) ** 2 + secao.Iz * float(n @ ez) ** 2
-        k += 4.0 * material.E * inercia / comprimento
-    return k
-
-
 @dataclass
 class ReacaoRecebida:
     """O que uma viga que se apoia nesta lhe entrega, em kN (característico).
@@ -382,6 +336,9 @@ class ReacaoRecebida:
     q: float
     de: str                   # nome da viga apoiada
     pendurada: bool = False   # face de baixo da apoiada abaixo da de apoio
+    #: altura da viga apoiada, cm: com os topos alinhados, o 18.3.6 reduz a
+    #: carga de suspensão por (1 − h_susp/h_viga apoio)
+    h_apoiada: float = 0.0
 
 
 def montar_viga(modelo: Modelo, viga, casos: dict[str, str] | None = None,
@@ -390,8 +347,8 @@ def montar_viga(modelo: Modelo, viga, casos: dict[str, str] | None = None,
                 reacoes_recebidas: list[ReacaoRecebida] | None = None):
     """Monta a ``Viga`` do outro programa a partir da cadeia detectada.
 
-    ``molas`` liga a rigidez dos pilares nos apoios — ver
-    :func:`rigidez_dos_pilares`. ``avisos``, quando dado, recebe o que a
+    ``molas`` liga a solidariedade com os pilares nos apoios (14.6.6.1) —
+    ver :func:`_apoio_de_pilar`. ``avisos``, quando dado, recebe o que a
     tradução tem a dizer sem que isso interrompa o lote.
 
     **Viga apoiada em viga.** Onde a cadeia repousa noutra viga (ver
@@ -445,7 +402,11 @@ def montar_viga(modelo: Modelo, viga, casos: dict[str, str] | None = None,
                 f"{em_viga.no} — apoio simples e indeslocável: a flexibilidade "
                 f"e a torção de {em_viga.viga_de_apoio} não entram")
         return mv.Apoio(tipo="simples",
-                        largura=_largura_da_viga_de_apoio(modelo, em_viga))
+                        largura=_largura_da_viga_de_apoio(modelo, em_viga),
+                        viga_apoio=em_viga.viga_de_apoio,
+                        x_na_viga_apoio=em_viga.posicao_na_de_apoio,
+                        h_viga_apoio=em_viga.altura_cm,
+                        topos_alinhados=True)
 
     # A seção de cada tramo: retangular, ou T com a mesa colaborante das
     # lajes ao lado (14.6.2.2). ``x`` acompanha a posição do tramo na cadeia.
@@ -495,7 +456,11 @@ def montar_viga(modelo: Modelo, viga, casos: dict[str, str] | None = None,
                 concentradas.append(mv.CargaConcentrada(
                     P=valor, x=r.x + deslocamento, acao=acao,
                     descricao=f"{r.de} apoiada em {viga.nome}",
-                    indireta=True, pendurada=r.pendurada))
+                    indireta=True, pendurada=r.pendurada,
+                    # o desenho do Pórticos nivela os topos das vigas do
+                    # pavimento, como na obra
+                    h_apoiada=r.h_apoiada, topos_alinhados=True,
+                    origem=r.de))
 
     deles = mv.Viga(nome=viga.nome, tramos=tramos, apoios=apoios,
                     distribuidas=cargas, concentradas=concentradas,
@@ -518,6 +483,13 @@ def montar_viga(modelo: Modelo, viga, casos: dict[str, str] | None = None,
     # que o escalonamento fino, e sai uma peça só para montar e conferir na
     # obra, que é a troca que o projeto está pedindo aqui.
     deles.config.uniformizar_estribos = True
+
+    # **Solidariedade viga-pilar pelo modelo "rigidez" do 14.6.6.1.** Os
+    # pilares entram na viga contínua como molas (ver ``_apoio_de_pilar``),
+    # e as correções do modelo clássico (alíneas a, b e c, feitas com a
+    # análise da viga isolada) não mexem na envoltória — que, no modo
+    # pórtico, é a do pórtico, onde a solidariedade já é exata.
+    deles.config.modelo_pilares = "rigidez"
 
     return deles
 
@@ -573,8 +545,9 @@ def _secao_do_tramo(modelo: Modelo, viga, xa: float, xb: float, a: float,
     cada lado da viga em que haja laje colaborante. Um lado só colabora se a
     laje estiver ao longo do tramo inteiro — nas barras da cadeia que o
     compõem —, e a espessura da mesa é a menor das lajes ao lado (na
-    treliçada, a capa). O lado sem laje não ganha mesa: o ``b3`` da Figura
-    14.2 é de laje em balanço, que este programa não modela.
+    treliçada, a capa). O lado sem laje não ganha mesa; o da laje em balanço
+    entra com b3 ≤ b4 (ver ``_lajes_ao_lado``). Com laje de um lado só, a
+    seção é L (``lado_mesa``).
     """
     from .elementos.vigas.core import modelo as mv
 
@@ -592,6 +565,7 @@ def _secao_do_tramo(modelo: Modelo, viga, xa: float, xb: float, a: float,
         return retangular
 
     b1_total, hf = 0.0, float("inf")
+    lados = []
     for lado in (1, -1):
         b2s, hfs = [], []
         for nome in barras:
@@ -609,13 +583,21 @@ def _secao_do_tramo(modelo: Modelo, viga, xa: float, xb: float, a: float,
         else:
             b1_total += min(0.1 * a, 0.5 * min(b2s))
             hf = min(hf, min(hfs))
+            lados.append(lado)
     if b1_total <= 1e-9 or hf == float("inf"):
         return retangular
     hf_cm = hf * M_PARA_CM
     if hf_cm >= retangular.h:
         return retangular
+    # Viga de borda: a mesa de um lado só (seção L). "Esquerda" no programa
+    # de Vigas é a de quem olha a viga entrando no papel — no sentido da
+    # cadeia, o lado +1 de ``_lajes_ao_lado``. O lado não muda a flexão em
+    # torno do eixo horizontal; muda o laço da mesa e os desenhos.
+    lado_mesa = ("ambos" if len(lados) != 1
+                 else "esquerda" if lados[0] == 1 else "direita")
     return mv.Secao(bw=retangular.bw, h=retangular.h, tipo="T",
-                    bf=retangular.bw + b1_total * M_PARA_CM, hf=hf_cm)
+                    bf=retangular.bw + b1_total * M_PARA_CM, hf=hf_cm,
+                    lado_mesa=lado_mesa)
 
 
 def _largura_da_viga_de_apoio(modelo: Modelo, em_viga) -> float:
@@ -624,47 +606,58 @@ def _largura_da_viga_de_apoio(modelo: Modelo, em_viga) -> float:
 
 
 def _apoio_de_pilar(modelo: Modelo, viga, indice: int, molas: bool, secao):
-    """O apoio de pilar, com a rigidez à rotação quando ela é conhecida."""
+    """O apoio de pilar, com o pilar descrito para o 14.6.6.1.
+
+    O programa de Vigas faz a solidariedade viga-pilar do item 14.6.6.1. No
+    modelo ``rigidez`` (o que a ponte usa, ver ``montar_viga``) cada pilar
+    vira mola rotacional ``k = 4·Ecs·(I_sup/(ℓ_sup/2) + I_inf/(ℓ_inf/2))``
+    — a rigidez relativa da Figura 14.8 —, com ``I = transversal ·
+    largura³/12``. A ponte passa só o que o pórtico sabe e o motor não: a
+    largura do pilar **na direção da viga** e a perpendicular (com o giro do
+    pilar, ``compatibilizacao.largura_do_pilar``), e o comprimento dos lances
+    acima e abaixo do nó. Antes a ponte calculava a mola sozinha, como
+    ``4EI/ℓ`` do lance, metade da do item; agora a viga contínua daqui é a
+    mesma do programa de Vigas montada à mão.
+
+    O lance de baixo também é onde a negativa do apoio de extremidade desce
+    para ancorar (18.3.2.4-d). ``molas = False`` deixa o apoio como rótula,
+    sem pilar descrito.
+    """
     from .elementos.vigas.core import modelo as mv
 
-    largura = _largura_do_pilar(modelo, viga, indice)
-    abaixo = altura_do_pilar_abaixo(modelo, viga, indice, secao.h)
+    largura, transversal = _dimensoes_do_pilar(modelo, viga, indice)
     if not molas:
-        return mv.Apoio(tipo="simples", largura=largura,
-                        altura_pilar_abaixo=abaixo)
-    k = rigidez_dos_pilares(modelo, viga, indice)
-    if k <= 0.0:
-        return mv.Apoio(tipo="simples", largura=largura,
-                        altura_pilar_abaixo=abaixo)
-    return mv.Apoio(tipo="mola", largura=largura, k_mola=k,
-                    altura_pilar_abaixo=abaixo)
+        return mv.Apoio(tipo="simples", largura=largura)
+    acima, abaixo = lances_do_pilar(modelo, viga, indice)
+    return mv.Apoio(tipo="simples", largura=largura,
+                    largura_pilar_transversal=transversal,
+                    altura_pilar_acima=acima, altura_pilar_abaixo=abaixo)
 
 
-def altura_do_pilar_abaixo(modelo: Modelo, viga, indice: int,
-                           h_viga_cm: float) -> float:
-    """Altura do pilar abaixo da face inferior da viga naquele apoio, cm.
+def lances_do_pilar(modelo: Modelo, viga, indice: int) -> tuple[float, float]:
+    """``(acima, abaixo)``: comprimento, cm, do lance de pilar que sai do nó
+    da viga para cima e do que chega a ele por baixo; zero onde não há.
 
-    É o campo ``altura_pilar_abaixo`` do apoio do Vigas R04: é nele que a
-    negativa do apoio de extremidade desce para ancorar (18.3.2.4-d), e o
-    motor confere se a perna cabe. Vem do lance que **chega** ao nó por baixo
-    — o eixo da viga está no nó, e a face inferior fica meia altura abaixo.
-    Sem lance por baixo (pilar que nasce na viga, ou nó de topo de um pilar
-    que só sobe), é zero: não há onde a barra descer.
+    Sem lance por baixo (pilar que nasce na viga) não há onde a negativa
+    descer; sem lance por cima (cobertura) a mola é só a de baixo.
     """
     from .continuidade import _eh_vertical
 
     if indice >= len(viga.apoios):
-        return 0.0
+        return 0.0, 0.0
     no = viga.nos[viga.apoios[indice]]
     z_no = float(modelo.ponto(no)[2])
-    maior = 0.0
+    acima = abaixo = 0.0
     for nome, barra in modelo.barras.items():
         if not _eh_vertical(modelo, barra) or no not in (barra.no_i, barra.no_j):
             continue
         outro = barra.no_j if barra.no_i == no else barra.no_i
+        L = modelo.comprimento(nome) * M_PARA_CM
         if float(modelo.ponto(outro)[2]) < z_no - 1e-6:
-            maior = max(maior, modelo.comprimento(nome) * M_PARA_CM)
-    return max(maior - h_viga_cm / 2.0, 0.0) if maior > 0.0 else 0.0
+            abaixo = max(abaixo, L)
+        else:
+            acima = max(acima, L)
+    return acima, abaixo
 
 
 def _conferir_peso_proprio(modelo: Modelo, viga, deles, secao,
@@ -693,28 +686,27 @@ def _conferir_peso_proprio(modelo: Modelo, viga, deles, secao,
             "próprio' no caso permanente do modelo")
 
 
-def _largura_do_pilar(modelo: Modelo, viga, indice: int) -> float:
-    """Largura do pilar que apoia a viga naquele nó, em cm, **medida na
-    direção da viga** — é o comprimento de que a armadura da viga dispõe
-    para ancorar dentro do pilar.
+def _dimensoes_do_pilar(modelo: Modelo, viga, indice: int
+                        ) -> tuple[float, float]:
+    """Dimensões, cm, do pilar que apoia a viga naquele nó: **na direção da
+    viga** — o apoio, onde a armadura da viga ancora — e a perpendicular.
 
-    Antes era sempre o lado ``b`` da seção, que na barra vertical mede em X:
-    uma viga em Y sobre um pilar 20×60 com os 60 cm em Y recebia 20 cm de
-    apoio, e a ancoragem saía reprovada (ou a viga em X sobre o pilar
-    virado, aprovada com mais apoio do que tinha).
+    Vêm dos eixos locais do pilar, com o giro dele
+    (``compatibilizacao.largura_do_pilar``): uma viga em Y sobre um 20×60
+    com os 60 cm em Y tem 60 cm de apoio, e não 20.
     """
     from .compatibilizacao import largura_do_pilar
     from .continuidade import _eh_vertical
 
     if indice >= len(viga.apoios):
-        return 20.0
+        return 20.0, 20.0
     no = viga.nos[viga.apoios[indice]]
     for nome, barra in modelo.barras.items():
         if _eh_vertical(modelo, barra) and no in (barra.no_i, barra.no_j):
             secao = modelo.secoes[barra.secao]
             if secao.b > 0.0:
-                return largura_do_pilar(modelo, nome, viga.direcao)[0]
-    return 20.0
+                return largura_do_pilar(modelo, nome, viga.direcao)
+    return 20.0, 20.0
 
 
 @dataclass
@@ -851,6 +843,10 @@ def envoltoria_externa(modelo: Modelo, viga,
         return replace(env, M_max=M_max, M_min=M_min, V_max=V, V_min=-V,
                        combinacoes=nomes)
 
+    # o que a função aplica, para o cache dos motores reconhecer a mesma
+    # envoltória numa outra chamada (``cache_motores.dimensionar_viga``)
+    from .cache_motores import impressao
+    aplicar.chave = impressao(fonte, x, mn, mx, v_abs, combinacoes)
     return aplicar
 
 
@@ -864,49 +860,14 @@ def dimensionar_com_envoltoria(deles, externa=None):
     ELU, que passa por ``externa``. O ELS (``envoltoria_servico``) não passa
     por ali e continua sendo o da viga contínua.
     """
+    from .cache_motores import dimensionar_viga
     from .elementos.vigas.core import dimensionar as motor
 
-    with _no_monolitico_na_ancoragem(motor):
-        return _dimensionar_com_envoltoria(motor, deles, externa)
-
-
-@contextmanager
-def _no_monolitico_na_ancoragem(motor):
-    """Na ancoragem da negativa de extremidade, o apoio com pilar embaixo é
-    um nó monolítico — que é o que ele é no pórtico.
-
-    O Vigas R04 confere a ancoragem da armadura negativa nos apoios de
-    extremidade (18.3.2.4-d, a partir da face). Quando o trecho reto não
-    basta, a barra desce no pilar — mas o motor só admite isso no apoio do
-    tipo ``engaste``, e a ponte representa o pilar como ``mola`` (a rigidez
-    dos lances) ou ``simples``: para esses, o motor conclui que "não há onde
-    a barra descer", e o pilar está lá. Trocar o tipo do apoio de vez mudaria
-    a análise da viga isolada (flecha, reações); por isso a troca vale **só
-    durante a verificação de ancoragem**, e só onde há lance de pilar abaixo
-    da viga (``altura_pilar_abaixo`` > 0, que o motor usa para conferir se a
-    perna cabe). Como a envoltória, é feita por fora: a cópia do motor não é
-    editada.
-    """
-    original = motor._ancorar_negativa_nos_extremos
-
-    def ancorar(viga, *args, **kwargs):
-        trocados = []
-        for k in {0, len(viga.apoios) - 1}:
-            ap = viga.apoios[k]
-            if ap.tipo in ("simples", "mola") and ap.altura_pilar_abaixo > 0.0:
-                trocados.append((ap, ap.tipo))
-                ap.tipo = "engaste"
-        try:
-            return original(viga, *args, **kwargs)
-        finally:
-            for ap, tipo in trocados:
-                ap.tipo = tipo
-
-    motor._ancorar_negativa_nos_extremos = ancorar
-    try:
-        yield
-    finally:
-        motor._ancorar_negativa_nos_extremos = original
+    # a mesma viga com a mesma envoltória não é dimensionada duas vezes na
+    # sessão (o "Dimensionar", a armadura 3D, o projeto completo)
+    return dimensionar_viga(
+        deles, externa,
+        lambda d, e: _dimensionar_com_envoltoria(motor, d, e))
 
 
 def _dimensionar_com_envoltoria(motor, deles, externa):
@@ -1160,7 +1121,8 @@ def dimensionar_cadeias(modelo: Modelo, cadeias: list,
             g, q = _reacao_no_apoio(resultado, deles.apoio_do_no[a.indice_no])
             recebidas.setdefault(a.viga_de_apoio, []).append(ReacaoRecebida(
                 x=a.posicao_na_de_apoio, g=g, q=q, de=viga.nome,
-                pendurada=h_propria > a.altura_cm + 1e-6))
+                pendurada=h_propria > a.altura_cm + 1e-6,
+                h_apoiada=h_propria))          # já em cm
 
         conferencia = None
         if envoltorias:

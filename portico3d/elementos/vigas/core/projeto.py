@@ -34,7 +34,10 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 
-from .modelo import Viga
+import numpy as np
+
+from .analise import combinar, resolver
+from .modelo import CargaConcentrada, Viga
 
 FORMATO = "projeto-vigas"
 VERSAO = 1
@@ -89,6 +92,12 @@ class EntradaViga:
     #: carregar esta viga -- a linha de base de "o usuário não mexeu"
     base_painel: dict | None = field(default=None, repr=False, compare=False)
     erro: str = field(default="", compare=False)
+    #: ``para_dict`` da viga **como foi calculada** -- com as reações das
+    #: vigas apoiadas nela e a altura da viga em que ela se apoia. Muda quando
+    #: outra viga do projeto muda, e é por ele que se sabe que o resultado
+    #: desta ficou desatualizado por causa da outra
+    instantaneo_calculo: dict | None = field(default=None, repr=False,
+                                             compare=False)
 
     @property
     def nome(self) -> str:
@@ -233,6 +242,75 @@ class Projeto:
         with open(caminho, encoding="utf-8") as f:
             return Projeto.de_dict(json.load(f))
 
+    # -- vigas apoiadas em vigas (18.3.6) -------------------------------------
+    def viga_para_calculo(self, i: int) -> Viga:
+        """A viga ``i`` como ela é calculada dentro do projeto.
+
+        Uma cópia, com duas coisas que vêm das outras vigas:
+
+        * nos apoios desta que estão noutra viga do projeto, a **altura** e a
+          **largura** da viga de apoio no cruzamento -- é a largura dela que é
+          a do apoio, e é a altura dela que reduz a suspensão e define a viga
+          pendurada;
+        * para cada viga do projeto apoiada nesta, a **reação** dela, como
+          carga concentrada **indireta** no ponto do cruzamento: a parcela
+          permanente e a variável, característica, a variável na alternância
+          que dá a maior reação. É o que leva a carga de uma viga para a outra
+          sem digitar, e o que obriga a suspensão dos dois lados.
+
+        Uma viga apoiada em outra que também está apoiada recebe a cadeia
+        inteira; apoio em círculo é erro.
+        """
+        return self._efetiva(i, ())
+
+    def _efetiva(self, i: int, pilha: tuple[str, ...]) -> Viga:
+        e = self.entradas[i]
+        nome = e.viga.nome
+        if nome in pilha:
+            cadeia = " → ".join(pilha + (nome,))
+            raise ValueError(f"Vigas apoiadas em círculo: {cadeia}. Uma delas "
+                             f"tem de se apoiar em pilar.")
+        v = Viga.de_dict(json.loads(json.dumps(e.viga.para_dict())))
+        por_nome = {en.viga.nome: j for j, en in enumerate(self.entradas)}
+        for ap in v.apoios:
+            j = por_nome.get(ap.viga_apoio)
+            if j is None or j == i:
+                continue
+            apoio = self.entradas[j].viga
+            secao = apoio.secao_em(min(max(ap.x_na_viga_apoio, 0.0),
+                                       apoio.comprimento))
+            ap.h_viga_apoio = secao.h
+            ap.largura = secao.bw
+        for j, en in enumerate(self.entradas):
+            if j == i:
+                continue
+            for k, ap in enumerate(en.viga.apoios):
+                if ap.viga_apoio != nome or ap.tipo == "livre":
+                    continue
+                apoiada = self._efetiva(j, pilha + (nome,))
+                Rg, Rq = reacoes_caracteristicas(apoiada, k)
+                h_ap = apoiada.secao_de_apoio(k).h
+                for P, acao in ((Rg, "g"), (Rq, "q")):
+                    if abs(P) <= 1e-9:
+                        continue
+                    v.concentradas.append(CargaConcentrada(
+                        P=P, x=ap.x_na_viga_apoio, acao=acao,
+                        indireta=P > 0.0, h_apoiada=h_ap,
+                        topos_alinhados=ap.topos_alinhados,
+                        origem=f"{en.viga.nome}, apoio {k + 1}",
+                        descricao=f"reação de {en.viga.nome} (apoio {k + 1})"))
+        return v
+
+    def calculo_desatualizado(self, i: int) -> bool:
+        """O resultado da viga ``i`` deixou de valer por causa de outra viga?"""
+        e = self.entradas[i]
+        if e.resultado is None or e.instantaneo_calculo is None:
+            return False
+        try:
+            return self.viga_para_calculo(i).para_dict() != e.instantaneo_calculo
+        except ValueError:
+            return True
+
     def assinatura(self) -> str:
         """Impressão digital do que vai para o arquivo, menos ``calculada``.
 
@@ -290,3 +368,21 @@ def fundir(original, base, atual):
     if atual == base and original is not _AUSENTE:
         return original                      # não editado: o original manda
     return atual
+
+
+def reacoes_caracteristicas(viga: Viga, k: int) -> tuple[float, float]:
+    """Reação característica do apoio ``k``: ``(permanente, variável)``, kN.
+
+    A permanente com todos os tramos carregados; a variável é a soma das
+    contribuições **positivas** de cada tramo carregado sozinho -- a
+    alternância que dá a maior reação, por superposição.
+    """
+    est = resolver(viga)
+    nt = len(viga.tramos)
+    Rg = float(combinar(est, np.ones(nt), np.zeros(nt)).reacoes[k])
+    Rq = 0.0
+    for t in range(nt):
+        so = np.zeros(nt)
+        so[t] = 1.0
+        Rq += max(0.0, float(combinar(est, np.zeros(nt), so).reacoes[k]))
+    return Rg, Rq

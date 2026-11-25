@@ -52,14 +52,15 @@ PROCEDENCIA = {
     },
     "vigas": {
         "programa": "Vigas",
-        "revisao": "Vigas R04 (pasta de 03/11/2026, anterior ao "
-                   "repositório)",
+        "revisao": "Vigas motor-2026-11-25",
         "repositorio": "Vigas/Programa",
         "pacote": "vigas",
-        "commit": "",
-        "origem": "Vigas/Vigas R04/Programa/vigas",
+        # tag motor-2026-11-25: barra pela mínima cortada pelo diagrama e
+        # seção L, pedidas pelo Pórticos
+        "commit": "1508440b74f57deab49891ae10171ba27ff1db1f",
+        "origem": "",
         "partes": ("core", "saidas"),
-        "copiado_em": "2026-11-03",
+        "copiado_em": "2026-11-25",
     },
     "lajes": {
         "programa": "Lajes",

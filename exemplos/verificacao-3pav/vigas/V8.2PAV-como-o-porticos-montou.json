@@ -8,7 +8,8 @@
         "h": 40.0,
         "tipo": "T",
         "bf": 65.0,
-        "hf": 12.0
+        "hf": 12.0,
+        "lado_mesa": "esquerda"
       },
       "nome": "",
       "mudancas": [],
@@ -21,14 +22,26 @@
       "largura": 20.0,
       "k_mola": 0.0,
       "nome": "",
-      "altura_pilar_abaixo": 0.0
+      "altura_pilar_abaixo": 0.0,
+      "viga_apoio": "V9",
+      "x_na_viga_apoio": 14.0,
+      "h_viga_apoio": 50.0,
+      "topos_alinhados": true,
+      "altura_pilar_acima": 0.0,
+      "largura_pilar_transversal": 0.0
     },
     {
       "tipo": "simples",
       "largura": 20.0,
       "k_mola": 0.0,
       "nome": "",
-      "altura_pilar_abaixo": 0.0
+      "altura_pilar_abaixo": 0.0,
+      "viga_apoio": "V10",
+      "x_na_viga_apoio": 14.0,
+      "h_viga_apoio": 60.0,
+      "topos_alinhados": true,
+      "altura_pilar_acima": 0.0,
+      "largura_pilar_transversal": 0.0
     }
   ],
   "distribuidas": [
@@ -162,7 +175,14 @@
     "tipo_gancho": "Ângulo reto",
     "ganchos_flexao": {},
     "reduzir_ancoragem_com_gancho": false,
-    "largura_reduzida_excepcional": false
+    "largura_reduzida_excepcional": false,
+    "fissuracao_inclinada_alma": false,
+    "reduzir_torcao_banzo_comprimido": false,
+    "face_superior_travada": true,
+    "l0_lateral": 0.0,
+    "fcrit_vibracao": 0.0,
+    "verificar_transversal_ancoragem": true,
+    "modelo_pilares": "rigidez"
   },
   "projeto": "",
   "observacoes": "",

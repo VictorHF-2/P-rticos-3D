@@ -371,11 +371,15 @@ def _metodologia(doc: Document, resultados, n: int) -> None:
     _paragrafo(doc, "Declaradas para que a auditoria saiba onde o modelo "
                     "termina:", cor=CINZA)
     _tabela(doc, ["Tema", "O que o cálculo faz"], [
-        ["Apoios extremos",
-         "modelados como rótulas. Os momentos mínimos de solidariedade "
-         "viga–pilar (14.6.6.1) não são calculados"],
+        ["Apoios em pilar",
+         "solidariedade viga–pilar pelo 14.6.6.1 quando os lances do pilar "
+         "são informados: viga contínua com as correções a), b) e c), ou "
+         "rigidez dos pilares como mola rotacional. Sem os lances, rótula. O "
+         "pilar não é dimensionado"],
         ["Estabilidade lateral",
-         "não verificada (15.10); conferir à parte em viga alta e estreita"],
+         "procedimento aproximado do 15.10 (b >= l0/50 e b >= βfl·h, "
+         "βfl = 0,40); a zona comprimida travada pela laje é dispensada, e a "
+         "verificação refinada da flambagem lateral com torção fica fora"],
         ["Cortante junto ao apoio",
          "reduzido só para carga distribuída, alínea (a) do 17.4.1.2.1. Carga "
          "concentrada a menos de 2d não é reduzida — a favor da segurança"],
@@ -386,7 +390,12 @@ def _metodologia(doc: Document, resultados, n: int) -> None:
          "mais largo são ancoradas — o modelo não distingue a barra do canto "
          "alinhado da do canto que recua"],
         ["Torção", "sem alternância: γg e γq com todos os tramos carregados"],
-        ["Aberturas e furos", "não modelados (13.2.5 e 21.3)"],
+        ["Aberturas e furos",
+         "verificados quando lançados: furo horizontal pelo 13.2.5.1 "
+         "(dispensa a–d ou modelo de banzos de Bolina) e vertical pelo "
+         "21.3.3 (seção reduzida). Sem o ajuste dos limites por torção, e "
+         "fora do modelo de banzos a abertura sai reprovada (bielas e "
+         "tirantes, 21.3.1)"],
         ["Pilares", "não dimensionados; entram como largura de apoio"],
     ], [4.5, 11.5])
     _paragrafo(doc, ("O roteiro de verificações de cada viga marca cada um "
@@ -520,6 +529,23 @@ def _dados(doc: Document, res: ResultadoViga, n: int) -> None:
          "17.4.1.2.1"],
         ["Peso próprio considerado", cfg.peso_proprio,
          f"γconc = {_n(viga.concreto.peso_especifico, 0)} kN/m³"],
+        ["Face superior travada lateralmente pela laje",
+         cfg.face_superior_travada, "15.10"],
+        ["Distância máxima entre travamentos laterais",
+         f"{_n(cfg.l0_lateral)} m" if cfg.l0_lateral > 0
+         else "vão (2 L no balanço)", "15.10"],
+        ["Estribos a no máximo 15 cm (fissuração inclinada da alma)",
+         cfg.fissuracao_inclinada_alma, "17.6"],
+        ["Redução da torção longitudinal no banzo comprimido",
+         cfg.reduzir_torcao_banzo_comprimido, "17.7.1.3"],
+        ["Frequência crítica",
+         f"{_n(cfg.fcrit_vibracao, 1)} Hz" if cfg.fcrit_vibracao > 0
+         else "não verificada", "23.3, Tabela 23.1"],
+        ["Armadura transversal na ancoragem",
+         cfg.verificar_transversal_ancoragem, "9.4.2.6"],
+        ["Solidariedade viga–pilar",
+         "rigidez dos pilares no modelo" if cfg.modelo_pilares == "rigidez"
+         else "viga contínua com as correções a), b), c)", "14.6.6.1"],
     ], [6.5, 4.5, 5.0])
 
 
@@ -548,6 +574,90 @@ def _analise(doc: Document, res: ResultadoViga, n: int) -> None:
                        mp.observacao or "-"])
     _tabela(doc, ["Região", "x (m)", "M da envoltória", "M de projeto",
                   "Observação"], linhas, [3.0, 2.0, 3.0, 3.0, 5.0])
+    _solidariedade(doc, res, f"{n}.3")
+
+
+def _solidariedade(doc: Document, res: ResultadoViga, sub: str) -> None:
+    """Solidariedade viga-pilar (14.6.6.1): o modelo, os pilares e o que
+    cada alínea fez."""
+    s = getattr(res, "solidariedade", None)
+    if s is None:
+        return
+    _titulo(doc, f"{sub} Solidariedade viga–pilar (14.6.6.1)", 2)
+    if s.modelo == "rigidez":
+        _paragrafo(doc, "Modelo com a rigidez à flexão dos pilares (a "
+                        "alternativa do item 14.6.6.1): cada apoio simples em "
+                        "pilar com os lances informados entra como mola "
+                        "rotacional k = 4·Ecs·(r_sup + r_inf), com r = I/(ℓ/2) "
+                        "do lance (Figura 14.8) e I = b⊥·b³/12, b a largura do "
+                        "apoio ao longo da viga. É a mesma rigidez relativa da "
+                        "alínea c): num vão de ponta oposta engastada, a mola "
+                        "recebe exatamente coef × M_eng. O momento no nó se "
+                        "divide entre os lances na proporção de r_sup e r_inf.",
+                   cor=CINZA)
+    else:
+        _paragrafo(doc, "Modelo clássico de viga contínua simplesmente apoiada "
+                        "nos pilares, com as correções do item 14.6.6.1: a) "
+                        "momentos positivos não menores que os de engastamento "
+                        "perfeito nos apoios internos (envoltória do modelo "
+                        "com os pilares internos engastados); b) no apoio "
+                        "interno solidário ao pilar com largura maior que ¼ do "
+                        "lance, momento negativo não menor que o de "
+                        "engastamento perfeito; c) nos apoios extremos, o "
+                        "momento de engastamento perfeito do vão de "
+                        "extremidade × (r_inf + r_sup)/(r_vig + r_inf + r_sup) "
+                        "na viga, r_sup/(...) e r_inf/(...) nos lances do "
+                        "pilar, com r = I/ℓ (pilar com ℓ/2, Figura 14.8).",
+                   cor=CINZA)
+    if s.pilares:
+        _tabela(doc, ["Apoio", "b × b⊥ (cm)", "ℓ sup / ℓ inf (cm)",
+                      "I pilar (cm⁴)", "r sup / r inf (cm³)", "r vig (cm³)",
+                      "k (kN·m/rad)"],
+                [[p.apoio, f"{_n(p.largura, 0)} × {_n(p.transversal, 0)}",
+                  f"{_n(p.l_sup, 0)} / {_n(p.l_inf, 0)}", _n(p.I_pilar, 0),
+                  f"{_n(p.r_sup, 1)} / {_n(p.r_inf, 1)}", _n(p.r_vig, 1),
+                  _n(p.k, 0) if s.modelo == "rigidez" else "—"]
+                 for p in s.pilares])
+    else:
+        _paragrafo(doc, "Nenhum apoio com o lance do pilar informado.",
+                   italico=True)
+    if s.modelo == "rigidez":
+        if s.momentos_no_no:
+            linhas = []
+            for k, (mn, mx) in sorted(s.momentos_no_no.items()):
+                p = next(q for q in s.pilares if q.apoio == k + 1)
+                soma = p.r_sup + p.r_inf
+                fs = p.r_sup / soma if soma > 0 else 0.0
+                linhas.append([k + 1, f"{_n(mn)} / {_n(mx)}",
+                               f"{_n(mn * fs)} / {_n(mx * fs)}",
+                               f"{_n(mn * (1 - fs))} / {_n(mx * (1 - fs))}"])
+            _tabela(doc, ["Apoio", "M no nó mín / máx (kN·m)",
+                          "lance de cima (kN·m)", "lance de baixo (kN·m)"],
+                    linhas)
+        return
+    if s.positivos:
+        _tabela(doc, ["Tramo", "M+ do modelo (kN·m)",
+                      "M+ com engastamento interno (kN·m)"],
+                [[i + 1, _n(a), _n(b)] for i, a, b in s.positivos])
+    else:
+        _paragrafo(doc, "a) O positivo de engastamento nos apoios internos não "
+                        "governou nenhum tramo.", italico=True)
+    if s.internos:
+        _tabela(doc, ["Apoio", "largura (cm)", "ℓ/4 (cm)", "Aplica b)",
+                      "M do modelo (kN·m)", "M de engastamento (kN·m)"],
+                [[c.apoio, _n(c.largura, 0), _n(c.l_pilar / 4.0, 1),
+                  "sim" if c.aplica else "não", _n(c.M_modelo), _n(c.M_eng)]
+                 for c in s.internos])
+    if s.extremos:
+        _tabela(doc, ["Apoio", "M_eng (kN·m)", "coef. viga", "M na viga",
+                      "M lance de cima", "M lance de baixo"],
+                [[c.apoio, _n(c.M_eng), _n(c.coef, 3), _n(c.M_viga),
+                  _n(c.M_sup), _n(c.M_inf)] for c in s.extremos])
+    if s.sem_altura:
+        _paragrafo(doc, "c) Apoio(s) extremo(s) em pilar sem o lance "
+                        "informado, modelado(s) como rótula: "
+                        + ", ".join(map(str, s.sem_altura)) + ".",
+                   italico=True)
 
 
 def _flexao(doc: Document, res: ResultadoViga, n: int) -> None:
@@ -789,6 +899,9 @@ def _detalhamento(doc: Document, res: ResultadoViga, n: int,
     if res.ancoragens_negativas or res.ancoragens_torcao:
         _ancoragens_nos_extremos(doc, res, f"{n}.{sub}")
         sub += 1
+    if res.suspensoes:
+        _suspensoes(doc, res, f"{n}.{sub}")
+        sub += 1
     if res.grampos:
         _grampos(doc, res, f"{n}.{sub}")
         sub += 1
@@ -978,6 +1091,37 @@ def _juntas(doc: Document, res: ResultadoViga, sub: str) -> None:
                "quando aquela face é tracionada por cálculo.", cor=CINZA)
 
 
+def _suspensoes(doc: Document, res: ResultadoViga, sub: str) -> None:
+    """Armadura de suspensão de cada cruzamento com outra viga (18.3.6)."""
+    _titulo(doc, f"{sub} Armadura de suspensão (18.3.6)", 2)
+    _paragrafo(doc, "Onde uma viga se apoia noutra, a reação tem de ser "
+                    "suspensa até o banzo comprimido da viga de apoio por "
+                    "armadura própria, somada à de cisalhamento. O tirante é "
+                    "As,susp = Vd/fyd; na viga de apoio vão no mínimo 75 % "
+                    "dele, em h da viga de apoio centrado no cruzamento (h/2 "
+                    "de um lado só quando ela não continua além dele), e na "
+                    "viga apoiada no máximo 25 %, em h da viga apoiada a "
+                    "partir do cruzamento. Com as faces superiores "
+                    "coincidentes, a carga é reduzida por 1 − h_susp/h_viga "
+                    "apoio, h_susp a diferença entre as faces inferiores. Viga "
+                    "pendurada (face inferior da apoiada abaixo da de apoio): "
+                    "150 % na viga de apoio (100 % para suspender e 50 % de "
+                    "reforço, critério de Fusco) e nada na apoiada. Os "
+                    "estribos da faixa têm de dar o cisalhamento que a faixa "
+                    "já exige mais a suspensão.", cor=CINZA)
+    _tabela(doc, ["Cruzamento", "Papel", "Vd (kN)", "Vd/fyd (cm²)", "fator",
+                  "parcela", "As,susp (cm²)", "faixa (m)",
+                  "cisalh. (cm²)", "estribos", "As,ef (cm²)", "Situação"],
+            [[su.descricao, su.papel + (" (pendurada)" if su.pendurada
+                                        else ""),
+              _n(su.Vd, 1), _n(su.As_tirante), _n(su.fator, 3),
+              f"{su.parcela * 100:.0f} %", _n(su.As_susp),
+              f"{_n(su.xa)} a {_n(su.xb)}", _n(su.asw_cis),
+              f"{su.n} Ø{su.phi:g} c/{su.s:g}" if su.n else "—",
+              _n(su.As_ef), "OK" if su.ok else "NÃO OK"]
+             for su in res.suspensoes])
+
+
 def _ancoragens_nos_extremos(doc: Document, res: ResultadoViga,
                              sub: str) -> None:
     """Ancoragem da negativa e da longitudinal de torção nos extremos.
@@ -993,7 +1137,9 @@ def _ancoragens_nos_extremos(doc: Document, res: ResultadoViga,
                         "ancoragem a partir da face do apoio, com o maior "
                         "entre lb,nec (9.4.2.5, barra em má aderência), "
                         "(r + 5,5 Ø) e 60 mm. Quando o trecho reto não basta "
-                        "num engaste, a barra desce no elemento de apoio: "
+                        "e há pilar monolítico embaixo (engaste, mola, ou "
+                        "apoio simples com a altura do pilar informada), a "
+                        "barra desce no pilar: "
                         "contam os trechos retos (o horizontal até a curva e "
                         "a perna depois dela), sem o arco e sem o α = 0,7 do "
                         "gancho, e a curva, num nó de pórtico, tem o diâmetro "
@@ -1012,7 +1158,7 @@ def _ancoragens_nos_extremos(doc: Document, res: ResultadoViga,
         # fazia parecer que a dobra não cabia no apoio
         descem = [a for a in res.ancoragens_negativas if a.raio_eixo > 0]
         if descem:
-            _paragrafo(doc, "Geometria da barra que desce no engaste: o "
+            _paragrafo(doc, "Geometria da barra que desce no pilar: o "
                             "comprimento da face à ponta inclui a curva; o "
                             "trecho reto é o que sobra antes dela. A perna é "
                             "a dimensão externa, medida do topo da barra, e "
@@ -1096,6 +1242,168 @@ def _apoios_extremos(doc: Document, res: ResultadoViga, sub: str) -> None:
                         "desenho traça a dobra como arco desse raio; as cotas "
                         "são as dimensões externas, com a curvatura omitida, "
                         "como manda a prática de detalhamento.", cor=CINZA)
+
+
+def _complementares(doc: Document, res: ResultadoViga, n) -> None:
+    """Itens que leem o dimensionamento pronto (19/11/2026): 15.10, 9.4.2.6,
+    18.3.4, 17.3.3.2 (Nota), 23.3, 17.6 e 17.7.1.3."""
+    cfg = res.viga.config
+    _titulo(doc, f"{n}. Verificações complementares", 1)
+    k = 0
+
+    def sub(titulo: str) -> None:
+        nonlocal k
+        k += 1
+        _titulo(doc, f"{n}.{k} {titulo}", 2)
+
+    # -- 15.10 --------------------------------------------------------------
+    sub("Instabilidade lateral (15.10)")
+    _paragrafo(doc, "Procedimento aproximado do item 15.10 para vigas sujeitas "
+                    "à flambagem lateral: b >= l0/50 e b >= βfl·h, com b a "
+                    "largura da zona comprimida (a mesa, quando ela está na "
+                    "face comprimida), h a altura total e l0 o comprimento do "
+                    "flange comprimido entre suportes que garantam o "
+                    "contraventamento lateral — o vão do tramo, 2 L no balanço "
+                    "ou a distância entre travamentos informada. βfl = 0,40 "
+                    "(Tabela 15.1, seções retangular, T e I). A zona comprimida "
+                    "superior travada pela laje monolítica não está sujeita à "
+                    "flambagem lateral e é dispensada; a inferior (momento "
+                    "negativo) de uma viga com laje em cima é conferida, e o "
+                    "não atendimento é alerta, porque o banzo tracionado está "
+                    "preso à laje. Sem laje, o não atendimento é erro.",
+               cor=CINZA)
+    if res.estabilidade_lateral:
+        _tabela(doc, ["Tramo", "Zona comprimida", "b (cm)", "h (cm)",
+                      "l0 (m)", "l0/50 (cm)", "βfl·h (cm)", "Situação",
+                      "Observação"],
+                [[e.tramo + 1, e.face_comprimida, _n(e.b, 0), _n(e.h, 0),
+                  f"{_n(e.l0)} ({e.origem_l0})", _n(e.b_min_l0, 1),
+                  _n(e.b_min_beta, 1), e.veredito, e.observacao or "—"]
+                 for e in res.estabilidade_lateral])
+
+    # -- 9.4.2.6 ------------------------------------------------------------
+    sub("Armadura transversal na ancoragem (9.4.2.6)")
+    if not cfg.verificar_transversal_ancoragem:
+        _paragrafo(doc, "Verificação desligada nos critérios.", italico=True)
+    else:
+        _paragrafo(doc, "Ao longo de cada comprimento de ancoragem — a ponta "
+                        "dos cortes do escalonamento (lb,nec além do ponto em "
+                        "que a barra deixa de ser necessária) e a ancoragem "
+                        "nos apoios de extremidade, da face à ponta da barra — "
+                        "a armadura transversal existente tem de resistir a "
+                        "25 % da força da maior barra ancorada (9.4.2.6.1): "
+                        "A >= 0,25 · As,Ø · fyd/fywd, contando um ramo por "
+                        "estribo onde o desenho os põe. Acima de Ø32 vale "
+                        "também s <= 5 Ø (9.4.2.6.2), e a área é conferida nas "
+                        "duas direções, que o estribo fechado dá igualmente. "
+                        "O 9.4.1.1 dispensa a ancoragem confinada pelo próprio "
+                        "concreto (cobrimento e distância entre barras >= 3 Ø). "
+                        "Onde os estribos existentes não bastam, a distribuição "
+                        "recebe faixa adensada da mesma posição. O traspasse "
+                        "tem a sua própria costura (9.5.2.4).", cor=CINZA)
+        if res.transversais_ancoragem:
+            _tabela(doc, ["Ancoragem", "Face", "Ø (mm)", "Trecho (m)",
+                          "A nec. (cm²)", "Estribos", "A ef. (cm²)",
+                          "Situação"],
+                    [[t.descricao, t.face, _n(t.phi, 1),
+                      f"{_n(t.xa)} a {_n(t.xb)}", _n(t.A_nec), t.n,
+                      _n(t.A_ef),
+                      t.veredito + (" (faixa adensada)" if t.adensada
+                                    else "")
+                      + (f" — {t.motivo_dispensa}" if t.dispensada else "")]
+                     for t in res.transversais_ancoragem])
+        else:
+            _paragrafo(doc, "Nenhuma ancoragem por aderência fora de traspasse.",
+                       italico=True)
+
+    # -- 18.3.4 e 17.7.1.3 ----------------------------------------------------
+    if res.espacamentos_torcao:
+        sub("Barras longitudinais de torção (18.3.4 e 17.7.1.3)")
+        _paragrafo(doc, "As barras longitudinais da armadura de torção ficam "
+                        "a no máximo 35 cm ao longo do perímetro interno dos "
+                        "estribos, e cada vértice do estribo tem uma barra "
+                        "(18.3.4). O espaçamento é medido pela face interna do "
+                        "estribo, a favor da segurança; nas laterais contam as "
+                        "barras laterais de torção e as de pele.", cor=CINZA)
+        _tabela(doc, ["Tramo", "Face", "Barras (com os cantos)",
+                      "Espaçamento (cm)", "Situação"],
+                [[e.tramo + 1, e.face, e.n_barras,
+                  _n(e.espacamento, 1) if e.espacamento < 1e6 else "—",
+                  "OK" if e.ok else "NÃO OK"]
+                 for e in res.espacamentos_torcao])
+        if cfg.reduzir_torcao_banzo_comprimido:
+            reduz = max((t.reducao_banzo for t in res.torcoes), default=0.0)
+            _paragrafo(doc, "Redução no banzo comprimido (17.7.1.3): a parcela "
+                            "de Asl da face comprimida foi reduzida de "
+                            "Fc/fyd, com Fc = σcd · min(y, he) · Δu, y a "
+                            "profundidade do bloco retangular sob o momento "
+                            "concomitante mínimo que comprime a face (a face "
+                            "só é banzo comprimido se todas as combinações a "
+                            "comprimem) e Δu = bw − 2 c2 o trecho da face no "
+                            "perímetro ue. Maior redução: "
+                            f"{_n(reduz)} cm².")
+        else:
+            _paragrafo(doc, "A redução da armadura longitudinal de torção no "
+                            "banzo comprimido (17.7.1.3) não foi aplicada: a "
+                            "parcela da face comprimida fica inteira.",
+                       italico=True)
+
+    # -- 17.3.3.2 (Nota) -------------------------------------------------------
+    if res.pele_fissuracao:
+        sub("Armadura de pele no controle da fissuração (17.3.3.2)")
+        _paragrafo(doc, "A Nota do 17.3.3.2 pede que a armadura de pele na "
+                        "zona tracionada limite a abertura de fissuras na sua "
+                        "região de envolvimento Acri (Figura 17.4), com "
+                        "espaçamento <= 15 Ø. Para cada barra abaixo da linha "
+                        "neutra do Estádio II (acima, no momento negativo): "
+                        "σsi = αe·M·(y − x)/I no eixo da barra; Acri com 7,5 Ø "
+                        "para cada lado do eixo, limitado à face, à metade da "
+                        "distância às barras vizinhas e à linha neutra; wk pelo "
+                        "menor das duas expressões do item.", cor=CINZA)
+        _tabela(doc, ["Região", "Pele", "y (cm)", "σs (MPa)", "Acri (cm²)",
+                      "ρri", "wk (mm)", "limite (mm)", "s / 15 Ø (cm)",
+                      "Situação"],
+                [[p.regiao, f"N{p.posicao} Ø{p.phi:g}", _n(p.y, 1),
+                  _n(p.sigma_s * 10.0, 0), _n(p.Acri, 0), _n(p.rho_ri, 4),
+                  _n(p.wk, 3), _n(p.wk_limite, 2),
+                  f"{_n(p.s, 1)} / {_n(p.s_max, 1)}",
+                  ("OK" if p.ok else "NÃO OK")
+                  + ("" if p.espacamento_ok else " (s > 15 Ø)")]
+                 for p in res.pele_fissuracao])
+
+    # -- 23.3 ---------------------------------------------------------------
+    sub("Vibrações excessivas (23.3)")
+    vib = res.vibracao
+    if vib is None:
+        _paragrafo(doc, "Não verificada: a frequência crítica depende do uso da "
+                        "estrutura (Tabela 23.1) e não foi informada nos "
+                        "critérios.", italico=True)
+    else:
+        _paragrafo(doc, "Frequência natural do primeiro modo de flexão pela "
+                        "análise modal do modelo de barras (K φ = ω² M φ), com "
+                        "as massas dos pesos da combinação frequente, g + ψ1·q "
+                        "(23.3 e 11.8.3.1), em matriz de massa consistente, e "
+                        f"rigidez {vib.rigidez}. Condição: fn > 1,2 fcrit, e "
+                        "em nenhum caso o piso abaixo de 3 Hz. A relação é uma "
+                        "avaliação simplificada; nos casos especiais, análise "
+                        "dinâmica mais acurada.", cor=CINZA)
+        _tabela(doc, ["fn (Hz)", "modos seguintes (Hz)", "massa (t)",
+                      "fcrit (Hz)", "1,2 fcrit (Hz)", "Situação"],
+                [[_n(vib.fn), ", ".join(_n(f) for f in vib.modos[1:]) or "—",
+                  _n(vib.massa_total, 2), _n(vib.fcrit, 1),
+                  _n(1.2 * vib.fcrit), vib.veredito]])
+
+    # -- 17.6 -----------------------------------------------------------------
+    sub("Fissuração inclinada da alma (17.6)")
+    if cfg.fissuracao_inclinada_alma:
+        s_max = max((z.s for z in res.zonas_estribo), default=0.0)
+        _paragrafo(doc, "Caso especial declarado nos critérios: o espaçamento "
+                        "da armadura transversal ficou limitado a 15 cm em "
+                        f"toda a viga (maior adotado: {_n(s_max, 0)} cm).")
+    else:
+        _paragrafo(doc, "Usualmente não é necessário verificar a fissuração "
+                        "diagonal da alma (17.6); o limite de 15 cm para os "
+                        "estribos não foi pedido nos critérios.", italico=True)
 
 
 def _roteiro(doc: Document, res: ResultadoViga, n: int) -> None:
@@ -1209,9 +1517,13 @@ def _capitulos_da_viga(doc: Document, res: ResultadoViga, secoes_m,
         _torcao(doc, res, numero()); k += 1
     _servico(doc, res, numero()); k += 1
     _detalhamento(doc, res, numero(), secoes_m); k += 1
+    if getattr(res, "aberturas", None) is not None and res.aberturas.lista:
+        from .aberturas import capitulo_memoria
+        capitulo_memoria(doc, res, numero()); k += 1
     if res.fadigas or res.fadigas_estribo:
         _fadiga(doc, res, numero())
         k += 1
+    _complementares(doc, res, numero()); k += 1
     _roteiro(doc, res, numero()); k += 1
     _pendencias(doc, res, numero()); k += 1
     _combinacoes(doc, res, f"{prefixo}{k} Combinações consideradas"

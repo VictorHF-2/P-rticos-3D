@@ -32,6 +32,17 @@ from .analise import Estrutura, combinar, resolver, resolver_torcao
 from .materiais import BITOLAS_BARRAS, Aco, area_barra
 from .modelo import Secao, Viga
 from . import avisos as av
+from . import complementares as cp
+from . import solidariedade as sd
+
+
+#: 17.6 -- espaçamento máximo da armadura transversal quando a fissuração
+#: inclinada da alma é considerada importante, cm
+S_MAX_FISSURACAO_ALMA = 15.0
+
+#: 18.3.4 -- espaçamento máximo, cm, entre as barras longitudinais da armadura
+#: de torção ao longo do perímetro interno dos estribos
+ESPACAMENTO_MAX_TORCAO = 35.0
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +80,9 @@ class Regiao:
     x_d_adotada: float = 0.0
     As_comprimida_presente: float = 0.0
     comprimidas_presentes: list[int] = field(default_factory=list)
+    #: extremos que as barras da região podem alcançar, m: a ponta de um corte
+    #: que fica aquém deles é uma ancoragem no meio da viga (9.4.2.6)
+    limites_barra: tuple[float, float] = (0.0, 0.0)
 
 
 @dataclass
@@ -92,6 +106,8 @@ class ResultadoViga:
     T_diagrama: tuple | None = None
     flechas: list[els.ResultadoFlecha] = field(default_factory=list)
     apoios_extremos: list[anc.ApoioExtremo] = field(default_factory=list)
+    #: armadura de suspensão de cada cruzamento com outra viga (18.3.6)
+    suspensoes: list = field(default_factory=list)
     #: ancoragem da armadura negativa nos apoios de extremidade (18.3.2.4-d)
     ancoragens_negativas: list[anc.AncoragemNegativa] = field(
         default_factory=list)
@@ -101,6 +117,20 @@ class ResultadoViga:
     #: região no passe seguinte (uso interno de `dimensionar`)
     pedidos_de_bitola: dict = field(default_factory=dict)
     grampos: list[gr.Grampos] = field(default_factory=list)
+    #: armadura transversal ao longo das ancoragens (9.4.2.6)
+    transversais_ancoragem: list = field(default_factory=list)
+    #: faixas que o passe seguinte tem de adensar pelo 9.4.2.6 (uso interno)
+    pedidos_ancoragem: list = field(default_factory=list)
+    #: espaçamento das barras longitudinais de torção (18.3.4)
+    espacamentos_torcao: list = field(default_factory=list)
+    #: instabilidade lateral, zona comprimida por zona (15.10)
+    estabilidade_lateral: list = field(default_factory=list)
+    #: vibrações excessivas (23.3); None quando desligada
+    vibracao: object = None
+    #: solidariedade viga-pilar (14.6.6.1)
+    solidariedade: object = None
+    #: abertura de fissuras na pele tracionada (17.3.3.2, Nota)
+    pele_fissuracao: list = field(default_factory=list)
     fadigas: list[fad.ResultadoFadiga] = field(default_factory=list)
     fadigas_estribo: list[fad.ResultadoFadigaEstribo] = field(
         default_factory=list)
@@ -108,10 +138,15 @@ class ResultadoViga:
     quantitativo: dict = field(default_factory=dict)
     avisos: list[str] = field(default_factory=list)
     reacoes: list[dict] = field(default_factory=list)
+    #: furos e aberturas na alma (13.2.5 e 21.3): ``aberturas.ResultadoAberturas``
+    #: ou ``None`` na viga sem furo
+    aberturas: object = None
 
     @property
     def ok(self) -> bool:
         """Verdadeiro se nenhuma verificação normativa foi reprovada."""
+        if self.aberturas is not None and not self.aberturas.ok:
+            return False
         if any(not c.biela_ok for c in self.cortantes):
             return False
         if any(not t.biela_ok for t in self.torcoes):
@@ -126,6 +161,16 @@ class ResultadoViga:
         if any(not f.ok for f in self.fadigas_estribo):
             return False
         if any(not g.ok for g in self.grampos):
+            return False
+        if any(not t.ok for t in self.transversais_ancoragem):
+            return False
+        if any(not e.ok for e in self.espacamentos_torcao):
+            return False
+        if any(not e.ok for e in self.estabilidade_lateral):
+            return False
+        if self.vibracao is not None and not self.vibracao.ok:
+            return False
+        if any(not p.ok for p in self.pele_fissuracao):
             return False
         if any(not a.ok for a in self.apoios_extremos
                if not any(g.apoio == a.apoio and g.ok
@@ -247,7 +292,8 @@ def dimensionar(viga: Viga) -> ResultadoViga:
     """
     usados: dict[str, float] = {}
     forcados: dict[str, float] = {}
-    res = _dimensionar(viga, usados, forcados)
+    faixas: list[tuple] = []
+    res = _dimensionar(viga, usados, forcados, faixas)
     for _ in range(4):
         novos = {nome: phi for nome, phi in _estribo_das_regioes(res).items()
                  if phi > max(usados.get(nome, 0.0),
@@ -256,11 +302,31 @@ def dimensionar(viga: Viga) -> ResultadoViga:
         # (ver `_verificar_ductilidade_adotada`); cada pedido entra uma vez
         novos_f = {nome: phi for nome, phi in res.pedidos_de_bitola.items()
                    if nome not in forcados}
-        if not novos and not novos_f:
+        # a armadura transversal da ancoragem (9.4.2.6) que os estribos
+        # existentes não dão vira faixa adensada no passe seguinte
+        novas_a = [p for p in res.pedidos_ancoragem
+                   if not any(abs(p[0] - q[0]) < 1e-3
+                              and abs(p[1] - q[1]) < 1e-3 for q in faixas)]
+        if not novos and not novos_f and not novas_a:
             break
         usados.update(novos)
         forcados.update(novos_f)
-        res = _dimensionar(viga, usados, forcados)
+        faixas.extend(novas_a)
+        res = _dimensionar(viga, usados, forcados, faixas)
+    for t in res.transversais_ancoragem:
+        if not t.ok:
+            res.avisos.append(av.erro(
+                f"Armadura transversal na ancoragem (9.4.2.6), {t.descricao}: "
+                f"{t.n} estribo(s) dão {t.A_ef:.2f} cm² de x = {t.xa:.2f} a "
+                f"{t.xb:.2f} m e são necessários {t.A_nec:.2f} cm² (25 % da "
+                f"força de uma barra Ø{t.phi:g})"
+                + (f", com espaçamento <= 5 Ø = {t.s_lim:g} cm"
+                   if t.s_lim > 0 else "")
+                + ". A faixa adensada não coube na grade de espaçamentos: "
+                  "aumente a bitola do estribo ou detalhe à mão."))
+    # furos e aberturas na alma: leem o resultado pronto, sem mudar o cálculo
+    from . import aberturas as ab
+    ab.aplicar(res)
     return res
 
 
@@ -278,10 +344,12 @@ def _estribo_das_regioes(res: "ResultadoViga") -> dict[str, float]:
 
 
 def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
-                 phi_flexao: dict[str, float] | None = None) -> ResultadoViga:
+                 phi_flexao: dict[str, float] | None = None,
+                 faixas_ancoragem: list | None = None) -> ResultadoViga:
     """Um passe do cálculo, com a bitola de estribo de cada região na altura
-    útil (``phi_t_regiao``, por nome; ausente = a prevista nos critérios) e,
-    em ``phi_flexao``, a bitola longitudinal que a ductilidade pediu."""
+    útil (``phi_t_regiao``, por nome; ausente = a prevista nos critérios), em
+    ``phi_flexao`` a bitola longitudinal que a ductilidade pediu e, em
+    ``faixas_ancoragem``, as faixas adensadas que o 9.4.2.6 pediu."""
     phi_flexao = phi_flexao or {}
     avisos = list(viga.validar())
     cfg = viga.config
@@ -295,7 +363,12 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
     est = resolver(viga)
     combs = cb.gerar_combinacoes(viga)
     env, sols_elu = cb.calcular(est, combs, tipos=("ELU",))
-    momentos = cb.momentos_de_projeto(viga, env, sols_elu)
+    # 14.6.6.1: correções do modelo clássico na envoltória (a, b) e pisos de
+    # momento negativo nos apoios (b, c); no modelo "rigidez" os pilares já
+    # estão na análise, como molas
+    solidariedade = sd.aplicar(viga, env, env.x, avisos)
+    momentos = cb.momentos_de_projeto(viga, env, sols_elu,
+                                      solidariedade.minimos)
     limites = _regioes_de_influencia(viga)
 
     # -- 2. flexão, com iteração da altura útil -----------------------------
@@ -404,6 +477,10 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
                          cfg.modelo_cisalhamento, cfg.theta,
                          cfg.alpha_estribo, x=xi)
         asw_req[i] = r.asw_adotado
+        # 17.6: "em casos especiais", a fissuração inclinada da alma é
+        # controlada limitando o espaçamento da armadura transversal a 15 cm
+        if cfg.fissuracao_inclinada_alma and r.s_max > S_MAX_FISSURACAO_ALMA:
+            r.s_max = S_MAX_FISSURACAO_ALMA
         s_max_arr[i] = r.s_max
         cortantes.append(r)
 
@@ -471,7 +548,8 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
         # espalharia armadura de torção pela viga inteira
         limiar = max(1e-6, 1e-3 * float(np.max(Tsd)))
         smax_reduzido = False
-        asl_face = np.zeros_like(x)
+        asl_inf = np.zeros_like(x)
+        asl_sup = np.zeros_like(x)
         asl_lat = np.zeros_like(x)
         for i, xi in enumerate(x):
             Ti = float(np.interp(xi, xt, Tsd))
@@ -495,8 +573,15 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
                 smax_reduzido = True
             torcoes.append(rt)
             fr_face, fr_lat = _fracoes_perimetro(secao, rt)
-            asl_face[i] = rt.Asl * fr_face
+            asl_inf[i] = asl_sup[i] = rt.Asl * fr_face
             asl_lat[i] = rt.Asl * fr_lat
+            if cfg.reduzir_torcao_banzo_comprimido:
+                _reduzir_no_banzo_comprimido(
+                    viga, rt, secao, float(env.M_max[i]), float(env.M_min[i]),
+                    float(d_inf[i]), float(d_sup[i]), rt.Asl * fr_face)
+                asl_inf[i], asl_sup[i] = rt.Asl_inf, rt.Asl_sup
+            else:
+                rt.Asl_inf = rt.Asl_sup = rt.Asl * fr_face
         if smax_reduzido:
             avisos.append(av.construtivo(
                 "Espaçamento máximo dos estribos reduzido para 0,3·d ≤ 20 cm "
@@ -529,8 +614,17 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
         # somada à flexão nas faces e como barras laterais no restante
         if torcoes:
             As_inf, As_sup, asl_lateral = _somar_asl_longitudinal(
-                viga, regioes, x, asl_face, asl_lat, As_inf, As_sup, avisos,
-                phi_t_regiao, phi_flexao)
+                viga, regioes, x, (asl_inf, asl_sup), asl_lat, As_inf, As_sup,
+                avisos, phi_t_regiao, phi_flexao)
+            if cfg.reduzir_torcao_banzo_comprimido:
+                reduzidas = [t for t in torcoes if t.reducao_banzo > 1e-6]
+                if reduzidas:
+                    avisos.append(av.construtivo(
+                        f"Armadura longitudinal de torção reduzida no banzo "
+                        f"comprimido (17.7.1.3) em {len(reduzidas)} seções da "
+                        f"malha, pela compressão concomitante mínima que age "
+                        f"na espessura he da face; a maior redução foi de "
+                        f"{max(t.reducao_banzo for t in reduzidas):.2f} cm²."))
 
     # -- 6. estribos --------------------------------------------------------
     zonas: list[det.ZonaEstribo] = []
@@ -543,10 +637,14 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
         a, b = tr.x_ini, tr.x_fim
         # os estribos cobrem a viga inteira, inclusive o trecho que entra nos
         # pilares de extremidade -- não existe trecho de viga sem estribo
+        # num apoio em outra viga os estribos desta param na face dela e seguem
+        # os da viga de apoio (18.3.6): não entram no cruzamento
         if tr.k == 0:
-            a = viga.x_inicio_fisico
+            a = (viga.x_apoios[0] + viga.apoios[0].largura / 200.0
+                 if viga.apoios[0].indireto else viga.x_inicio_fisico)
         if tr.k == len(viga.trechos) - 1:
-            b = viga.x_fim_fisico
+            b = (viga.x_apoios[-1] - viga.apoios[-1].largura / 200.0
+                 if viga.apoios[-1].indireto else viga.x_fim_fisico)
         m = (x >= a - 1e-9) & (x <= b + 1e-9)
         asw_max = float(np.max(asw_req[m])) if m.any() else 0.0
         # a bitola imposta continua sendo **por tramo**: é assim que o usuário
@@ -601,9 +699,18 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
 
     # -- 7. ELS -------------------------------------------------------------
     flechas: list[els.ResultadoFlecha] = []
+    guardado: dict = {}
     if cfg.verificar_els:
-        flechas = _verificar_flechas(viga, est, combs, regioes, avisos)
+        flechas = _verificar_flechas(viga, est, combs, regioes, avisos,
+                                     guardado)
         _verificar_fissuracao(viga, est, combs, regioes)
+    # 23.3: a frequência natural sai da mesma rigidez da flecha (Ecs·Ieq de
+    # Branson, por tramo); com o ELS desligado, da seção bruta
+    vibracao = cp.verificar_vibracao(
+        viga, guardado.get("est_els", est),
+        "Ecs·Ieq (Branson, 17.3.2.1.1), a mesma rigidez da flecha"
+        if "est_els" in guardado else "Ecs·Ic da seção bruta (ELS desligado)",
+        avisos)
 
     fadigas: list[fad.ResultadoFadiga] = []
     fadigas_estribo: list[fad.ResultadoFadigaEstribo] = []
@@ -620,6 +727,9 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
     # gancho em cascata, e cada refazimento abria o seguinte. Um pré-passe
     # descartável descobre a exigência; o passe real monta tudo uma vez, já com
     # a bitola final
+    # a suspensão (18.3.6) entra antes da costura: é armadura de cálculo, e a
+    # costura conta os estribos que já estão lá
+    suspensoes = _suspensao_nas_faixas(viga, zonas, sols_elu, avisos)
     if cfg.uniformizar_estribos:
         _antecipar_reforco_da_costura(viga, regioes, zonas, x, As_inf, As_sup,
                                       cortantes, asl_lateral)
@@ -641,6 +751,8 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
                 f"Os estribos desses trechos são da mesma posição do restante "
                 f"do tramo, e não estribos extra de outra posição."))
 
+    faixas_feitas = _ancoragem_nas_faixas(viga, zonas, faixas_ancoragem or [])
+
     apoios_extremos: list[anc.ApoioExtremo] = []
     grampos_ancoragem: list[gr.Grampos] = []
     posicoes = _montar_posicoes(viga, regioes, zonas, x, As_inf, As_sup,
@@ -652,7 +764,6 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
     _comprimentos_com_ganchos(viga, posicoes)       # a perna pode ter crescido
     _repartir_barras_longas(viga, posicoes, avisos, x, As_inf, As_sup)
     _costurar_emendas(viga, posicoes, zonas, avisos)
-    _armar_suspensao(viga, posicoes, zonas, avisos)
     _verificar_cobrimento(viga, posicoes, zonas, avisos)
     # estribos idênticos são uma posição só, e a numeração fecha sem buraco
     antigos = {id(p): p.numero for p in posicoes}
@@ -664,6 +775,25 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
     avisos += [av.erro(p) for p in conferir_continuidade(viga, posicoes, aco)]
     avisos += [av.erro(p) for p in conferir_ganchos(viga, posicoes)]
     quant = _quantitativo(viga, posicoes)
+
+    # -- 9. verificações complementares (19/11/2026) --------------------------
+    transversais, pedidos_anc = _verificar_transversal_ancoragem(
+        viga, regioes, zonas, apoios_extremos, ancoragens_negativas,
+        faixas_feitas, avisos)
+    phi_t_final = max((z.phi for z in zonas), default=cfg.phi_estribo)
+    espacamentos_torcao = _verificar_espacamento_torcao(viga, posicoes,
+                                                        torcoes, phi_t_final)
+    for e in espacamentos_torcao:
+        if not e.ok:
+            avisos.append(av.erro(
+                f"Tramo {e.tramo + 1}, face {e.face}: as barras longitudinais "
+                f"de torção ficam a {e.espacamento:.1f} cm umas das outras "
+                f"({e.n_barras} barras com os cantos), acima dos 35 cm do item "
+                f"18.3.4, ou falta barra num vértice do estribo."))
+    estabilidade = cp.verificar_estabilidade_lateral(
+        viga, x, env.M_max, env.M_min, avisos)
+    pele_fiss = (cp.pele_na_fissuracao(viga, regioes, posicoes, phi_t_final,
+                                       avisos) if cfg.verificar_els else [])
 
     reacoes = []
     for k, ap in enumerate(viga.apoios):
@@ -689,7 +819,11 @@ def _dimensionar(viga: Viga, phi_t_regiao: dict[str, float],
         apoios_extremos=apoios_extremos, grampos=grampos_ancoragem,
         ancoragens_negativas=ancoragens_negativas,
         ancoragens_torcao=ancoragens_torcao,
-        pedidos_de_bitola=pedidos_de_bitola)
+        pedidos_de_bitola=pedidos_de_bitola, suspensoes=suspensoes,
+        transversais_ancoragem=transversais, pedidos_ancoragem=pedidos_anc,
+        espacamentos_torcao=espacamentos_torcao,
+        estabilidade_lateral=estabilidade, vibracao=vibracao,
+        pele_fissuracao=pele_fiss, solidariedade=solidariedade)
 
 
 # ---------------------------------------------------------------------------
@@ -819,7 +953,8 @@ def _As_ao_longo(viga: Viga, x: np.ndarray, M: np.ndarray, d: np.ndarray,
 # ---------------------------------------------------------------------------
 
 def _verificar_flechas(viga: Viga, est: Estrutura, combs: list[cb.Combinacao],
-                       regioes: list[Regiao], avisos: list[str]
+                       regioes: list[Regiao], avisos: list[str],
+                       guardado: dict | None = None
                        ) -> list[els.ResultadoFlecha]:
     """Flecha de cada tramo com a rigidez equivalente de Branson."""
     cfg = viga.config
@@ -873,6 +1008,8 @@ def _verificar_flechas(viga: Viga, est: Estrutura, combs: list[cb.Combinacao],
 
     # reanálise com a rigidez equivalente
     est_els = resolver(viga, inercias=I_eq)
+    if guardado is not None:
+        guardado["est_els"] = est_els
     f_qp, f_qp_neg, _ = cb.envoltoria_servico(est_els, "ELS-qp", combs)
     # parcela permanente isolada (para o deslocamento após a alvenaria)
     nt = len(viga.tramos)
@@ -1063,6 +1200,7 @@ def _montar_posicoes(viga: Viga, regioes: list[Regiao],
             anco.lb_nec, r.x_ini, r.x_fim, x_min, x_max,
             manter_ate_apoio=2 if r.tipo == "vao" else 2)
         r.cortes = cortes
+        r.limites_barra = (x_min, x_max)
         # as camadas vêm do arranjo (18.3.2.2): a primeira leva o que couber na
         # largura, as de dentro no máximo o número de ramos do estribo. Antes a
         # camada era contada pela ordem dos grupos com a capacidade da primeira,
@@ -1178,7 +1316,8 @@ def _montar_posicoes(viga: Viga, regioes: list[Regiao],
         phi_canto = max(det.PHI_PORTA_ESTRIBO,
                         max(z.phi for z in do_trecho))
         posicoes.append(det.Posicao(
-            numero=numero, tipo="porta_mesa", n=4, phi=phi_canto, face="mesa",
+            numero=numero, tipo="porta_mesa", n=tr.secao.n_cantos_mesa,
+            phi=phi_canto, face="mesa",
             x_ini=tr.x_ini, x_fim=tr.x_fim,
             comprimento=(tr.x_fim - tr.x_ini) * 100.0,
             so_canto=True, trecho=tr.k, tramo=tr.tramo,
@@ -1220,14 +1359,28 @@ def _montar_posicoes(viga: Viga, regioes: list[Regiao],
         # oferece uma escolha só, "a armadura lateral deste tramo"
         imposta = float((cfg.bitolas_pele or {}).get(str(i_tramo), 0.0) or 0.0)
         phi_l = imposta or max(cfg.phi_min_longitudinal, det.PHI_PORTA_ESTRIBO)
-        # duas faces laterais, no mínimo uma barra por face
-        n_face = max(1, int(math.ceil(asl / 2.0 / area_barra(phi_l))))
+        # duas faces laterais, no mínimo uma barra por face; e o 18.3.4 pede
+        # as barras de torção a no máximo 35 cm no perímetro interno dos
+        # estribos -- numa alma de 50 cm a área já bastava com uma barra por
+        # face, mas a distância entre os cantos (41 cm) passa do limite
+        h_tramo = max(t.secao.h for t in viga.trechos if t.tramo == i_tramo)
+        c1 = cob + phi_estribo_max / 10.0 + phi_l / 20.0
+        livre = max(h_tramo - 2.0 * c1, 0.0)
+        n_area = int(math.ceil(asl / 2.0 / area_barra(phi_l)))
+        n_esp = barras_entre_cantos_torcao(livre)
+        n_face = max(1, n_area, n_esp)
+        alturas = [c1 + livre * k / (n_face + 1) for k in range(1, n_face + 1)]
+        passo = round(livre / (n_face + 1), 1)
+        descricao = (f"Armadura lateral de torção do tramo {i_tramo + 1} "
+                     f"({asl:.2f} cm² distribuídos nas duas faces — 17.5.1.6")
+        if n_esp > n_area and n_esp > 1:
+            descricao += (f"; {n_face} por face pelo espaçamento máximo de "
+                          f"{ESPACAMENTO_MAX_TORCAO:g} cm do 18.3.4")
         posicoes.append(det.Posicao(
             numero=numero, tipo="pele", n=2 * n_face, n_faces=2, phi=phi_l,
             face="alma", x_ini=a, x_fim=b, comprimento=(b - a) * 100.0,
-            descricao=f"Armadura lateral de torção do tramo {i_tramo + 1} "
-                      f"({asl:.2f} cm² distribuídos nas duas faces — 17.5.1.6)",
-            tramo=i_tramo, As_torcao=asl))
+            s=passo, faixa_altura=(min(alturas), max(alturas)),
+            descricao=descricao + ")", tramo=i_tramo, As_torcao=asl))
         numero += 1
 
     # armadura de pele
@@ -1636,14 +1789,21 @@ def _cortar_na_junta(viga: Viga, junta: al.Junta, face: str,
     return numero, cortadas, so_construtivo
 
 
-def _cadeia_de_cobertura(grupo: list[det.Posicao], x_fim: float
-                         ) -> list[det.Posicao]:
+def _cadeia_de_cobertura(grupo: list[det.Posicao], x_fim: float,
+                         basta=None) -> list[det.Posicao]:
     """Sequência de posições que garante a continuidade da face.
 
     É a cobertura do intervalo da viga pelas barras mais longas: são elas que
     seguram os cantos do estribo de ponta a ponta. As barras internas do
     escalonamento não entram, porque a continuidade já está garantida pelas
     barras da cadeia -- alongá-las seria desperdício.
+
+    ``basta(A, B)`` diz se a sobreposição de B sobre A já é um traspasse
+    suficiente. Com ele, entre as barras que alcançam, vale primeiro a que
+    emenda de verdade, e só na falta dela a que vai mais longe: num vão curto
+    três negativas se sobrepõem, e a que chegava mais longe era a do apoio
+    seguinte ao vizinho, com 34 cm sobre a primeira, enquanto a do apoio
+    vizinho, entre as duas, fazia o traspasse inteiro com cada uma.
     """
     ordenadas = sorted(grupo, key=lambda p: (p.x_ini, -p.x_fim))
     cadeia = [ordenadas[0]]
@@ -1651,6 +1811,9 @@ def _cadeia_de_cobertura(grupo: list[det.Posicao], x_fim: float
         atual = cadeia[-1]
         alcancam = [p for p in ordenadas
                     if p.x_ini <= atual.x_fim + 1e-6 and p.x_fim > atual.x_fim]
+        if alcancam and basta is not None:
+            emendam = [p for p in alcancam if basta(atual, p)]
+            alcancam = emendam or alcancam
         if alcancam:
             proxima = max(alcancam, key=lambda p: p.x_fim)
         else:                                # há um vazio: pega a próxima
@@ -1695,6 +1858,19 @@ def _registrar_emenda(A: det.Posicao, B: det.Posicao, l0t: float) -> None:
     A.emendas_vizinhas.append((inicio, l0t * 100.0, B.numero))
 
 
+def barras_entre_cantos_torcao(vao_cm: float) -> int:
+    """Barras intermediárias entre dois cantos para o espaçamento do 18.3.4.
+
+    "As barras longitudinais da armadura de torção podem ter arranjo
+    distribuído ou concentrado ao longo do perímetro interno dos estribos,
+    espaçadas no máximo em 350 mm." Com ``n`` barras entre os cantos há
+    ``n + 1`` intervalos, cada um de ``vao/(n + 1)`` <= 35 cm.
+    """
+    if vao_cm <= ESPACAMENTO_MAX_TORCAO + 1e-9:
+        return 0
+    return int(math.ceil(vao_cm / ESPACAMENTO_MAX_TORCAO - 1e-9)) - 1
+
+
 def _fracoes_perimetro(secao: Secao, rt: to.ResultadoTorcao
                        ) -> tuple[float, float]:
     """Fração de Asl que cabe a uma face horizontal e às duas laterais.
@@ -1709,8 +1885,61 @@ def _fracoes_perimetro(secao: Secao, rt: to.ResultadoTorcao
     return lado_h / ue, 2.0 * lado_v / ue
 
 
+def _reduzir_no_banzo_comprimido(viga: Viga, rt: to.ResultadoTorcao,
+                                 secao: Secao, M_max: float, M_min: float,
+                                 d_inf: float, d_sup: float,
+                                 asl_face: float) -> None:
+    """Redução da armadura longitudinal de torção no banzo comprimido.
+
+    17.7.1.3: "No banzo comprimido pela flexão, a armadura longitudinal de
+    torção pode ser reduzida em função dos esforços de compressão que atuam
+    na espessura efetiva he e no trecho de comprimento Δu correspondente à
+    barra ou feixe de barras consideradas."
+
+    A compressão que conta é a **concomitante mínima**: a face superior só é
+    banzo comprimido se todas as combinações a comprimem (``M_min > 0``), e
+    então o menor momento positivo é o que garante a compressão; a inferior,
+    com ``M_max < 0``. Para esse momento, o bloco retangular (17.2.2) dá a
+    profundidade ``y = λx`` da zona comprimida, e a parte dela que fica na
+    parede da face -- espessura ``min(y, he)`` sobre o trecho ``Δu`` da face
+    no perímetro ``ue`` -- leva
+
+        Fc = σcd · min(y, he) · Δu            Δu = bw − 2 c2
+
+    que dispensa ``Fc/fyd`` de barra longitudinal de torção naquela face. O
+    momento de projeto reduzido nunca vem da torção: se a face não é sempre
+    comprimida, a parcela fica inteira.
+    """
+    conc = viga.concreto
+    g = rt.geometria
+    du = max(secao.bw - 2.0 * g.c2, 0.0)
+    fyd_l = min(viga.aco.fyd_kNcm2, to.FYWD_MAX)
+    sig = conc.sigma_cd
+
+    def reducao(M: float, d: float, face_comprimida: str) -> float:
+        if M <= 1e-9 or d <= 0.0:
+            return 0.0
+        mesa = ((secao.tipo == "T" and face_comprimida == "superior")
+                or (secao.tipo == "T invertida"
+                    and face_comprimida == "inferior"))
+        b = secao.bf if mesa else secao.bw
+        disc = d * d - 2.0 * M * 100.0 / (sig * b)
+        if disc <= 0.0:
+            return 0.0             # sem equilíbrio com bloco simples: não reduz
+        y = d - math.sqrt(disc)
+        if mesa and y > secao.hf:
+            y = secao.hf           # só a mesa, a favor da segurança
+        return sig * min(y, g.he) * du / fyd_l
+
+    red_sup = min(asl_face, reducao(M_min, d_inf, "superior"))
+    red_inf = min(asl_face, reducao(-M_max, d_sup, "inferior"))
+    rt.Asl_sup = asl_face - red_sup
+    rt.Asl_inf = asl_face - red_inf
+    rt.reducao_banzo = max(red_sup, red_inf)
+
+
 def _somar_asl_longitudinal(viga: Viga, regioes: list[Regiao], x: np.ndarray,
-                            asl_face: np.ndarray, asl_lat: np.ndarray,
+                            asl_faces: tuple, asl_lat: np.ndarray,
                             As_inf: np.ndarray, As_sup: np.ndarray,
                             avisos: list[str],
                             phi_t_regiao: dict[str, float] | None = None,
@@ -1728,8 +1957,9 @@ def _somar_asl_longitudinal(viga: Viga, regioes: list[Regiao], x: np.ndarray,
     (tramo, Asl_lateral em cm²) para o detalhamento montar as barras laterais.
     """
     cfg = viga.config
-    As_inf = np.nan_to_num(As_inf) + asl_face
-    As_sup = np.nan_to_num(As_sup) + asl_face
+    asl_inf, asl_sup = asl_faces
+    As_inf = np.nan_to_num(As_inf) + asl_inf
+    As_sup = np.nan_to_num(As_sup) + asl_sup
 
     # redimensiona as barras das regiões com o acréscimo da torção
     cob = _cobrimento(viga)
@@ -1739,6 +1969,7 @@ def _somar_asl_longitudinal(viga: Viga, regioes: list[Regiao], x: np.ndarray,
         m = (x >= r.x_ini - 1e-9) & (x <= r.x_fim + 1e-9)
         if not m.any():
             continue
+        asl_face = asl_inf if r.face == "inferior" else asl_sup
         r.As_torcao = float(np.max(asl_face[m]))
         if r.As_torcao <= 1e-6:
             continue
@@ -1747,6 +1978,10 @@ def _somar_asl_longitudinal(viga: Viga, regioes: list[Regiao], x: np.ndarray,
         # do arranjo antigo (46,1 cm) ao lado do arranjo novo (45,9 cm)
         phi_t_r = max(cfg.phi_estribo, (phi_t_regiao or {}).get(r.nome, 0.0))
         d_linha = cob + phi_t_r / 10.0 + 1.0
+        # 18.3.4: as barras da face que leva torção ficam a no máximo 35 cm
+        # umas das outras; os dois cantos já contam
+        n_min = 2 + barras_entre_cantos_torcao(
+            r.secao.bw - 2.0 * (cob + phi_t_r / 10.0))
         flexao = r.flexao
         for _ in range(8):
             alvo = flexao.As_adotado + r.As_torcao
@@ -1754,7 +1989,8 @@ def _somar_asl_longitudinal(viga: Viga, regioes: list[Regiao], x: np.ndarray,
                 r.secao, alvo, cob, phi_t_r, cfg.d_agregado,
                 cfg.phi_min_longitudinal, cfg.phi_max_longitudinal,
                 _phi_imposta(viga, r.nome)
-                or (phi_flexao or {}).get(r.nome, 0.0), n_ramos=cfg.n_ramos)
+                or (phi_flexao or {}).get(r.nome, 0.0), n_min=n_min,
+                n_ramos=cfg.n_ramos)
             flexao = fl.dimensionar(r.secao, viga.concreto, viga.aco, r.M,
                                     d_linha, r.secao.h - arranjo.d,
                                     delta=cfg.redistribuicao)
@@ -2093,7 +2329,15 @@ def conferir_continuidade(viga: Viga, posicoes: list[det.Posicao],
                     f"N{p.numero} chega à extremidade direita sem gancho.")
         if len(grupo) < 2:
             continue
-        cadeia = _cadeia_de_cobertura(grupo, xf)
+
+        def basta(A, B, face=face):
+            if travadas_na_junta(A, B):
+                return True
+            h_ = viga.secao_em((A.x_fim + B.x_ini) / 2.0).h
+            return A.x_fim - B.x_ini >= _traspasse_necessario(
+                viga, max(A.phi, B.phi), face, h_,
+                A.comprimida and B.comprimida) / 100.0 - 1e-6
+        cadeia = _cadeia_de_cobertura(grupo, xf, basta)
         for A, B in zip(cadeia, cadeia[1:]):
             if travadas_na_junta(A, B):
                 continue                     # níveis diferentes: não é emenda
@@ -2282,7 +2526,10 @@ def _armar_ligacao_mesa(viga: Viga, posicoes: list[det.Posicao], numero: int,
         area = area_barra(phi)
         s_cm = min(20.0, area / LIGACAO_MESA_ALMA_MINIMA * 100.0)
         n = max(2, int(math.ceil(L * 100.0 / s_cm)) + 1)
-        largura_util = (tr.secao.bf - tr.secao.bw) / 2.0 + tr.secao.bw
+        # da ponta da mesa até a face oposta da alma: na T, metade da aba de
+        # cada lado; na L (mesa de um lado só), a aba inteira
+        largura_util = (max(tr.secao.aba_esquerda, tr.secao.aba_direita)
+                        + tr.secao.bw)
         novas.append(det.Posicao(
             numero=numero, tipo="ligacao", n=n, phi=phi, face="alma",
             x_ini=tr.x_ini, x_fim=tr.x_fim,
@@ -2395,6 +2642,10 @@ def _porta_estribos(viga: Viga, posicoes: list[det.Posicao], numero: int,
                                  candidatas[-1])
                     n_p = max(n_p, math.ceil(falta_As / area_barra(phi_p)
                                              - 1e-9))
+                    # a barra leva torção: espaçamento máximo do 18.3.4
+                    n_p = max(n_p, 2 + barras_entre_cantos_torcao(
+                        tr.secao.bw - 2.0 * (_cobrimento(viga)
+                                             + phi_estribo / 10.0)))
                     l0t = anc.traspasse(conc, aco, phi_p, 1.0, 1.0,
                                         face, tr.secao.h) / 100.0
                 x0 = max(a - l0t, xi)
@@ -2708,6 +2959,18 @@ def _ancorar_torcao_nos_extremos(viga: Viga, posicoes: list[det.Posicao],
     return saida
 
 
+def _ha_pilar_embaixo(ap) -> bool:
+    """Se o apoio de extremidade tem pilar monolítico onde a barra desça.
+
+    Engaste e mola representam a ligação com o pilar (a mola é a rigidez
+    dele); o apoio simples só tem pilar embaixo se o projetista disser quanto
+    -- é o que a altura do pilar abaixo da viga declara. Livre não tem.
+    """
+    if ap.tipo in ("engaste", "mola"):
+        return True
+    return ap.tipo == "simples" and ap.altura_pilar_abaixo > 1e-9
+
+
 def _ancorar_negativa_nos_extremos(viga: Viga, regioes: list[Regiao],
                                    posicoes: list[det.Posicao],
                                    avisos: list[str]
@@ -2722,13 +2985,17 @@ def _ancorar_negativa_nos_extremos(viga: Viga, regioes: list[Regiao],
 
     * Se o trecho reto (com o gancho, quando o 9.4.2.5 admite α = 0,7) basta,
       fica como está.
-    * Se não basta e o apoio é **engaste**, a barra desce no apoio (pilar ou
+    * Se não basta e há **pilar monolítico embaixo** -- engaste, mola (que é
+      a rigidez do pilar) ou apoio simples com a altura do pilar informada
+      (:func:`_ha_pilar_embaixo`) --, a barra desce no apoio (pilar ou
       parede): a perna vertical cresce até que os trechos retos somem lb,nec
       de ancoragem **reta** -- a perna longa não é o gancho padronizado, e por
       isso o α = 0,7 não entra. A curva fica num nó de pórtico, e o 18.2.2
       pede ali diâmetro de 15 Ø (CA-50), reduzível na proporção da tensão da
       barra no início da curva, nunca abaixo do pino do gancho.
-    * Se não basta e o apoio não é engaste, é erro: não há onde descer.
+    * Se não basta e não há pilar embaixo, é erro: não há onde descer. Só o
+      engaste deixava descer, e num edifício com as vigas apoiadas em mola
+      quase toda extremidade reprovava (Ø16 exigindo 74 cm com 17 cm retos).
 
     A barra é tomada inteira em má aderência, também na perna vertical, que
     está em boa (9.3.1) -- a favor da segurança.
@@ -2788,15 +3055,17 @@ def _ancorar_negativa_nos_extremos(viga: Viga, regioes: list[Regiao],
                 solucao=("trecho reto e gancho" if com_gancho
                          else "trecho reto")))
             continue
-        if ap.tipo != "engaste" or not cfg.ancoragem_gancho \
+        if not _ha_pilar_embaixo(ap) or not cfg.ancoragem_gancho \
                 or tipo == gk.SEM_GANCHO:
             saida.append(anc.AncoragemNegativa(
                 apoio=k + 1, phi=phi, As_calc=As_calc, As_ef=As_ef,
                 lb_nec=reta.lb_nec, piso=piso, exigido=exigido_gancho,
                 l_reto=l_reto, diametro_curva=pino, perna=perna_atual,
                 desenvolvido=l_reto, ok=False, solucao="não cabe"))
-            motivo = ("o apoio não é engaste, e não há onde a barra descer"
-                      if ap.tipo != "engaste" else
+            motivo = ("o apoio é simples e não há pilar informado abaixo "
+                      "da viga, onde a barra pudesse descer (se o pilar for "
+                      "monolítico, informe a altura dele no apoio)"
+                      if not _ha_pilar_embaixo(ap) else
                       "o gancho está desligado nos critérios")
             avisos.append(av.erro(
                 f"Apoio {k + 1}: a armadura negativa ({reg.nome}, Ø{phi:g}) "
@@ -2863,7 +3132,7 @@ def _ancorar_negativa_nos_extremos(viga: Viga, regioes: list[Regiao],
         if problemas:
             avisos.append(av.erro(
                 f"Apoio {k + 1}: a armadura negativa ({reg.nome}, Ø{phi:g}) "
-                f"precisa descer {perna:.0f} cm no engaste para ancorar "
+                f"precisa descer {perna:.0f} cm no pilar para ancorar "
                 f"(18.3.2.4-d e 18.3.2.4.1), mas " + " e ".join(problemas)
                 + ". Alargue ou aprofunde o apoio, reduza a bitola ou detalhe "
                   "o nó à mão."))
@@ -2878,7 +3147,7 @@ def _ancorar_negativa_nos_extremos(viga: Viga, regioes: list[Regiao],
                         f"o cobrimento) — confira, ou informe-a no apoio.")
         avisos.append(av.construtivo(
             f"Apoio {k + 1}: a armadura negativa ({reg.nome}, Ø{phi:g}) não "
-            f"ancora nos {l_reto:.0f} cm do engaste (exige {exigido:.0f} cm a "
+            f"ancora nos {l_reto:.0f} cm do apoio (exige {exigido:.0f} cm a "
             f"partir da face, 18.3.2.4-d e 18.3.2.4.1) e desce {perna:.0f} cm "
             f"no pilar. A curva fica num nó de pórtico: pino D ≥ "
             f"{diametro:.0f} cm (18.2.2, reduzido pela tensão no início da "
@@ -3210,94 +3479,247 @@ def _verificar_taxa_maxima(regioes: list[Regiao],
                 f"emendas). Aumente a seção ou o fck."))
 
 
-def _armar_suspensao(viga: Viga, posicoes: list[det.Posicao],
-                     zonas: list[det.ZonaEstribo],
-                     avisos: list[str]) -> None:
-    """Armadura de suspensão sob carga indireta (18.3.6).
+@dataclass
+class Suspensao:
+    """Armadura de suspensão de um cruzamento, posta nesta viga (18.3.6).
 
-    Onde outra viga se apoia nesta -- ou fica nela pendurada --, a carga não
-    entra pelo banzo comprimido e tem de ser "pendurada" por armadura própria,
-    **somada** à de cisalhamento. São dois casos, e a conta de um não serve
-    para o outro:
-
-    * **viga apoiada, não pendurada** (o caso corrente): o item manda pôr ao
-      menos 75 % do tirante ``Vd/fyd`` na viga de apoio, numa extensão máxima
-      de ``h`` da viga de apoio centrada no cruzamento. Os 25 % restantes ficam
-      na viga apoiada, que não é modelada aqui;
-
-    * **viga pendurada** -- "quando a face inferior da viga apoiada está abaixo
-      da face inferior da viga de apoio". A norma não a detalha, e o critério
-      corrente (Fusco) é ``As,susp,1 = Vd/fyd`` **inteiro**, para levar a força
-      da borda inferior da viga apoiada até a borda superior da viga de apoio,
-      **mais** ``As,susp,2 = Vd/2fyd`` de reforço da região que recebe a força.
-      São 150 % do tirante, o dobro do outro caso, e **nada** vai para a viga
-      apoiada -- ela é que está pendurada.
-
-    Tratar pendurada como apoiada armaria metade do necessário, e é por isso
-    que a distinção é entrada de dados e não padrão.
+    ``papel`` é ``"viga de apoio"`` (outra viga se apoia nesta) ou ``"viga
+    apoiada"`` (esta se apoia noutra). Áreas em cm², x em m, s em cm.
     """
-    indiretas = [c for c in viga.concentradas if getattr(c, "indireta", False)]
-    if not indiretas or not zonas:
-        return
-    cfg = viga.config
-    cob = _cobrimento(viga)
-    aco = viga.aco
-    numero = max((p.numero for p in posicoes), default=0)
-    novas: list[det.Posicao] = []
-    for c in indiretas:
-        gamma = cfg.gamma_g if c.acao == "g" else cfg.gamma_q
-        Fsd = gamma * abs(c.P)
-        As_tirante = Fsd / aco.fyd_kNcm2
-        pendurada = bool(getattr(c, "pendurada", False))
-        # 100 % para suspender + 50 % de reforço, contra 75 % da viga apoiada
-        As_viga = (1.5 if pendurada else 0.75) * As_tirante
-        secao = viga.secao_em(c.x)
-        zona = _zona_em(zonas, c.x)
-        if zona is None:
+
+    papel: str
+    descricao: str
+    x: float                  # m, ponto de cruzamento
+    Vd: float                 # kN, força a suspender
+    fator: float              # redução por faces superiores coincidentes
+    parcela: float            # 0,75 / 0,25 / 1,5 / 0 do tirante
+    pendurada: bool
+    As_tirante: float         # Vd/fyd, sem fator nem parcela
+    As_susp: float            # parcela.fator.Vd/fyd, nesta viga
+    xa: float                 # m, faixa da suspensão
+    xb: float
+    asw_cis: float            # cm², cisalhamento exigido na faixa
+    phi: float = 0.0
+    s: float = 0.0
+    n: int = 0                # estribos na faixa
+    As_ef: float = 0.0        # cm², o que os estribos da faixa dão
+    ok: bool = True
+
+
+def _faixa_que_suspende(viga: Viga, zonas: list[det.ZonaEstribo], xa: float,
+                        xb: float, As_susp: float,
+                        s_teto: float = float("inf")
+                        ) -> tuple[float, float, float, float] | None:
+    """``(bitola, espaçamento, cisalhamento exigido, área necessária)``.
+
+    A armadura de suspensão é **somada** à de cisalhamento (18.3.6): na faixa
+    de ``xa`` a ``xb`` os estribos têm de dar o cisalhamento que a faixa já
+    exige mais a suspensão. Entre as bitolas que vão do estribo da faixa ao
+    teto (a bitola imposta do tramo ou bw/10, 18.3.3.2), fica a de menos aço por
+    metro com espaçamento de grade de pelo menos o mínimo prático.
+    """
+    perto = [z for z in zonas if z.x_fim > xa + 1e-9 and z.x_ini < xb - 1e-9]
+    if not perto or xb - xa <= 1e-6:
+        return None
+    ref = max(perto, key=lambda z: z.x_fim - z.x_ini)
+    L = (xb - xa) * 100.0
+    asw_cis = max(z.asw_req for z in perto) * L / 100.0
+    necessaria = asw_cis + As_susp
+    imposta = float((viga.config.bitolas_estribo or {})
+                    .get(str(ref.tramo), 0.0) or 0.0)
+    secao = viga.secao_em((xa + xb) / 2.0)
+    teto = imposta or min(secao.bw, max(det.BITOLAS_ESTRIBOS))
+    melhor = None
+    for phi in det.BITOLAS_ESTRIBOS:
+        if phi < ref.phi - 1e-9 or phi > teto + 1e-9:
             continue
-        extensao = secao.h                      # h da viga de apoio, cm
-        por_estribo = zona.n_ramos * area_barra(zona.phi)
-        n_estribos = max(1, math.ceil(As_viga / por_estribo - 1e-9))
-        s_susp = min(zona.s, extensao / max(n_estribos, 1))
-        numero += 1
-        novas.append(det.Posicao(
-            numero=numero, tipo="suspensao", n=n_estribos, phi=zona.phi,
-            n_ramos_efetivo=cfg.n_ramos,
-            face="alma", x_ini=c.x - extensao / 200.0,
-            x_fim=c.x + extensao / 200.0,
-            comprimento=_comprimento_estribo(
-                secao, cob, zona.phi, cfg.pernas_amarracao_estribo,
-                zona.n_ramos, cfg.gancho_estribo),
-            s=round(s_susp, 1), tramo=zona.tramo,
-            descricao=(
-                f"Armadura de suspensão da carga indireta de {abs(c.P):g} kN "
-                f"em x = {c.x:.2f} m — "
-                + (f"viga pendurada: 100 % do tirante para suspender mais "
-                   f"50 % de reforço ({As_viga:.2f} de {As_tirante:.2f} cm²)"
-                   if pendurada else
-                   f"75 % do tirante ({As_viga:.2f} de {As_tirante:.2f} cm²)")
-                + f" em {extensao:.0f} cm centrados no cruzamento "
-                  f"(18.3.6)")))
-    if novas:
-        posicoes.extend(novas)
-        n_pend = sum(1 for c in indiretas
-                     if bool(getattr(c, "pendurada", False)))
-        avisos.append(av.construtivo(
-            f"Acrescentada armadura de suspensão em {len(novas)} carga(s) "
-            f"indireta(s): o item 18.3.6 exige que a carga trazida por outra "
-            f"viga seja pendurada por armadura própria, somada à de "
-            f"cisalhamento, com pelo menos 75 % do tirante nesta viga. Os 25 % "
-            f"restantes vão na viga apoiada, fora deste modelo."))
-        if n_pend:
+        por_estribo = ref.n_ramos * area_barra(phi)
+        n = max(2, math.ceil(necessaria / por_estribo - 1e-9))
+        # L/(n-1) supõe um estribo em cada ponta da faixa; quando a grade cai
+        # defasada, quem chama conta os estribos e aperta um degrau (s_teto)
+        s_calc = min(L / (n - 1), min(z.s for z in perto), s_teto)
+        praticos = [v for v in det.ESPACAMENTOS
+                    if ESPACAMENTO_MINIMO_ESTRIBO - 1e-9 <= v <= s_calc + 1e-9]
+        if not praticos:
+            continue
+        s = praticos[-1]
+        custo = area_barra(phi) / s
+        if melhor is None or custo < melhor[0] - 1e-12:
+            melhor = (custo, phi, s)
+    if melhor is None:
+        return None
+    return melhor[1], melhor[2], asw_cis, necessaria
+
+
+def _suspensao_nas_faixas(viga: Viga, zonas: list[det.ZonaEstribo],
+                          sols_elu: list, avisos: list[str]
+                          ) -> list[Suspensao]:
+    """Armadura de suspensão (18.3.6) embutida nas faixas dos estribos.
+
+    Dois papéis, e uma viga pode ter os dois:
+
+    * **viga de apoio** -- outra viga se apoia nesta (carga concentrada
+      indireta). Vai aqui no mínimo 75 % do tirante ``Vd/fyd``, em ``h`` desta
+      viga centrado no cruzamento, ou em ``h/2`` de um lado só quando ela não
+      continua além dele. Com a viga apoiada pendurada (face inferior abaixo da
+      desta), vai tudo aqui e mais o reforço: 150 % (critério de Fusco; a norma
+      só define a situação);
+    * **viga apoiada** -- esta se apoia noutra viga (apoio indireto). Vai aqui
+      no máximo 25 %, em ``h`` desta viga a partir do cruzamento, da face da
+      viga de apoio para dentro do vão. Pendurada, nada.
+
+    Com as faces superiores coincidentes, a carga de suspensão é reduzida por
+    ``1 - h_susp/h_viga apoio``, ``h_susp`` a diferença entre as faces
+    inferiores. A suspensão é somada ao cisalhamento e entra como **faixa
+    adensada do próprio estribo** -- o que saía antes eram estribos soltos de
+    outra posição, só cotados no desenho.
+    """
+    cfg = viga.config
+    fyd = viga.aco.fyd_kNcm2
+    cob = _cobrimento(viga) / 100.0
+    xi_f, xf_f = viga.x_inicio_fisico, viga.x_fim_fisico
+    pedidos: list[Suspensao] = []
+
+    # -- viga de apoio: as cargas indiretas, somadas por cruzamento ----------
+    por_x: dict[float, list] = {}
+    for c in viga.concentradas:
+        if getattr(c, "indireta", False):
+            por_x.setdefault(round(c.x, 4), []).append(c)
+    for xc, cargas in sorted(por_x.items()):
+        Fsd = sum((cfg.gamma_g if c.acao == "g" else cfg.gamma_q) * c.P
+                  for c in cargas)
+        if Fsd <= 1e-9:
+            continue
+        h = viga.secao_em(xc).h
+        h_ap = max(c.h_apoiada for c in cargas)
+        alinhados = any(c.topos_alinhados for c in cargas)
+        pendurada = (any(c.pendurada for c in cargas)
+                     or (alinhados and h_ap > h + 1e-9))
+        fator = 1.0
+        if not pendurada and alinhados and 1e-9 < h_ap < h:
+            fator = 1.0 - (h - h_ap) / h
+        parcela = 1.5 if pendurada else 0.75
+        As_t = Fsd / fyd
+        xa = max(xc - h / 200.0, xi_f + cob)
+        xb = min(xc + h / 200.0, xf_f - cob)
+        origem = next((c.origem for c in cargas if c.origem), "")
+        pedidos.append(Suspensao(
+            papel="viga de apoio",
+            descricao=(f"reação de {origem}" if origem else
+                       f"carga indireta em x = {xc:.2f} m"),
+            x=xc, Vd=Fsd, fator=fator, parcela=parcela, pendurada=pendurada,
+            As_tirante=As_t, As_susp=parcela * fator * As_t, xa=xa, xb=xb,
+            asw_cis=0.0))
+
+    # -- viga apoiada: os apoios indiretos ------------------------------------
+    for k, ap in enumerate(viga.apoios):
+        if not ap.indireto or ap.tipo == "livre" or not sols_elu:
+            continue
+        Vd = max(float(s.reacoes[k]) for s in sols_elu)
+        if Vd <= 1e-9:
+            continue
+        xk = viga.x_apoios[k]
+        h_ap = viga.secao_de_apoio(k).h
+        h_apoio = ap.h_viga_apoio
+        pendurada = ap.topos_alinhados and h_apoio > 1e-9 and h_ap > h_apoio
+        fator = 1.0
+        if (not pendurada and ap.topos_alinhados and h_apoio > 1e-9
+                and h_ap < h_apoio):
+            fator = 1.0 - (h_apoio - h_ap) / h_apoio
+        parcela = 0.0 if pendurada else 0.25
+        As_t = Vd / fyd
+        face = ap.largura / 200.0
+        lados = []
+        if k > 0:
+            lados.append((xk - max(h_ap / 200.0, face + 0.05), xk - face))
+        if k < len(viga.apoios) - 1:
+            lados.append((xk + face, xk + max(h_ap / 200.0, face + 0.05)))
+        for xa, xb in lados:
+            pedidos.append(Suspensao(
+                papel="viga apoiada",
+                descricao=(f"apoio {k + 1} na viga {ap.viga_apoio}"
+                           if ap.viga_apoio else f"apoio {k + 1} em viga"),
+                x=xk, Vd=Vd, fator=fator, parcela=parcela,
+                pendurada=pendurada, As_tirante=As_t,
+                As_susp=parcela * fator * As_t / len(lados),
+                xa=max(xa, xi_f + cob), xb=min(xb, xf_f - cob), asw_cis=0.0))
+        if h_apoio <= 1e-9:
             avisos.append(av.construtivo(
-                f"{n_pend} carga(s) marcada(s) como viga pendurada — face "
-                f"inferior da viga apoiada abaixo da desta. Nesse caso a "
-                f"armadura é 150 % do tirante (100 % para suspender a força "
-                f"até o banzo comprimido, mais 50 % de reforço da região), "
-                f"toda nesta viga, e os ramos verticais dos estribos têm de "
-                f"ir da borda inferior da viga apoiada até a borda superior "
-                f"desta — o comprimento tabelado aqui é o do estribo desta "
-                f"viga e precisa ser alongado no desenho."))
+                f"Apoio {k + 1} em viga sem a altura da viga de apoio: a "
+                f"suspensão desta viga foi feita sem a redução de faces "
+                f"superiores coincidentes (18.3.6) e supondo que ela não é "
+                f"pendurada. Informe a altura, ou ponha as duas vigas no "
+                f"mesmo projeto."))
+
+    feitas: list[Suspensao] = []
+    for su in pedidos:
+        if su.As_susp <= 1e-9:
+            feitas.append(su)
+            continue
+        # a faixa que a conta pede, contada depois de dividir as zonas: com a
+        # grade defasada (faixa com o espaçamento da zona, que não se separa
+        # dela) pode faltar um estribo, e então o espaçamento desce um degrau
+        teto = float("inf")
+        escolha = None
+        for _ in range(len(det.ESPACAMENTOS)):
+            faixa = _faixa_que_suspende(viga, zonas, su.xa, su.xb, su.As_susp,
+                                        teto)
+            if faixa is None:
+                break
+            phi, s, asw_cis, _necessaria = faixa
+            tentativa = _dividir_faixas(
+                zonas, [(su.xa, su.xb, phi, s, su.descricao)],
+                marca="suspensao")
+            dentro = [z for z in tentativa
+                      if z.x_fim > su.xa + 1e-9 and z.x_ini < su.xb - 1e-9]
+            n_tem, area_um_ramo, _s = _estribos_no_intervalo(tentativa, su.xa,
+                                                             su.xb)
+            area = area_um_ramo * min(z.n_ramos for z in dentro)
+            escolha = (tentativa, phi, s, asw_cis, n_tem, area)
+            if area >= asw_cis + su.As_susp - 1e-6:
+                break
+            abaixo = [v for v in det.ESPACAMENTOS
+                      if ESPACAMENTO_MINIMO_ESTRIBO - 1e-9 <= v < s - 1e-9]
+            if not abaixo:
+                break
+            teto = abaixo[-1]
+        if escolha is None:
+            su.ok = False
+            feitas.append(su)
+            avisos.append(av.erro(
+                f"Suspensão ({su.descricao}, 18.3.6): {su.As_susp:.2f} cm² "
+                f"somados ao cisalhamento não cabem em estribos na faixa de "
+                f"x = {su.xa:.2f} a {su.xb:.2f} m, nem no espaçamento mínimo "
+                f"nem na bitola máxima. Aumente a seção ou detalhe à mão."))
+            continue
+        tentativa, phi, s, asw_cis, n_tem, area = escolha
+        zonas[:] = tentativa
+        su.phi, su.s, su.asw_cis, su.n, su.As_ef = phi, s, asw_cis, n_tem, area
+        su.ok = area >= asw_cis + su.As_susp - 1e-6
+        if not su.ok:
+            avisos.append(av.erro(
+                f"Suspensão ({su.descricao}, 18.3.6): a faixa de x = "
+                f"{su.xa:.2f} a {su.xb:.2f} m dá {area:.2f} cm² com {n_tem} "
+                f"estribos Ø{phi:g}, e pede {asw_cis:.2f} de cisalhamento mais "
+                f"{su.As_susp:.2f} de suspensão. Aumente a seção ou detalhe à "
+                f"mão."))
+        feitas.append(su)
+    if any(su.papel == "viga apoiada" for su in feitas):
+        avisos.append(av.construtivo(
+            "Apoio em outra viga (18.3.6): nesta viga vão no máximo 25 % da "
+            "armadura de suspensão, em faixa adensada dos estribos junto à "
+            "viga de apoio; os estribos desta viga param na face dela e "
+            "seguem os da viga de apoio, e a armadura inferior desta viga "
+            "passa por cima da armadura inferior da viga de apoio, para "
+            "fechar o nó das duas treliças."))
+    if any(su.papel == "viga de apoio" for su in feitas):
+        avisos.append(av.construtivo(
+            "Armadura de suspensão (18.3.6) somada à de cisalhamento e embutida "
+            "nos estribos: 75 % do tirante nesta viga, que é a de apoio (150 % "
+            "quando a apoiada é pendurada), em faixa adensada de h centrada no "
+            "cruzamento (h/2 de um lado só quando a viga não continua além "
+            "dele). Os outros 25 % vão na viga apoiada."))
+    return feitas
 
 
 def _verificar_fadiga(viga: Viga, est: Estrutura,
@@ -3870,9 +4292,322 @@ def _faixas_de_costura(viga: Viga, posicoes: list[det.Posicao],
     return sorted(faixas)
 
 
+# ---------------------------------------------------------------------------
+# Armadura transversal na ancoragem (9.4.2.6)
+# ---------------------------------------------------------------------------
+
+#: 9.4.2.6.1 -- fração da força longitudinal de uma barra ancorada
+FRACAO_TRANSVERSAL_ANCORAGEM = anc.FRACAO_TRANSVERSAL_ANCORAGEM
+
+#: 9.4.2.6.2 -- espaçamento máximo da armadura transversal, em Ø da barra
+#: ancorada, para Ø >= 32 mm
+ESPACAMENTO_TRANSVERSAL_PHI32 = 5.0
+
+#: 9.4.1.1 -- cobrimento e distância entre barras, em Ø, que confinam a
+#: ancoragem pelo próprio concreto
+CONFINAMENTO_PELO_CONCRETO = 3.0
+
+
+@dataclass
+class TransversalAncoragem:
+    """Armadura transversal ao longo de uma ancoragem (9.4.2.6).
+
+    ``A_nec`` é a área que resiste a 25 % da força da maior barra ancorada;
+    ``A_ef`` conta um ramo por estribo dentro do comprimento de ancoragem,
+    onde o desenho os põe (``_estribos_no_intervalo``).
+    """
+
+    descricao: str
+    face: str
+    phi: float                # mm, maior barra ancorada
+    xa: float                 # m
+    xb: float                 # m
+    A_nec: float              # cm²
+    n: int = 0                # estribos dentro de [xa, xb]
+    A_ef: float = 0.0         # cm², um ramo por estribo
+    s_max: float = 0.0        # cm, maior espaçamento dentro da ancoragem
+    s_lim: float = 0.0        # cm, 5 Ø para Ø >= 32 (0 = não se aplica)
+    dispensada: bool = False  # 9.4.1.1, confinada pelo próprio concreto
+    motivo_dispensa: str = ""
+    adensada: bool = False    # recebeu faixa adensada
+
+    @property
+    def ok(self) -> bool:
+        if self.dispensada:
+            return True
+        return (self.A_ef >= self.A_nec - 1e-6
+                and (self.s_lim <= 0.0 or self.s_max <= self.s_lim + 1e-6))
+
+    @property
+    def veredito(self) -> str:
+        if self.dispensada:
+            return "DISPENSADA"
+        return "OK" if self.ok else "NÃO OK"
+
+
+def _janelas_de_ancoragem(viga: Viga, regioes: list[Regiao],
+                          apoios_extremos: list, ancoragens_negativas: list
+                          ) -> list[tuple]:
+    """Os comprimentos de ancoragem da viga: ``(descrição, face, Ø, xa, xb,
+    região)``.
+
+    * as pontas dos **cortes** do escalonamento que ficam aquém dos extremos
+      que a barra poderia alcançar: ali a barra é prolongada de ``lb,nec``
+      além do ponto em que deixa de ser necessária, e esse ``lb,nec`` é o
+      comprimento de ancoragem;
+    * a armadura positiva nos **apoios de extremidade**, da face do apoio à
+      ponta da barra (18.3.2.4.1), e a negativa que ancora no mesmo apoio.
+
+    Traspasse não entra: a emenda tem a sua própria costura (9.5.2.4). Apoio
+    em outra viga também não: ali os estribos desta param na face da viga de
+    apoio, e quem confina a ancoragem é a armadura dela.
+    """
+    janelas = []
+    xi_f, xf_f = viga.x_inicio_fisico, viga.x_fim_fisico
+    tol = 1e-3
+    for r in regioes:
+        if r.construtiva or not r.cortes:
+            continue
+        x_min, x_max = r.limites_barra
+        for c in r.cortes:
+            lb = c.lb_nec / 100.0
+            if c.x_ini > x_min + tol:
+                janelas.append((f"{r.nome}: corte em x = {c.x_ini:.2f} m",
+                                r.face, r.arranjo.phi, max(c.x_ini, xi_f),
+                                min(c.x_ini + lb, c.x_fim), r))
+            if c.x_fim < x_max - tol:
+                janelas.append((f"{r.nome}: corte em x = {c.x_fim:.2f} m",
+                                r.face, r.arranjo.phi,
+                                max(c.x_fim - lb, c.x_ini),
+                                min(c.x_fim, xf_f), r))
+    n_ap = len(viga.apoios)
+
+    def janela_no_apoio(k: int, l_cm: float) -> tuple[float, float]:
+        # a barra para a um cobrimento da extremidade: a janela vai até a
+        # extremidade física, senão sobrava um fiapo de zona de 3 cm entre a
+        # ponta da barra e a face da viga, com estribos próprios
+        ap = viga.apoios[k]
+        if k == 0:
+            face = viga.x_apoios[0] + ap.largura / 200.0
+            xa = face - l_cm / 100.0
+            return (xi_f if xa - xi_f < 0.10 else xa), face
+        face = viga.x_apoios[-1] - ap.largura / 200.0
+        xb = face + l_cm / 100.0
+        return face, (xf_f if xf_f - xb < 0.10 else xb)
+
+    for a in apoios_extremos:
+        k = a.apoio - 1
+        if k not in (0, n_ap - 1) or viga.apoios[k].indireto:
+            continue
+        i_vao = 0 if k == 0 else len(viga.tramos) - 1
+        reg = next((r for r in regioes if r.tipo == "vao"
+                    and not r.construtiva and r.indice == i_vao), None)
+        if reg is None or a.l_disponivel <= 1e-6:
+            continue
+        xa, xb = janela_no_apoio(k, a.l_disponivel)
+        janelas.append((f"armadura positiva no apoio {a.apoio}", "inferior",
+                        reg.arranjo.phi, xa, xb, reg))
+    for a in ancoragens_negativas:
+        k = a.apoio - 1
+        if k not in (0, n_ap - 1) or viga.apoios[k].indireto:
+            continue
+        reg = next((r for r in regioes if r.tipo == "apoio"
+                    and r.indice == k and not r.construtiva), None)
+        if a.l_reto <= 1e-6:
+            continue
+        xa, xb = janela_no_apoio(k, a.l_reto)
+        janelas.append((f"armadura negativa no apoio {a.apoio}", "superior",
+                        a.phi, xa, xb, reg))
+    return [j for j in janelas if j[4] - j[3] > 1e-3]
+
+
+def _confinada_pelo_concreto(viga: Viga, reg, phi: float,
+                             phi_t: float) -> tuple[bool, str]:
+    """9.4.1.1: cobrimento >= 3 Ø **e** distância entre barras >= 3 Ø."""
+    if reg is None:
+        return False, ""
+    cob_barra = viga.ambiente.cobrimento_nominal + phi_t / 10.0
+    phi_cm = phi / 10.0
+    n1 = (reg.arranjo.camadas[0] if reg.arranjo.camadas
+          else reg.arranjo.n) or 1
+    if n1 <= 1:
+        livre = float("inf")
+    else:
+        livre = (reg.secao.bw - 2.0 * cob_barra - n1 * phi_cm) / (n1 - 1)
+    lim = CONFINAMENTO_PELO_CONCRETO * phi_cm
+    if cob_barra >= lim - 1e-9 and livre >= lim - 1e-9:
+        return True, (f"cobrimento {cob_barra:.1f} cm e distância livre "
+                      f"{livre:.1f} cm >= 3 Ø = {lim:.1f} cm (9.4.1.1)")
+    return False, ""
+
+
+def _verificar_transversal_ancoragem(viga: Viga, regioes: list[Regiao],
+                                     zonas: list[det.ZonaEstribo],
+                                     apoios_extremos, ancoragens_negativas,
+                                     faixas_feitas: list, avisos: list[str]
+                                     ) -> tuple[list, list]:
+    """Confere a armadura transversal de cada ancoragem (9.4.2.6).
+
+    "Consideram-se as armaduras transversais **existentes** ao longo do
+    comprimento de ancoragem, caso a soma das áreas dessas armaduras seja
+    maior ou igual que as especificadas em 9.4.2.6.1 e 9.4.2.6.2." Então se
+    contam primeiro os estribos que já estão lá; só o que falta vira pedido de
+    faixa adensada, que o passe seguinte embute na distribuição dos estribos
+    (``_ancoragem_nas_faixas``) -- o veredito final é o do passe com a faixa.
+
+    * Ø < 32 mm: área capaz de resistir a 25 % da força de uma barra, a de
+      maior diâmetro: ``A >= 0,25 · As,Ø · fyd / fywd``;
+    * Ø >= 32 mm: a mesma área, conferida nas duas direções transversais
+      (o estribo fechado dá as duas, com a mesma área por estribo), e
+      espaçamento <= 5 Ø;
+    * 9.4.1.1 dispensa quando cobrimento e distância entre barras são >= 3 Ø.
+    """
+    cfg = viga.config
+    if not cfg.verificar_transversal_ancoragem:
+        return [], []
+    fyd = viga.aco.fyd_kNcm2
+    fywd = min(viga.aco_estribo.fyd_kNcm2, to.FYWD_MAX)
+    resultados: list[TransversalAncoragem] = []
+    pedidos: list[tuple] = []
+    for desc, face, phi, xa, xb, reg in _janelas_de_ancoragem(
+            viga, regioes, apoios_extremos, ancoragens_negativas):
+        A_nec = FRACAO_TRANSVERSAL_ANCORAGEM * area_barra(phi) * fyd / fywd
+        dentro = [z for z in zonas
+                  if z.x_fim > xa + 1e-9 and z.x_ini < xb - 1e-9]
+        phi_t = max((z.phi for z in dentro), default=cfg.phi_estribo)
+        item = TransversalAncoragem(
+            descricao=desc, face=face, phi=phi, xa=xa, xb=xb, A_nec=A_nec,
+            s_lim=(ESPACAMENTO_TRANSVERSAL_PHI32 * phi / 10.0
+                   if phi >= 32.0 - 1e-9 else 0.0))
+        item.dispensada, item.motivo_dispensa = _confinada_pelo_concreto(
+            viga, reg, phi, phi_t)
+        n, area, s_max = _estribos_no_intervalo(zonas, xa, xb)
+        item.n, item.A_ef, item.s_max = n, area, s_max
+        item.adensada = any(abs(f[0] - xa) < 1e-3 and abs(f[1] - xb) < 1e-3
+                            for f in faixas_feitas)
+        if not item.ok:
+            pedidos.append((round(xa, 4), round(xb, 4), A_nec, item.s_lim,
+                            desc))
+        resultados.append(item)
+    if any(t.adensada for t in resultados):
+        avisos.append(av.construtivo(
+            "Armadura transversal na ancoragem (9.4.2.6): onde os estribos "
+            "existentes ao longo do comprimento de ancoragem não davam 25 % da "
+            "força da maior barra ancorada, a distribuição dos estribos recebeu "
+            "faixa adensada da mesma posição -- sem peça extra."))
+    return resultados, pedidos
+
+
+def _ancoragem_nas_faixas(viga: Viga, zonas: list[det.ZonaEstribo],
+                          pedidos: list[tuple]) -> list:
+    """Embute nas zonas de estribo as faixas pedidas pelo 9.4.2.6.
+
+    Mesmo procedimento da suspensão: escolhe o espaçamento da grade que põe
+    a área pedida dentro do comprimento de ancoragem, divide as zonas e
+    **conta** os estribos que ficaram lá; se a grade caiu defasada e faltou
+    um, desce um degrau. Não troca a bitola do estribo.
+    """
+    feitas = []
+    for xa, xb, A_nec, s_lim, desc in pedidos:
+        dentro = [z for z in zonas
+                  if z.x_fim > xa + 1e-9 and z.x_ini < xb - 1e-9]
+        if not dentro:
+            continue
+        phi = max(z.phi for z in dentro)
+        L = (xb - xa) * 100.0
+        n_nec = max(1, math.ceil(A_nec / area_barra(phi) - 1e-9))
+        s_alvo = (L / (n_nec - 1) if n_nec > 1
+                  else min(z.s for z in dentro))
+        s_alvo = min(s_alvo, min(z.s for z in dentro))
+        if s_lim > 0.0:
+            s_alvo = min(s_alvo, s_lim)
+        grade = [v for v in det.ESPACAMENTOS
+                 if ESPACAMENTO_MINIMO_ESTRIBO - 1e-9 <= v <= s_alvo + 1e-9]
+        escolha = None
+        for s in reversed(grade):
+            tentativa = _dividir_faixas(zonas, [(xa, xb, phi, s, desc)],
+                                        marca="ancoragem")
+            n, area, s_max = _estribos_no_intervalo(tentativa, xa, xb)
+            escolha = tentativa
+            if area >= A_nec - 1e-6 and (s_lim <= 0.0
+                                         or s_max <= s_lim + 1e-6):
+                break
+        if escolha is None:
+            continue
+        zonas[:] = escolha
+        feitas.append((xa, xb))
+    return feitas
+
+
+@dataclass
+class EspacamentoTorcao:
+    """Barras longitudinais numa face do estribo de torção (18.3.4)."""
+
+    tramo: int
+    face: str
+    n_barras: int             # com os cantos
+    espacamento: float        # cm, eixo a eixo pela face interna do estribo
+
+    @property
+    def ok(self) -> bool:
+        return (self.n_barras >= det.CANTOS_POR_FACE
+                and self.espacamento <= ESPACAMENTO_MAX_TORCAO + 1e-6)
+
+
+def _verificar_espacamento_torcao(viga: Viga, posicoes: list[det.Posicao],
+                                  torcoes: list[to.ResultadoTorcao],
+                                  phi_t: float) -> list[EspacamentoTorcao]:
+    """Confere o 18.3.4 no detalhamento pronto, tramo a tramo com torção.
+
+    * barras longitudinais de torção a no máximo 35 cm ao longo do perímetro
+      interno dos estribos: nas laterais, a distância entre os cantos dividida
+      pelos intervalos que as barras laterais (de torção e de pele) formam;
+      nas faces de cima e de baixo, a largura interna dividida pelos
+      intervalos das barras da primeira camada, no ponto mais pobre do trecho
+      com torção;
+    * uma barra em cada vértice do estribo: duas barras por face, no mínimo.
+
+    O espaçamento é medido pela face interna do estribo (``bw − 2(c + Øt)``),
+    um pouco maior que o de eixo a eixo -- a favor da segurança.
+    """
+    saida: list[EspacamentoTorcao] = []
+    if not torcoes:
+        return saida
+    cob = _cobrimento(viga)
+    c1 = cob + phi_t / 10.0
+    tramos = sorted({viga.tramo_em(t.x) for t in torcoes})
+    for i in tramos:
+        xs = [t.x for t in torcoes if viga.tramo_em(t.x) == i]
+        xa, xb = min(xs), max(xs)
+        xm = 0.5 * (xa + xb)
+        secao = viga.secao_em(xm)
+        laterais = [p for p in posicoes if p.tipo == "pele" and p.tramo == i
+                    and p.x_ini - 1e-9 <= xm <= p.x_fim + 1e-9]
+        n_lat = sum(max(p.n // 2, 1) for p in laterais)
+        livre_v = max(secao.h - 2.0 * c1, 0.0)
+        saida.append(EspacamentoTorcao(
+            tramo=i, face="laterais", n_barras=n_lat + 2,
+            espacamento=livre_v / (n_lat + 1)))
+        livre_h = max(secao.bw - 2.0 * c1, 0.0)
+        for face in ("inferior", "superior"):
+            pior = None
+            for x_k in np.linspace(xa, xb, 9):
+                n1 = sum(p.n for p in posicoes
+                         if p.face == face and p.camada == 1
+                         and p.tipo in ("longitudinal", "porta")
+                         and p.x_ini - 1e-9 <= x_k <= p.x_fim + 1e-9)
+                pior = n1 if pior is None else min(pior, n1)
+            n1 = pior or 0
+            saida.append(EspacamentoTorcao(
+                tramo=i, face=face, n_barras=n1,
+                espacamento=(livre_h / (n1 - 1) if n1 > 1
+                             else float("inf"))))
+    return saida
+
+
 def _dividir_faixas(zonas: list[det.ZonaEstribo],
-                    faixas: list[tuple[float, float, float, float, str]]
-                    ) -> list[det.ZonaEstribo]:
+                    faixas: list[tuple[float, float, float, float, str]],
+                    marca: str = "costura") -> list[det.ZonaEstribo]:
     """Zonas de estribo com as faixas de costura embutidas.
 
     Cada zona que a faixa atravessa se parte em até três: o que vem antes, a
@@ -3880,6 +4615,8 @@ def _dividir_faixas(zonas: list[det.ZonaEstribo],
     é o menor entre o de costura e o da zona, e a bitola a maior. Uma zona que
     a faixa não aperta fica inteira (partir em três pedaços iguais só
     fragmentaria o desenho), e no fim as zonas vizinhas iguais voltam a ser uma.
+    ``marca`` é o atributo da zona que diz por que ela foi adensada: a costura
+    da emenda ou a suspensão (18.3.6).
     """
     saida = list(zonas)
     for xa, xb, phi, s, _motivo in faixas:
@@ -3905,8 +4642,8 @@ def _dividir_faixas(zonas: list[det.ZonaEstribo],
                     z, x_ini=x0, x_fim=x1, phi=ph, s=esp,
                     asw_ef=det.asw_efetiva(ph, esp, z.n_ramos),
                     n_estribos=max(2, math.ceil((x1 - x0) * 100.0 / esp) + 1),
-                    costura=z.costura or (a, b) == (x0, x1)
-                    and (ph, esp) != (z.phi, z.s)))
+                    **{marca: getattr(z, marca) or (a, b) == (x0, x1)
+                       and (ph, esp) != (z.phi, z.s)}))
         saida = novas
     # zonas vizinhas com a mesma peça e o mesmo espaçamento são uma faixa só
     fundidas: list[det.ZonaEstribo] = []
@@ -3920,6 +4657,8 @@ def _dividir_faixas(zonas: list[det.ZonaEstribo],
             fundidas[-1] = replace(
                 ant, x_fim=z.x_fim, asw_req=max(ant.asw_req, z.asw_req),
                 costura=ant.costura or z.costura,
+                suspensao=ant.suspensao or z.suspensao,
+                ancoragem=ant.ancoragem or z.ancoragem,
                 n_estribos=max(2, math.ceil(
                     (z.x_fim - ant.x_ini) * 100.0 / ant.s) + 1))
         else:

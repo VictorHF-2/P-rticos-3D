@@ -21,12 +21,18 @@ from dataclasses import dataclass, field, asdict
 
 from .materiais import Aco, Ambiente, Concreto
 from . import avisos as av
+from . import aberturas_modelo as abm
+from .aberturas_modelo import Abertura
 
 # ---------------------------------------------------------------------------
 # Seção transversal
 # ---------------------------------------------------------------------------
 
 TIPOS_SECAO = ("retangular", "T", "T invertida")
+#: de que lado da alma fica a mesa colaborante, olhando a seção com o eixo x
+#: da viga entrando no papel: "ambos" é a T simétrica (bf - bw meio a meio);
+#: "esquerda"/"direita" é a viga de borda (seção L), com a laje de um lado só
+LADOS_MESA = ("ambos", "esquerda", "direita")
 
 #: Largura mínima da alma, cm (13.2.2): 12 cm em viga, 15 cm em viga-parede.
 LARGURA_MINIMA_VIGA = 12.0
@@ -48,15 +54,49 @@ class Secao:
     tipo: str = "retangular"
     bf: float = 0.0
     hf: float = 0.0
+    #: lado da mesa (``LADOS_MESA``). A largura colaborante desse lado
+    #: (14.6.2.2: b1 <= 0,1a e <= 0,5 b2; laje em balanço, b3 <= b4) é de quem
+    #: monta a viga -- o programa só respeita o lado. Na flexão em torno do
+    #: eixo horizontal a área, o CG e a inércia não dependem do lado; o lado
+    #: muda o detalhamento da mesa e os desenhos
+    lado_mesa: str = "ambos"
 
     def __post_init__(self) -> None:
         if self.tipo not in TIPOS_SECAO:
             raise ValueError(f"Tipo de seção desconhecido: {self.tipo!r}")
+        if self.lado_mesa not in LADOS_MESA:
+            raise ValueError(f"Lado da mesa desconhecido: {self.lado_mesa!r}")
         if self.tipo == "retangular":
             self.bf = self.bw
             self.hf = 0.0
+            self.lado_mesa = "ambos"
         elif self.bf < self.bw:
             raise ValueError("bf não pode ser menor que bw na seção T.")
+
+    @property
+    def aba_esquerda(self) -> float:
+        """Quanto a mesa avança além da face esquerda da alma, cm."""
+        aba = max(self.bf - self.bw, 0.0)
+        return {"ambos": aba / 2.0, "esquerda": aba}.get(self.lado_mesa, 0.0)
+
+    @property
+    def aba_direita(self) -> float:
+        """Quanto a mesa avança além da face direita da alma, cm."""
+        aba = max(self.bf - self.bw, 0.0)
+        return {"ambos": aba / 2.0, "direita": aba}.get(self.lado_mesa, 0.0)
+
+    @property
+    def n_cantos_mesa(self) -> int:
+        """Barras de canto do laço da mesa: 4 na T simétrica; 3 na L.
+
+        Na L o laço vai da ponta da mesa até a face da alma sem laje. O canto
+        desse lado junto à face externa da mesa cai sobre a barra longitudinal
+        do canto da alma (que já está lá); sobram os dois da ponta e o de
+        dentro, na face da alma.
+        """
+        if self.tipo == "retangular" or self.bf <= self.bw + 1e-9:
+            return 0
+        return 4 if self.lado_mesa == "ambos" else 3
 
     @property
     def area(self) -> float:
@@ -136,8 +176,10 @@ class Secao:
     def descricao(self) -> str:
         if self.tipo == "retangular":
             return f"{self.bw:g}x{self.h:g} cm"
+        lado = ("" if self.lado_mesa == "ambos"
+                else f", mesa à {self.lado_mesa}")
         return (f"{self.tipo} bw={self.bw:g} h={self.h:g} "
-                f"bf={self.bf:g} hf={self.hf:g} cm")
+                f"bf={self.bf:g} hf={self.hf:g} cm{lado}")
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +191,30 @@ TIPOS_APOIO = ("livre", "simples", "engaste", "mola")
 #: o que pode estar apoiado na viga, para o limite de deslocamento após a
 #: construção da parede (Tabela 13.3). As chaves de `els.PAREDE_APOIADA`
 PAREDES_APOIADAS = ("alvenaria", "divisoria", "nenhuma")
+
+
+#: campos acrescentados depois da primeira versão do arquivo, com o valor
+#: padrão: fora da impressão digital quando valem o padrão
+CAMPOS_NOVOS_APOIO = {"altura_pilar_abaixo": 0.0, "viga_apoio": "",
+                      "x_na_viga_apoio": 0.0, "h_viga_apoio": 0.0,
+                      "topos_alinhados": True, "altura_pilar_acima": 0.0,
+                      "largura_pilar_transversal": 0.0}
+CAMPOS_NOVOS_CONCENTRADA = {"h_apoiada": 0.0, "topos_alinhados": False,
+                            "origem": ""}
+#: critérios acrescentados em 19/11/2026 (15.10, 17.6, 17.7.1.3, 23.3,
+#: 9.4.2.6), com o valor padrão
+CAMPOS_NOVOS_CONFIG = {"fissuracao_inclinada_alma": False,
+                       "reduzir_torcao_banzo_comprimido": False,
+                       "face_superior_travada": True, "l0_lateral": 0.0,
+                       "fcrit_vibracao": 0.0,
+                       "verificar_transversal_ancoragem": True,
+                       "modelo_pilares": "classico"}
+
+#: 14.6.6.1 -- como a solidariedade viga-pilar entra no cálculo:
+#: "classico" é a viga contínua simplesmente apoiada nos pilares com as
+#: correções a), b) e c); "rigidez" é a alternativa do item, com a rigidez à
+#: flexão dos pilares introduzida no modelo como mola rotacional
+MODELOS_PILARES = ("classico", "rigidez")
 
 
 @dataclass
@@ -167,14 +233,51 @@ class Apoio:
     k_mola: float = 0.0       # kN.m/rad
     nome: str = ""
     #: altura do pilar disponível abaixo da face inferior da viga, cm. Só é
-    #: lida num engaste de extremidade, onde a armadura negativa pode ter de
-    #: descer no pilar para ancorar (18.3.2.4-d); zero = não informada, e a
-    #: memória declara a altura exigida como condição a conferir
+    #: lida num apoio de extremidade, onde a armadura negativa pode ter de
+    #: descer no pilar para ancorar (18.3.2.4-d). Em engaste e mola o pilar é
+    #: suposto, e zero = não informada (a memória declara a altura exigida);
+    #: num apoio simples, informá-la é dizer que há pilar monolítico embaixo
     altura_pilar_abaixo: float = 0.0
+    #: apoio indireto (18.3.6): esta viga se apoia **noutra viga**. ``viga_apoio``
+    #: é o nome dela no projeto -- a reação desta viga vai para ela como carga
+    #: indireta -- e ``x_na_viga_apoio`` é o ponto do cruzamento medido na
+    #: viga de apoio, m. ``h_viga_apoio`` (cm) é a altura dela no cruzamento:
+    #: preenchida pelo projeto quando a viga está nele, ou dada à mão numa viga
+    #: avulsa. ``topos_alinhados`` diz se as faces superiores coincidem, que é
+    #: o que permite reduzir a carga de suspensão e o que define a viga
+    #: pendurada (face inferior desta abaixo da face inferior da de apoio)
+    viga_apoio: str = ""
+    x_na_viga_apoio: float = 0.0
+    h_viga_apoio: float = 0.0
+    topos_alinhados: bool = True
+    #: solidariedade viga-pilar (14.6.6.1): altura do lance do pilar acima da
+    #: viga, cm (a de baixo é ``altura_pilar_abaixo``), e a dimensão do pilar
+    #: perpendicular ao eixo da viga, cm. A dimensão ao longo do eixo é a
+    #: ``largura`` do apoio, então a inércia do pilar na flexão da viga é
+    #: ``largura_pilar_transversal · largura³ / 12``; zero = pilar quadrado.
+    #: Num apoio em outra viga nada disso é lido
+    altura_pilar_acima: float = 0.0
+    largura_pilar_transversal: float = 0.0
 
     def __post_init__(self) -> None:
         if self.tipo not in TIPOS_APOIO:
             raise ValueError(f"Tipo de apoio desconhecido: {self.tipo!r}")
+
+    @property
+    def indireto(self) -> bool:
+        """Apoio em outra viga, e não em pilar (18.3.6)."""
+        return bool(self.viga_apoio) or self.h_viga_apoio > 1e-9
+
+    @property
+    def pilar(self) -> bool:
+        """Apoio num pilar: nem balanço nem outra viga."""
+        return self.tipo != "livre" and not self.indireto
+
+    @property
+    def pilar_informado(self) -> bool:
+        """Pilar com ao menos um lance informado (14.6.6.1)."""
+        return self.pilar and (self.altura_pilar_acima > 1e-9
+                               or self.altura_pilar_abaixo > 1e-9)
 
 
 @dataclass
@@ -290,6 +393,16 @@ class CargaConcentrada:
     #: é outra: 100 % do tirante para levar a força ao banzo comprimido, mais
     #: 50 % de reforço da região, e nada vai para a viga apoiada
     pendurada: bool = False
+    #: altura da viga apoiada, cm (0 = não informada), e se as faces superiores
+    #: coincidem. Com as duas, o 18.3.6 reduz a carga de suspensão por
+    #: (1 - h_susp/h_viga apoio), h_susp a diferença entre as faces inferiores;
+    #: e, com as faces superiores alinhadas, viga apoiada mais alta que esta é
+    #: viga pendurada
+    h_apoiada: float = 0.0
+    topos_alinhados: bool = False
+    #: nome da viga do projeto cuja reação é esta carga ("" = lançada à mão).
+    #: Quem preenche é o projeto, ao transferir as reações entre as vigas
+    origem: str = ""
 
 
 @dataclass
@@ -438,8 +551,40 @@ class Config:
     #: o que a norma só aceita em casos excepcionais
     largura_reduzida_excepcional: bool = False
 
+    # -- itens complementares da NBR 6118 (19/11/2026) ----------------------
+    #: 17.6 -- fissuração inclinada da alma: "em casos especiais, em que isso
+    #: seja considerado importante", o espaçamento dos estribos fica limitado a
+    #: 15 cm. É decisão do projetista, por isso desligado por padrão
+    fissuracao_inclinada_alma: bool = False
+    #: 17.7.1.3 -- reduzir a armadura longitudinal de torção do banzo
+    #: comprimido pela compressão que age na espessura he e no trecho Δu da
+    #: face. A norma diz "pode", então é opção; desligado, a parcela da face
+    #: comprimida fica inteira (a favor da segurança)
+    reduzir_torcao_banzo_comprimido: bool = False
+    #: 15.10 -- a face superior é travada lateralmente por laje monolítica.
+    #: Ligado, a zona comprimida dos vãos (em cima) está contida e só as zonas
+    #: comprimidas embaixo (momento negativo) são conferidas, com o não
+    #: atendimento como alerta; desligado (viga isolada, sem laje, ou em fase
+    #: construtiva), toda zona comprimida é conferida e o não atendimento é erro
+    face_superior_travada: bool = True
+    #: 15.10 -- distância máxima entre travamentos laterais da zona
+    #: comprimida, m (vigas transversais, por exemplo). 0 = sem travamento
+    #: intermediário: o vão do tramo, ou 2 L no balanço
+    l0_lateral: float = 0.0
+    #: 23.3 -- frequência crítica da Tabela 23.1, Hz. 0 = não verifica
+    fcrit_vibracao: float = 0.0
+    #: 9.4.2.6 -- conferir a armadura transversal ao longo das ancoragens
+    #: (25 % da força da maior barra ancorada) e adensar os estribos onde os
+    #: existentes não bastam
+    verificar_transversal_ancoragem: bool = True
+    #: 14.6.6.1 -- modelo da solidariedade viga-pilar (``MODELOS_PILARES``)
+    modelo_pilares: str = "classico"
+
     def validar(self) -> list[str]:
         avisos: list[str] = []
+        if self.modelo_pilares not in MODELOS_PILARES:
+            raise ValueError(f"Modelo dos pilares desconhecido: "
+                             f"{self.modelo_pilares!r}")
         if self.modelo_cisalhamento not in (1, 2):
             raise ValueError("O modelo de cisalhamento deve ser 1 ou 2.")
         if self.modelo_cisalhamento == 2 and not (30.0 <= self.theta <= 45.0):
@@ -497,6 +642,9 @@ class Viga:
     projeto: str = ""
     #: texto livre do projetista, impresso na capa da memória de cálculo
     observacoes: str = ""
+    #: furos e aberturas na alma (13.2.5 e 21.3); vazio = viga sem furo.
+    #: Ver :mod:`vigas.core.aberturas_modelo` e :mod:`vigas.core.aberturas`
+    aberturas: list[Abertura] = field(default_factory=list)
 
     # -- geometria ----------------------------------------------------------
     def __post_init__(self) -> None:
@@ -843,6 +991,11 @@ class Viga:
             if a.tipo == "livre" and 0 < i < len(self.apoios) - 1:
                 raise ValueError(
                     f"O apoio {i + 1} é interno e não pode ser 'livre'.")
+            if a.indireto and a.tipo != "simples":
+                avisos.append(av.erro(
+                    f"O apoio {i + 1} está numa viga (apoio indireto) e é do "
+                    f"tipo '{a.tipo}': uma viga apoiada noutra é apoio "
+                    f"simples -- a viga de apoio não lhe dá engaste."))
 
         for c in self.todas_distribuidas():
             if c.x_ini < -1e-9 or c.x_fim > L + 1e-9:
@@ -867,11 +1020,16 @@ class Viga:
         if self.concreto.fck < 20:
             avisos.append(av.erro(
                 "O item 7.4.2 exige fck >= 20 MPa em concreto armado."))
+        avisos += abm.validar(self)
         return avisos
 
     # -- persistência -------------------------------------------------------
     def para_dict(self) -> dict:
         d = asdict(self)
+        # viga sem furo grava o arquivo de antes: `aberturas` (19/11/2026) só
+        # aparece quando há furo
+        if not d.get("aberturas"):
+            d.pop("aberturas", None)
         d["_formato"] = "viga-nbr6118"
         d["_versao"] = 1
         return d
@@ -887,11 +1045,33 @@ class Viga:
         número contestado seja ligado, depois, ao dado que o produziu.
         """
         dados = self.para_dict()
-        # campo opcional acrescentado depois: com o valor padrão ele não entra,
-        # para a mesma viga continuar com a mesma impressão de antes
-        for ap in dados.get("apoios", []):
-            if not ap.get("altura_pilar_abaixo"):
-                ap.pop("altura_pilar_abaixo", None)
+        # campos opcionais acrescentados depois: com o valor padrão eles não
+        # entram, para a mesma viga continuar com a mesma impressão de antes
+        for lista, padroes in (("apoios", CAMPOS_NOVOS_APOIO),
+                               ("concentradas", CAMPOS_NOVOS_CONCENTRADA)):
+            for item in dados.get(lista, []):
+                for chave, padrao in padroes.items():
+                    if chave in item and item[chave] == padrao:
+                        item.pop(chave)
+        cfg = dados.get("config", {})
+        for chave, padrao in CAMPOS_NOVOS_CONFIG.items():
+            if chave in cfg and cfg[chave] == padrao:
+                cfg.pop(chave)
+        # seção com a mesa dos dois lados: o campo `lado_mesa` (25/11/2026)
+        # fica de fora, onde quer que haja uma seção
+        def _sem_lado(o):
+            if isinstance(o, dict):
+                if "bw" in o and o.get("lado_mesa") == "ambos":
+                    o.pop("lado_mesa")
+                for v in o.values():
+                    _sem_lado(v)
+            elif isinstance(o, list):
+                for v in o:
+                    _sem_lado(v)
+        _sem_lado(dados)
+        # viga sem furo: o campo `aberturas` (19/11/2026) fica de fora
+        if not dados.get("aberturas"):
+            dados.pop("aberturas", None)
         texto = json.dumps(dados, sort_keys=True,
                            ensure_ascii=False, separators=(",", ":"))
         h = hashlib.sha256(texto.encode("utf-8")).hexdigest()[:12].upper()
@@ -940,6 +1120,7 @@ class Viga:
                                     {"categoria": "CA-60"})),
             ambiente=Ambiente(**d.get("ambiente", {})),
             config=Config(**cfg),
+            aberturas=[abm.de_dict(a) for a in d.get("aberturas") or []],
         )
 
     def salvar(self, caminho: str) -> None:

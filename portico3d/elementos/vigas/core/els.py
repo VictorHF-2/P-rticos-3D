@@ -280,6 +280,9 @@ class ResultadoFissuracao:
     ok: bool
     fissurada: bool
     avisos: list[str] = field(default_factory=list)
+    #: inércia do Estádio II, cm⁴ -- a pele tracionada (17.3.3.2, Nota) usa a
+    #: mesma linha neutra e a mesma inércia para a tensão no eixo de cada barra
+    I_II: float = 0.0
 
     @property
     def veredito(self) -> str:
@@ -394,7 +397,7 @@ def abertura_fissuras(secao: Secao, concreto: Concreto, aco: Aco,
         regiao=regiao, M_servico=M_servico, x_II=e2.x, sigma_s=sigma_s,
         phi=phi_mm, Acri=Acri, rho_ri=rho_ri, wk_1=wk1, wk_2=wk2, wk=wk,
         wk_limite=wk_limite, ok=wk <= wk_limite, fissurada=fissurada,
-        avisos=avisos)
+        avisos=avisos, I_II=e2.I)
 
 
 #: Limites da Tabela 13.3 para o que se apoia na viga: (denominador do vão,

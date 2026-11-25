@@ -2980,6 +2980,56 @@ def ponte_roda_o_lote_do_edificio() -> list[Conferencia]:
         Conferencia("ponte: o motor devolveu área de aço necessária",
                     float(all(hasattr(v.resultado, "As_necessaria")
                               for v in com_veredito)), 1.0),
+    ] + _cache_e_paralelo_dos_pilares(m, env, pilares[:4], verificacoes)
+
+
+def _cache_e_paralelo_dos_pilares(m, env, barras, em_serie_ou_nao):
+    """O mesmo lote em série, em paralelo e pelo cache dá o mesmo resultado.
+
+    ``cache_motores`` guarda o resultado do motor pela impressão da entrada
+    e calcula em paralelo os que faltam; nada disso pode mudar um número.
+    """
+    import os
+
+    from . import cache_motores as cm
+    from .dimensionamento import verificar_pilares
+
+    def assinatura(vs):
+        return [(v.barra, v.combinacao, v.erro,
+                 getattr(v.resultado, "As_necessaria", None),
+                 str(getattr(v.resultado, "arranjo", None))) for v in vs]
+
+    antes = os.environ.get(cm.SEM_PARALELO)
+    try:
+        cm.limpar()
+        os.environ[cm.SEM_PARALELO] = "1"
+        serie = verificar_pilares(m, env, barras=barras)
+        cm.limpar()
+        os.environ.pop(cm.SEM_PARALELO, None)
+        paralelo = verificar_pilares(m, env, barras=barras)
+        calculados = cm.contagem["pilares_calculados"]
+        ja_do_cache = cm.contagem["pilares_do_cache"]
+        de_novo = verificar_pilares(m, env, barras=barras)
+        do_cache = cm.contagem["pilares_do_cache"] - ja_do_cache
+    finally:
+        if antes is None:
+            os.environ.pop(cm.SEM_PARALELO, None)
+        else:
+            os.environ[cm.SEM_PARALELO] = antes
+    n = len(serie)
+    return [
+        Conferencia("cache: série e paralelo dão o mesmo resultado",
+                    float(assinatura(serie) == assinatura(paralelo)), 1.0),
+        Conferencia("cache: igual ao lote calculado antes",
+                    float(assinatura(serie)
+                          == assinatura(em_serie_ou_nao)), 1.0),
+        Conferencia("cache: a segunda chamada não recalcula nada",
+                    float(cm.contagem["pilares_calculados"] - calculados),
+                    0.0),
+        Conferencia("cache: a segunda chamada vem toda do cache",
+                    float(do_cache), float(n)),
+        Conferencia("cache: e dá o mesmo resultado",
+                    float(assinatura(de_novo) == assinatura(serie)), 1.0),
     ]
 
 
@@ -3718,54 +3768,64 @@ def peso_proprio_entra_uma_vez_so() -> list[Conferencia]:
 
 
 def apoio_de_viga_leva_a_rigidez_do_pilar() -> list[Conferencia]:
-    """O apoio vai como mola, e a mola vale 4EI/ℓ dos lances que chegam.
+    """O apoio leva o pilar descrito, e o motor faz a mola do 14.6.6.1.
 
-    A inércia que conta é a do pilar **na direção da viga**, e é isso que a
-    conferência trava: girando a seção do pilar, a mola tem de mudar na razão
-    dos cubos dos lados. Um erro de eixo aqui passaria despercebido — a mola
-    continuaria existindo, só com o valor errado.
+    A ponte passa a largura do pilar na direção da viga, a perpendicular e os
+    lances; o programa de Vigas, no modelo ``rigidez`` do 14.6.6.1, faz a
+    mola ``k = 4·Ecs·(I_sup/(ℓ_sup/2) + I_inf/(ℓ_inf/2))`` com ``I =
+    transversal · largura³/12`` (Figura 14.8). A conferência trava a conta e
+    o eixo: girando a seção do pilar, a mola muda na razão dos cubos do lado
+    que fica no rumo da viga. Um erro de eixo aqui passaria despercebido — a
+    mola continuaria existindo, só com o valor errado.
     """
     from dataclasses import replace
 
     from .continuidade import vigas_continuas
-    from .dimensionamento import montar_viga, rigidez_dos_pilares
+    from .dimensionamento import montar_viga
+    from .elementos.vigas.core import solidariedade as sd
 
-    m = _portico_com_vento()
-    viga = next(v for v in vigas_continuas(m) if len(v.apoios) >= 2)
-    k = rigidez_dos_pilares(m, viga, 1)
+    def montar(secao_pilar):
+        m = _portico_com_vento()
+        if secao_pilar is not None:
+            m.add_secao(secao_pilar)
+            for nome, b in list(m.barras.items()):
+                if nome.startswith("P"):
+                    m.barras[nome] = replace(b, secao=secao_pilar.nome)
+        viga = next(v for v in vigas_continuas(m) if len(v.apoios) >= 2)
+        return m, viga, montar_viga(m, viga)
 
-    # o apoio 1 é interno: dois lances? Não — aqui cada prumada tem um lance
-    # só, do chão à laje. Vale 4EI/ℓ de um lance.
+    m, viga, deles = montar(None)
+    ap = deles.apoios[1]
     barra = next(b for n, b in m.barras.items() if n.startswith("P")
                  and viga.nos[viga.apoios[1]] in (b.no_i, b.no_j))
+    lance = m.comprimento(next(n for n, b in m.barras.items()
+                               if b is barra)) * 100.0
     secao = m.secoes[barra.secao]
-    material = m.materiais[barra.material]
-    esperado = 4.0 * material.E * secao.Iz / m.comprimento(
-        next(n for n, b in m.barras.items() if b is barra))
+    I = secao.b * 100.0 * (secao.h * 100.0) ** 3 / 12.0
+    # cada prumada aqui tem um lance só, do chão à laje: só o de baixo
+    esperado = 4.0 * deles.concreto.Ecs * I / (lance / 2.0) * 1e-3
+    k = sd.k_rotacional(deles, 1)
 
     # girando o pilar de 30×30 para 20×45, a inércia na direção da viga cai
-    m2 = _portico_com_vento()
-    m2.add_secao(Secao.retangular("P20x45", 0.20, 0.45))
-    for nome, b in list(m2.barras.items()):
-        if nome.startswith("P"):
-            m2.barras[nome] = replace(b, secao="P20x45")
-    viga2 = next(v for v in vigas_continuas(m2) if len(v.apoios) >= 2)
-    k2 = rigidez_dos_pilares(m2, viga2, 1)
+    _, _, deles2 = montar(Secao.retangular("P20x45", 0.20, 0.45))
+    k2 = sd.k_rotacional(deles2, 1)
 
-    deles = montar_viga(m, viga)
-    apoios_mola = [a for a in deles.apoios if a.tipo == "mola"]
-
+    apoios_pilar = [a for a in deles.apoios if a.pilar]
     return [
-        Conferencia("mola do apoio: vale 4EI/ℓ do lance",
-                    k, esperado, 1e-9),
+        Conferencia("solidariedade: o apoio leva o lance do pilar (cm)",
+                    ap.altura_pilar_abaixo, lance, 1e-9),
+        Conferencia("solidariedade: o motor faz a mola 4·Ecs·I/(ℓ/2) da "
+                    "Figura 14.8", k, esperado, 1e-9),
         # 30³ contra 20³: a mola cai na razão dos cubos do lado que fica no
         # rumo da viga, e não na dos lados perpendiculares
-        Conferencia("mola do apoio: segue o lado na direção da viga",
+        Conferencia("solidariedade: a mola segue o lado na direção da viga",
                     k2 / k, (0.20 ** 3 * 0.45) / (0.30 ** 3 * 0.30), 1e-9),
-        Conferencia("mola do apoio: todos os apoios de pilar são mola",
-                    float(len(apoios_mola)), float(len(viga.apoios))),
-        Conferencia("mola do apoio: o motor recebeu k > 0",
-                    float(all(a.k_mola > 0.0 for a in apoios_mola)), 1.0),
+        Conferencia("solidariedade: todos os apoios de pilar com o pilar "
+                    "descrito", float(all(a.pilar_informado
+                                          for a in apoios_pilar)), 1.0),
+        Conferencia("solidariedade: a ponte usa o modelo 'rigidez' do "
+                    "14.6.6.1", float(deles.config.modelo_pilares
+                                      == "rigidez"), 1.0),
     ]
 
 
@@ -7310,6 +7370,78 @@ def topo_das_vigas_nivelado() -> list[Conferencia]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# 54. Motor de Vigas motor-2026-11-25: seção L e barra pela mínima
+# ---------------------------------------------------------------------------
+
+
+def secao_l_e_barra_pela_minima() -> list[Conferencia]:
+    """Os dois pedidos do Pórticos que o programa de Vigas atendeu.
+
+    * **Seção L**: na viga de borda a ponte diz ao motor de que lado está a
+      mesa — à esquerda de quem anda no sentido da cadeia —, e o desenho 3D
+      põe a mesa do lado da laje (u do motor cresce para a direita).
+    * **Barra pela mínima**: a que existe só porque As,mín governa não corre
+      mais até o fim da região do apoio, e sim até onde o momento negativo
+      daquela face acaba (mais aℓ e ℓb,nec).
+    """
+    from .armadura3d import fios_da_viga
+    from .continuidade import vigas_continuas
+    from .dimensionamento import montar_viga
+    from .elementos.vigas.core.dimensionar import dimensionar
+    from .lancamento import (Lancamento, LajeLancada, Pavimento,
+                             PilarLancado, Planta, VigaLancada, gerar)
+
+    # V1 em +x na borda y = 0 (laje em y > 0: esquerda); V3 em +y na borda
+    # x = 0 (laje em x > 0: direita de quem anda em +y)
+    pl = Planta("A")
+    for k, (x, y) in enumerate(((0, 0), (5, 0), (0, 4), (5, 4)), 1):
+        pl.pilares.append(PilarLancado(f"P{k}", x, y, 0.20, 0.40))
+    pl.vigas += [VigaLancada("V1", [(0, 0), (5, 0)], 0.20, 0.50),
+                 VigaLancada("V2", [(0, 4), (5, 4)], 0.20, 0.50),
+                 VigaLancada("V3", [(0, 0), (0, 4)], 0.20, 0.50),
+                 VigaLancada("V4", [(5, 0), (5, 4)], 0.20, 0.50)]
+    pl.lajes.append(LajeLancada("L1", 2.5, 2.0, 0.12, 1.5, 2.0))
+    m = gerar(Lancamento("borda", plantas={"A": pl},
+                         pavimentos=[Pavimento("1", 3.0, "A")])).modelo
+    cad = {c.barras[0].split(".")[0]: c for c in vigas_continuas(m)}
+    v1 = montar_viga(m, cad["V1"])
+    v3 = montar_viga(m, cad["V3"])
+    lado_v1 = v1.tramos[0].secao.lado_mesa
+    lado_v3 = v3.tramos[0].secao.lado_mesa
+    res = dimensionar(v1)
+    fios = fios_da_viga(m, cad["V1"], res, estribos=False)
+    # mesa de um lado: nenhuma barra fora da alma do lado de fora (y < -bw/2)
+    fora = [pt for f in fios for pt in f.pontos if pt[1] < -0.10 - 1e-6]
+    dentro = [pt for f in fios for pt in f.pontos if pt[1] > 0.10 + 1e-6]
+
+    # a barra pela mínima: a V1 da sacada, apoio de extremidade em que a
+    # mínima governa (4Ø10). Antes as quatro iam a 3,36 m; agora as duas de
+    # canto seguem e as outras duas param onde o negativo acaba
+    sacada = _sacada(1.5, 3.0).modelo
+    c1 = next(c for c in vigas_continuas(sacada)
+              if c.barras[0].startswith("V1."))
+    r1 = dimensionar(montar_viga(sacada, c1))
+    apoio1 = sorted((p for p in r1.posicoes if p.tipo == "longitudinal"
+                     and p.face == "superior" and p.x_ini < 0.5),
+                    key=lambda p: p.x_fim)
+    cortada = (len(apoio1) >= 2 and apoio1[0].x_fim < 2.0
+               and apoio1[-1].x_fim > apoio1[0].x_fim + 1.0)
+    return [
+        Conferencia("seção L: a V1 (borda, laje à esquerda de +x) vai com a "
+                    "mesa à esquerda", float(lado_v1 == "esquerda"), 1.0),
+        Conferencia("seção L: a V3 (borda, laje à direita de +y) vai com a "
+                    "mesa à direita", float(lado_v3 == "direita"), 1.0),
+        Conferencia("seção L: no 3D nenhuma barra da V1 do lado sem laje",
+                    float(len(fora)), 0.0),
+        Conferencia("seção L: e a mesa aparece do lado da laje",
+                    float(len(dentro) > 0), 1.0),
+        Conferencia("barra pela mínima: no apoio de extremidade da sacada, "
+                    "as barras além das de canto param antes de 2 m (antes "
+                    "iam a 3,36 m)", float(cortada), 1.0),
+    ]
+
+
 def conferir(pasta=None) -> list[Conferencia]:
     conferencias: list[Conferencia] = []
     for prova in (barra_axial, balanco_plano_xy, balanco_plano_xz, torcao,
@@ -7412,7 +7544,8 @@ def conferir(pasta=None) -> list[Conferencia]:
                   viga_quebrada_por_direcao, grelha_de_eixos,
                   laje_em_balanco_no_portico,
                   pilar_girado_e_apoios_das_lajes,
-                  topo_das_vigas_nivelado):
+                  topo_das_vigas_nivelado,
+                  secao_l_e_barra_pela_minima):
         conferencias.extend(prova())
     if pasta is not None:
         conferencias.extend(ida_e_volta_json(pasta))

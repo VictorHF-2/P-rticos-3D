@@ -45,7 +45,7 @@ da casa:
 | Elemento | Norma | Motor copiado de |
 |---|---|---|
 | Pilares | ABNT NBR 6118:2026 | **Pilares em Concreto Armado**, revisão R05 |
-| Vigas contínuas | ABNT NBR 6118:2026 | **Dimensionador de Vigas**, revisão R04 |
+| Vigas contínuas | ABNT NBR 6118:2026 | **Dimensionador de Vigas**, tag `motor-2026-11-25` |
 | Lajes maciças, em balanço e treliçadas | ABNT NBR 6118:2026 | **Lajes de Concreto Armado**, revisão R11 |
 | Vento | ABNT NBR 6123:2023 | **NBR-6123** (cálculo de S2 e das forças) |
 
@@ -196,8 +196,9 @@ O detalhe de cada decisão, com o porquê e a conferência que a trava, está no
   (N, Mx, My) concomitante no topo e na base, na convenção de face
   tracionada do programa de Pilares.
 - **Viga**: a cadeia de barras colineares vira a viga contínua do programa de
-  Vigas, com as cargas do pórtico, apoios em mola (4EI/ℓ dos lances), largura
-  do apoio pela seção do pilar na direção da viga e seção T. A envoltória do
+  Vigas, com as cargas do pórtico, o pilar de cada apoio descrito para a
+  solidariedade viga-pilar do 14.6.6.1 (larguras e lances acima e abaixo),
+  apoio em outra viga pelo 18.3.6 e seção T, ou L na viga de borda. A envoltória do
   motor é trocada pela do pórtico **por fora** (a cópia não é editada), com
   o arredondamento sobre o apoio desligado, porque o pórtico já traz o
   trecho rígido.
@@ -212,9 +213,11 @@ O detalhe de cada decisão, com o porquê e a conferência que a trava, está no
 
 ### O autoteste
 
-`py main.py --autoteste <pasta>` roda **740 conferências** e o autoteste da
-janela, sem abrir nada na tela (cerca de 45 minutos; o motor de Pilares é a
-parte lenta). Cada valor esperado é uma solução fechada, uma condição de
+`py main.py --autoteste <pasta>` roda **751 conferências** e o autoteste da
+janela, sem abrir nada na tela (cerca de 18 minutos). O motor de Pilares é a parte lenta; os
+lances vão em paralelo (um processo por núcleo) e cada resultado de motor
+fica guardado na sessão pela impressão da entrada, de modo que a armadura 3D
+e o projeto completo não redimensionam o que o "Dimensionar" já fez. Cada valor esperado é uma solução fechada, uma condição de
 equilíbrio, uma invariância ou o resultado de outro programa — nunca o
 próprio programa contra ele mesmo:
 
@@ -250,7 +253,7 @@ montada à mão:
 |---|---|
 | Vigas (24 cadeias) | a viga que o Pórticos monta, aberta no programa de Vigas, dá resultado **idêntico** (momentos, regiões e cada posição de armadura); seções T, apoios e molas montados à mão batem exatamente |
 | Pilares (214 verificações) | mesmo Nd, mesmos momentos de topo e base e **mesmo arranjo** em todas |
-| Lajes (3 pavimentos) | posições, vínculos e larguras de apoio idênticos |
+| Lajes (3 pavimentos) | posições, vínculos e larguras de apoio idênticos, menos nas duas lajes em balanço lado a lado, que o programa de Lajes engasta pela borda lateral livre (achado passado à janela dele) |
 | Armadura 3D | nenhum ponto de barra fora do concreto |
 
 O relatório, as entradas no formato de cada programa e as imagens ficam em
@@ -398,6 +401,8 @@ autoteste e os temporários do Python e do Office.
 | 03/11/2026 | Motores Vigas R04 e Pilares R05; ancoragem da negativa de extremidade no nó monolítico |
 | 05/11/2026 | **R03**: laje em balanço; motores Pilares R05 (recopiado) e Lajes R11; edifício de 3 pavimentos conferido contra os programas isolados — corrigidos a largura do pilar girado, a largura de apoio das lajes por face, a mesa da viga de borda e o nivelamento dos topos no 3D; 740 conferências |
 | 25/11/2026 | Repositório publicado; pasta reorganizada no padrão dos outros programas (`Programa/`, `Fontes/`, `Exe atual/`); R01, R02 e R03 como commits datados com tags; procedência dos motores pelo commit do repositório de origem |
+| 25/11/2026 | Motor de Vigas recopiado (`motor-2026-11-25`): seção L na viga de borda, barra pela mínima cortada pelo diagrama, solidariedade viga-pilar do 14.6.6.1, apoio em outra viga pelo 18.3.6; corrigida a altura da viga apoiada passada ao motor (ia em cm × 100) |
+| 25/11/2026 | Cache e paralelismo dos motores: no edifício de 3 pavimentos o fluxo pilares + vigas + lajes + armadura 3D dos três pavimentos caiu de 33 min para 4 min, com resultado idêntico |
 
 ## Limites de escopo
 

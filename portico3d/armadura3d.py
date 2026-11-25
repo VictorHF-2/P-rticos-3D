@@ -233,36 +233,6 @@ def intervalos_da_viga(resultado, comprimento: float
     return [(a, b) for a, b in zip(ordenados, ordenados[1:]) if b - a > 1e-4]
 
 
-def _lados_com_laje(modelo: Modelo, viga, ey: np.ndarray):
-    """``f(x) -> +1, -1 ou 0``: de que lado da viga (no sentido do ``ey``
-    local) há laje na abscissa ``x`` da cadeia — 0 quando há dos dois lados
-    ou de nenhum, que é quando a mesa simétrica do motor já está certa."""
-    from .dimensionamento import _lajes_ao_lado
-    from .core.lajes import retangulo
-
-    ao_lado = _lajes_ao_lado(modelo)
-    trechos = []
-    for barra in viga.barras:
-        b = modelo.barras[barra]
-        meio = (modelo.ponto(b.no_i) + modelo.ponto(b.no_j)) / 2.0
-        sinais = set()
-        for laje, _, _ in ao_lado.get(barra, []):
-            x0, y0, x1, y1, _ = retangulo(modelo, laje)
-            centro = np.array([(x0 + x1) / 2.0, (y0 + y1) / 2.0])
-            s = float((centro - meio[:2]) @ np.asarray(ey, float)[:2])
-            sinais.add(1 if s > 0.0 else -1)
-        pos = dict(zip(viga.nos, viga.posicoes))
-        a, c = sorted((pos[b.no_i], pos[b.no_j]))
-        trechos.append((a, c, sinais.pop() if len(sinais) == 1 else 0))
-
-    def lado(x: float) -> int:
-        for a, c, s in trechos:
-            if a - 1e-9 <= x <= c + 1e-9:
-                return s
-        return 0
-    return lado
-
-
 def fios_da_viga(modelo: Modelo, viga, resultado,
                  estribos: bool = True) -> list[Fio]:
     """Longitudinais e estribos de uma viga contínua, no lugar dela."""
@@ -274,23 +244,31 @@ def fios_da_viga(modelo: Modelo, viga, resultado,
     from .core.lajes import desnivel_da_viga
 
     preparada = preparar_barras(modelo)[viga.barras[0]]
-    ey, ez = preparada.R[1], preparada.R[2]
+    ez = preparada.R[2]
     secao = modelo.secoes[modelo.barras[viga.barras[0]].secao]
     # o topo da viga no nível do pavimento, como o sólido e a laje
     origem = modelo.ponto(viga.nos[0]) + np.array(
         [0.0, 0.0, desnivel_da_viga(modelo, viga.barras[0])])
     eixo = np.array(viga.direcao, dtype=float)
     comprimento = viga.comprimento
+    # A seção do programa de Vigas é desenhada por quem olha a viga entrando
+    # no papel: ``u`` cresce para a direita, e a aba "esquerda" da seção L
+    # fica em u < 0. A esquerda de quem anda no sentido da cadeia é ẑ × eixo
+    # — e não o y local da barra, que pode apontar para qualquer dos lados
+    # (a cadeia pode percorrer a barra ao contrário). Com a seção simétrica
+    # isso não aparecia; com a L, sairia espelhada.
+    esquerda = np.cross([0.0, 0.0, 1.0], eixo)
+    esquerda = esquerda / (float(np.linalg.norm(esquerda)) or 1.0)
 
     def ponto(x_m: float, u_cm: float, v_cm: float) -> np.ndarray:
         """Da coordenada da viga (m ao longo, cm na seção) para o global."""
         return (origem + eixo * x_m
-                + (u_cm * CM - secao.b / 2.0) * ey
+                + (secao.b / 2.0 - u_cm * CM) * esquerda
                 + (v_cm * CM - secao.h / 2.0) * ez)
 
-    lados = _lados_com_laje(modelo, viga, ey)
-    # os trechos também se cortam nos nós: é ali que a laje pode trocar de
-    # lado (a sacada que começa no fim da laje de dentro), e a mesa com ela
+    # os trechos também se cortam nos nós: é ali que a seção pode mudar de
+    # um tramo para o outro (a mesa de um lado só na sacada que começa no
+    # fim da laje de dentro)
     nos_internos = [s for s in viga.posicoes if 1e-4 < s < comprimento - 1e-4]
     trechos = []
     for x0, x1 in intervalos_da_viga(resultado, comprimento):
@@ -304,21 +282,10 @@ def fios_da_viga(modelo: Modelo, viga, resultado,
             corte = geo.montar_secao(resultado, meio)
         except (IndexError, KeyError, ValueError):
             continue
-        # A mesa da seção T: o motor a trata simétrica, metade de cada lado
-        # da alma. Na viga de borda a laje está de um lado só, e metade das
-        # barras do laço da mesa ficava no ar, do lado de fora. Ali a mesa
-        # vai inteira para o lado da laje (seção L): as barras fora da alma
-        # andam (bf − bw)/2 para esse lado — a ponta da mesa cai na ponta da
-        # laje, e as do canto de fora, junto à face da alma.
-        lado = lados(meio)
-        sec = resultado.viga.secao_em(meio)
-        desvio = (lado * (sec.bf - sec.bw) / 2.0
-                  if lado and sec.tipo != "retangular" and sec.bf > sec.bw
-                  else 0.0)
+        # a seção L (viga de borda, mesa de um lado só) já vem do programa
+        # de Vigas com o laço da mesa do lado dela
         for circulo in corte.barras:
             u, v = circulo.centro
-            if desvio and not -1e-6 <= u <= secao.b / CM + 1e-6:
-                u += desvio
             fios.append(Fio(np.array([ponto(x0, u, v), ponto(x1, u, v)]),
                             "viga longitudinal", viga.nome,
                             circulo.raio * 20.0))
@@ -452,9 +419,14 @@ def armadura_do_pavimento(modelo: Modelo, cota: float,
             f"{len(lances)} pilares sem armadura: a envoltória de esforços "
             "ainda não foi montada (Dimensionar pilares, F7)")
     else:
+        # todos os lances do pavimento numa chamada só: os que não estão no
+        # cache vão juntos para o pool de processos (``cache_motores``)
+        por_lance: dict[str, list] = {}
+        for v in dim.verificar_pilares(modelo, envoltorias, fck,
+                                       barras=list(lances)):
+            por_lance.setdefault(v.barra, []).append(v)
         for barra in lances:
-            verificacoes = dim.verificar_pilares(modelo, envoltorias, fck,
-                                                 barras=[barra])
+            verificacoes = por_lance.get(barra, [])
             # Duas peneiras, e a ordem entre elas importa. A boa é
             # ``aprovado``: o motor terminou e deu o lance por bom. Faltando
             # essa, ainda serve o lance **reprovado que tem arranjo** — o

@@ -37,13 +37,64 @@ if hasattr(sys.stdout, "reconfigure"):
 
 AQUI = Path(__file__).resolve().parent
 PROGRAMA = AQUI.parent
-PROGRAMAS = PROGRAMA.parent.parent.parent      # .../Programas
+#: a pasta ``Programas``, procurada pelo nome: a profundidade mudou quando o
+#: Pórticos saiu de ``Porticos R03/Programa`` para ``Programa``, e um número
+#: fixo de níveis fez o roteiro procurar os repositórios no lugar errado
+PROGRAMAS = next(p for p in PROGRAMA.parents if p.name == "Programas")
 sys.path.insert(0, str(PROGRAMA))
 sys.path.insert(0, str(AQUI))
-# os originais, cada um da sua pasta
-for pasta in ("Vigas/Vigas R04/Programa", "Pilares/Pilares R05/Programa",
-              "Lajes/Lajes R11/Programa"):
-    sys.path.insert(0, str(PROGRAMAS / pasta))
+
+
+def _carregar_originais() -> dict[str, str]:
+    """Põe no ``sys.path`` cada programa de origem **no commit de que o
+    Pórticos copiou o motor** (``elementos.PROCEDENCIA``): o repositório é
+    exportado por ``git archive`` para uma pasta temporária. Comparar com a
+    pasta de trabalho do programa compararia versões diferentes, e a
+    diferença não diria nada sobre a ponte.
+
+    Sem commit registrado (a cópia veio de uma pasta de revisão que já não
+    existe), usa-se a própria cópia, registrada como tal no relatório.
+    Devolve, por pacote, de onde ele veio.
+    """
+    import subprocess
+    import tempfile
+    import types
+
+    from portico3d.elementos import PROCEDENCIA
+
+    origem = {}
+    destino = Path(tempfile.mkdtemp(prefix="originais_"))
+    for pacote in ("vigas", "pilares", "lajes"):
+        dados = PROCEDENCIA[pacote]
+        repo = PROGRAMAS / dados.get("repositorio", "")
+        commit = dados.get("commit", "")
+        if commit and not (repo / ".git").exists():
+            # com commit registrado, cair na cópia faria o Pórticos se
+            # comparar consigo mesmo sem ninguém perceber
+            raise SystemExit(f"o repositório de {pacote} não foi achado em "
+                             f"{repo}; sem ele não há o que comparar")
+        if commit:
+            arquivo = destino / f"{pacote}.tar"
+            subprocess.run(["git", "-C", str(repo), "archive", "-o",
+                            str(arquivo), commit, dados["pacote"]],
+                           check=True)
+            subprocess.run(["tar", "-xf", str(arquivo), "-C", str(destino)],
+                           check=True)
+            origem[pacote] = (f"{dados['repositorio']} no commit "
+                              f"{commit[:7]} ({dados['revisao']})")
+            continue
+        # a cópia, sob o nome do pacote original
+        import importlib
+        copia = importlib.import_module(f"portico3d.elementos.{pacote}")
+        sys.modules[pacote] = copia
+        for sub in ("core", "saidas"):
+            sys.modules[f"{pacote}.{sub}"] = importlib.import_module(
+                f"portico3d.elementos.{pacote}.{sub}")
+        origem[pacote] = (f"a cópia do Pórticos ({dados['revisao']}): a "
+                          "pasta de origem não existe mais e nenhum commit "
+                          "do repositório é idêntico a ela")
+    sys.path.insert(0, str(destino))
+    return origem
 
 import edificio_3pav as E                                    # noqa: E402
 
@@ -68,13 +119,6 @@ def pilar_em(planta, x, y):
         if abs(p.x - x) < 1e-6 and abs(p.y - y) < 1e-6:
             return p
     return None
-
-
-def ecs(fck: float) -> float:
-    """Ecs, kN/m², granito (αE = 1,0) — 8.2.8."""
-    eci = 5600.0 * math.sqrt(fck)
-    alfa_i = min(0.8 + 0.2 * fck / 80.0, 1.0)
-    return alfa_i * eci * 1000.0
 
 
 class Cadeia:
@@ -177,6 +221,7 @@ def secao_da_viga_isolada(V, c: Cadeia, planta, retangulos, lajes, k_tramo,
     L = xb - xa
     a = 2.0 * L if n_momentos is None else (1.0, 0.75, 0.60)[n_momentos] * L
     b1_total, hf = 0.0, math.inf
+    lados = []
     for lado in (-1, 1):
         achadas = []
         for nome, (x0, y0, x1, y1, bal) in retangulos.items():
@@ -205,10 +250,19 @@ def secao_da_viga_isolada(V, c: Cadeia, planta, retangulos, lajes, k_tramo,
             b2 = min(x[0] for x in achadas)
             b1_total += min(0.1 * a, 0.5 * b2)
             hf = min(hf, min(x[1] for x in achadas))
+            lados.append(lado)
     if b1_total <= 1e-9:
         return V.Secao(bw=bw * CM, h=c.viga.h * CM)
+    # seção L: a laje de um lado só. A viga anda em +x ou +y; olhando-a
+    # entrar no papel, a esquerda de +x é +y, e a de +y é −x
+    if len(lados) == 1:
+        positivo_e_esquerda = c.em_x
+        lado_mesa = ("esquerda" if (lados[0] > 0) == positivo_e_esquerda
+                     else "direita")
+    else:
+        lado_mesa = "ambos"
     return V.Secao(bw=bw * CM, h=c.viga.h * CM, tipo="T",
-                   bf=(bw + b1_total) * CM, hf=hf * CM)
+                   bf=(bw + b1_total) * CM, hf=hf * CM, lado_mesa=lado_mesa)
 
 
 def cargas_da_viga_isolada(V, c: Cadeia, retangulos, lajes):
@@ -261,7 +315,6 @@ def cargas_da_viga_isolada(V, c: Cadeia, retangulos, lajes):
 def viga_isolada(V, c: Cadeia, planta, retangulos, lajes, nivel: int,
                  n_niveis: int, h_lance: float, recebidas):
     """A ``Viga`` do programa de Vigas, montada como o usuário montaria."""
-    E_c = ecs(30.0)
     pontos = [a[0] for a in c.apoios]
     ini_bal = pontos[0] > 1e-9
     fim_bal = c.comprimento - pontos[-1] > 1e-9
@@ -279,19 +332,23 @@ def viga_isolada(V, c: Cadeia, planta, retangulos, lajes, nivel: int,
     def apoio(a):
         s, tipo, quem = a
         if tipo == "viga":
-            return V.Apoio(tipo="simples", largura=quem.viga.b * CM)
+            # apoio indireto (18.3.6): a viga de apoio, o ponto nela e a
+            # altura dela; os topos do pavimento alinhados
+            return V.Apoio(tipo="simples", largura=quem.viga.b * CM,
+                           viga_apoio=quem.viga.nome,
+                           x_na_viga_apoio=quem.s_de(*c.ponto(s)),
+                           h_viga_apoio=quem.viga.h * CM,
+                           topos_alinhados=True)
+        # o pilar descrito para a solidariedade do 14.6.6.1 (modelo
+        # "rigidez", configurado abaixo): largura na direção da viga, a
+        # perpendicular e os lances acima e abaixo do nó
         dx, dy = dimensoes_do_pilar(quem)
-        largura = (dx if c.em_x else dy) * CM
-        # 4EI/ℓ dos lances que chegam ao nó: o eixo de giro é o horizontal
-        # perpendicular ao plano da viga; a profundidade é a dimensão ao
-        # longo da viga
-        prof, larg = (dx, dy) if c.em_x else (dy, dx)
-        inercia = larg * prof ** 3 / 12.0
-        lances = 1 + (1 if nivel < n_niveis - 1 else 0)
-        k = lances * 4.0 * E_c * inercia / h_lance
-        abaixo = h_lance * CM - c.viga.h * CM / 2.0
-        return V.Apoio(tipo="mola", largura=largura, k_mola=k,
-                       altura_pilar_abaixo=abaixo)
+        largura, transversal = ((dx, dy) if c.em_x else (dy, dx))
+        acima = h_lance * CM if nivel < n_niveis - 1 else 0.0
+        return V.Apoio(tipo="simples", largura=largura * CM,
+                       largura_pilar_transversal=transversal * CM,
+                       altura_pilar_acima=acima,
+                       altura_pilar_abaixo=h_lance * CM)
 
     if ini_bal:
         tramos.append(tramo(pontos[0], None))
@@ -308,18 +365,20 @@ def viga_isolada(V, c: Cadeia, planta, retangulos, lajes, nivel: int,
         apoios.append(V.Apoio(tipo="livre"))
 
     concentradas = []
-    for s, g, q, de, pendurada in recebidas:
+    for s, g, q, de, pendurada, h_apoiada in recebidas:
         for acao, P in (("g", g), ("q", q)):
             if P > 1e-9:
                 concentradas.append(V.CargaConcentrada(
                     P=P, x=s, acao=acao, descricao=f"{de} apoiada",
-                    indireta=True, pendurada=pendurada))
+                    indireta=True, pendurada=pendurada,
+                    h_apoiada=h_apoiada, topos_alinhados=True, origem=de))
     viga = V.Viga(nome=c.viga.nome, tramos=tramos, apoios=apoios,
                   distribuidas=cargas_da_viga_isolada(V, c, retangulos,
                                                       lajes),
                   concentradas=concentradas, concreto=V.Concreto(fck=30.0))
     viga.config.peso_proprio = False          # já está nas distribuídas
     viga.config.uniformizar_estribos = True
+    viga.config.modelo_pilares = "rigidez"    # 14.6.6.1, pilares como molas
     return viga
 
 
@@ -390,6 +449,7 @@ def main() -> int:
                                            verificar_vigas)
     from portico3d.lancamento import gerar
 
+    origens = _carregar_originais()
     from vigas.core import dimensionar as VD
     from vigas.core import modelo as V
     from pilares.core import dimensionar as PD
@@ -415,6 +475,10 @@ def main() -> int:
     lajes_lancadas = {l.nome: l for l in planta.lajes}
     retangulos = retangulos_das_lajes(planta)
     log(f"# Edifício de 3 pavimentos — Pórticos × programas isolados\n")
+    log("Programas isolados:\n")
+    for pacote, de_onde in origens.items():
+        log(f"- {pacote}: {de_onde}")
+    log("")
     log(f"Modelo: {len(m.nos)} nós, {len(m.barras)} barras, "
         f"{len(m.lajes)} lajes. Avisos da geração: "
         f"{geracao.avisos or 'nenhum'}\n")
@@ -458,7 +522,7 @@ def main() -> int:
                     g, q = reacao(iso, k)
                     recebidas.setdefault(a[2].viga.nome, []).append(
                         (a[2].s_de(*c.ponto(a[0])), g, q, nome,
-                         c.viga.h > a[2].viga.h + 1e-9))
+                         c.viga.h > a[2].viga.h + 1e-9, c.viga.h * CM))
             # a cadeia do Pórticos com o mesmo nome e pavimento
             chave = next((n for n, cp in cadeias_portico.items()
                           if any(b.startswith(f"{nome}.{pav.nome}.")
@@ -498,7 +562,7 @@ def main() -> int:
                 "porticos_portico": a_por, "diferencas": d}
 
     log("Comparação 1 — **mesma entrada**: Pórticos com as vigas armadas pelo "
-        "motor (`fonte_vigas = \"motor\"`) contra o Vigas R04 isolado, com a "
+        "motor (`fonte_vigas = \"motor\"`) contra o programa de Vigas isolado, com a "
         "entrada montada à mão.\n")
     log("| Viga | M+ máx (kN·m) | M− mín (kN·m) | V máx (kN) | "
         "posições de armadura | resultado |")
@@ -514,7 +578,7 @@ def main() -> int:
             log(f"- {nome}: {t}")
 
     log("\nComparação 1b — **a viga que o Pórticos montou**, gravada no "
-        "formato do Vigas R04 e aberta no programa original: "
+        "formato do programa de Vigas e aberta nele: "
         f"{sum(not d for _, d in mesma_entrada)} de {len(mesma_entrada)} "
         "idênticas (momentos, regiões e posições de armadura).")
     for nome, d in mesma_entrada:

@@ -1,280 +1,249 @@
 # Edifício de 3 pavimentos — Pórticos × programas isolados
 
+Programas isolados:
+
+- vigas: Vigas/Programa no commit 1508440 (Vigas motor-2026-11-25)
+- pilares: a cópia do Pórticos (Pilares R05 (pasta de 05/11/2026, anterior ao repositório)): a pasta de origem não existe mais e nenhum commit do repositório é idêntico a ela
+- lajes: Lajes/Programa no commit 05e344c (Lajes R11)
+
 Modelo: 54 nós, 96 barras, 27 lajes. Avisos da geração: nenhum
 
 Análise com 2ª ordem: 13 combinações (2 s)
 
 ## Vigas
 
-Comparação 1 — **mesma entrada**: Pórticos com as vigas armadas pelo motor (`fonte_vigas = "motor"`) contra o Vigas R04 isolado, com a entrada montada à mão.
+Comparação 1 — **mesma entrada**: Pórticos com as vigas armadas pelo motor (`fonte_vigas = "motor"`) contra o programa de Vigas isolado, com a entrada montada à mão.
 
 | Viga | M+ máx (kN·m) | M− mín (kN·m) | V máx (kN) | posições de armadura | resultado |
 |---|---|---|---|---|---|
 | V8.1PAV | 28.84 / 28.84 | -0.00 / -0.00 | 20.9 / 20.9 | 5 / 5 | iguais |
-| V1.1PAV | 25.54 / 25.00 | -39.37 / -39.37 | 38.6 / 39.0 | 17 / 17 | DIFEREM |
-| V2.1PAV | 45.72 / 44.25 | -69.47 / -68.45 | 68.4 / 68.9 | 19 / 19 | DIFEREM |
-| V3.1PAV | 40.00 / 38.85 | -64.27 / -63.09 | 68.9 / 69.2 | 15 / 15 | DIFEREM |
-| V4.1PAV | 23.89 / 23.25 | -36.53 / -36.17 | 30.8 / 30.7 | 13 / 13 | DIFEREM |
-| V5.1PAV | 59.86 / 59.86 | -76.67 / -76.67 | 58.5 / 58.5 | 11 / 11 | DIFEREM |
-| V6.1PAV | 57.86 / 57.86 | -74.93 / -74.93 | 57.9 / 57.9 | 11 / 11 | DIFEREM |
-| V7.1PAV | 33.43 / 32.41 | -49.56 / -48.83 | 44.2 / 43.9 | 10 / 10 | DIFEREM |
+| V1.1PAV | 24.13 / 23.61 | -39.37 / -39.37 | 37.9 / 38.3 | 15 / 15 | DIFEREM |
+| V2.1PAV | 43.53 / 42.12 | -68.85 / -67.77 | 67.4 / 67.9 | 18 / 18 | DIFEREM |
+| V3.1PAV | 37.99 / 36.91 | -63.62 / -62.42 | 68.0 / 68.3 | 16 / 16 | DIFEREM |
+| V4.1PAV | 22.06 / 21.45 | -35.35 / -35.02 | 31.9 / 31.7 | 14 / 14 | DIFEREM |
+| V5.1PAV | 54.65 / 54.65 | -75.46 / -75.46 | 55.9 / 55.9 | 12 / 12 | iguais |
+| V6.1PAV | 52.81 / 52.81 | -73.68 / -73.68 | 55.3 / 55.3 | 12 / 12 | iguais |
+| V7.1PAV | 30.39 / 29.43 | -48.66 / -47.96 | 45.5 / 45.2 | 11 / 11 | DIFEREM |
 | V8.2PAV | 28.84 / 28.84 | -0.00 / -0.00 | 20.9 / 20.9 | 5 / 5 | iguais |
-| V1.2PAV | 25.54 / 25.00 | -39.37 / -39.37 | 38.6 / 39.0 | 17 / 17 | DIFEREM |
-| V2.2PAV | 45.72 / 44.25 | -69.47 / -68.45 | 68.4 / 68.9 | 19 / 19 | DIFEREM |
-| V3.2PAV | 40.00 / 38.85 | -64.27 / -63.09 | 68.9 / 69.2 | 15 / 15 | DIFEREM |
-| V4.2PAV | 23.89 / 23.25 | -36.53 / -36.17 | 30.8 / 30.7 | 13 / 13 | DIFEREM |
-| V5.2PAV | 59.86 / 59.86 | -76.67 / -76.67 | 58.5 / 58.5 | 11 / 11 | DIFEREM |
-| V6.2PAV | 57.86 / 57.86 | -74.93 / -74.93 | 57.9 / 57.9 | 11 / 11 | DIFEREM |
-| V7.2PAV | 33.43 / 32.41 | -49.56 / -48.83 | 44.2 / 43.9 | 10 / 10 | DIFEREM |
+| V1.2PAV | 24.13 / 23.61 | -39.37 / -39.37 | 37.9 / 38.3 | 15 / 15 | DIFEREM |
+| V2.2PAV | 43.53 / 42.12 | -68.85 / -67.77 | 67.4 / 67.9 | 18 / 18 | DIFEREM |
+| V3.2PAV | 37.99 / 36.91 | -63.62 / -62.42 | 68.0 / 68.3 | 16 / 16 | DIFEREM |
+| V4.2PAV | 22.06 / 21.45 | -35.35 / -35.02 | 31.9 / 31.7 | 14 / 14 | DIFEREM |
+| V5.2PAV | 54.65 / 54.65 | -75.46 / -75.46 | 55.9 / 55.9 | 12 / 12 | iguais |
+| V6.2PAV | 52.81 / 52.81 | -73.68 / -73.68 | 55.3 / 55.3 | 12 / 12 | iguais |
+| V7.2PAV | 30.39 / 29.43 | -48.66 / -47.96 | 45.5 / 45.2 | 11 / 11 | DIFEREM |
 | V8.COB | 28.84 / 28.84 | -0.00 / -0.00 | 20.9 / 20.9 | 5 / 5 | iguais |
-| V1.COB | 27.21 / 26.65 | -39.37 / -39.37 | 39.4 / 39.7 | 17 / 17 | DIFEREM |
-| V2.COB | 48.31 / 46.78 | -69.81 / -68.84 | 69.3 / 69.8 | 19 / 19 | DIFEREM |
-| V3.COB | 42.03 / 40.81 | -64.65 / -63.50 | 69.6 / 69.9 | 15 / 15 | DIFEREM |
-| V4.COB | 26.40 / 25.71 | -37.83 / -37.43 | 29.6 / 29.5 | 13 / 13 | DIFEREM |
-| V5.COB | 63.97 / 63.97 | -77.09 / -77.09 | 60.3 / 60.3 | 11 / 11 | DIFEREM |
-| V6.COB | 61.85 / 61.85 | -75.39 / -75.39 | 59.7 / 59.7 | 11 / 11 | DIFEREM |
-| V7.COB | 37.48 / 36.37 | -50.23 / -49.47 | 42.6 / 42.4 | 10 / 10 | DIFEREM |
-- V1.1PAV: M_max: 25.54 × 25.00
-- V1.1PAV: V_max: 38.65 × 39.00
-- V1.1PAV: regiões: [('Vão 1', 16.44, 2.356, '3Ø10'), ('Vão 2', 25.54, 2.356, '3Ø10'), ('Vão 3', 2.88, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -3.72, 2.454, '2Ø12.5'), ('Apoio 2', -34.34, 2.454, '2Ø12.5'), ('Apoio 3', -28.89, 2.454, '2Ø12.5'), ('Apoio 4', -38.01, 2.356, '3Ø10')] × [('Vão 1', 16.14, 2.356, '3Ø10'), ('Vão 2', 25.0, 2.356, '3Ø10'), ('Vão 3', 2.82, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -3.65, 2.454, '2Ø12.5'), ('Apoio 2', -33.88, 2.454, '2Ø12.5'), ('Apoio 3', -28.43, 2.454, '2Ø12.5'), ('Apoio 4', -38.02, 2.356, '3Ø10')]
-- V1.1PAV: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.66, 2.69, 0.0), ('longitudinal', 'inferior', 1, 10.0, 4.91, 8.21, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.74, 2.66, 0.0), ('longitudinal', 'inferior', 1, 10.0, 4.94, 8.19, 0.0)]
-- V1.1PAV: veredito: True × False
-- V2.1PAV: M_max: 45.72 × 44.25
-- V2.1PAV: M_min: -69.47 × -68.45
-- V2.1PAV: V_max: 68.35 × 68.85
-- V2.1PAV: regiões: [('Vão 1', 31.4, 3.142, '4Ø10'), ('Vão 2', 45.72, 3.142, '4Ø10'), ('Vão 3', 10.57, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -4.55, 4.021, '2Ø16'), ('Apoio 2', -60.12, 4.021, '2Ø16'), ('Apoio 3', -53.0, 4.021, '2Ø16'), ('Apoio 4', -38.57, 3.682, '3Ø12.5')] × [('Vão 1', 30.65, 3.142, '4Ø10'), ('Vão 2', 44.25, 3.142, '4Ø10'), ('Vão 3', 10.24, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -4.45, 4.021, '2Ø16'), ('Apoio 2', -58.94, 4.021, '2Ø16'), ('Apoio 3', -51.84, 4.021, '2Ø16'), ('Apoio 4', -38.58, 3.682, '3Ø12.5')]
-- V2.1PAV: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.12, 7.98, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.14, 7.93, 0.0)]
-- V2.1PAV: veredito: True × False
-- V3.1PAV: M_max: 40.00 × 38.85
-- V3.1PAV: M_min: -64.27 × -63.09
-- V3.1PAV: regiões: [('Vão 1', 30.51, 3.142, '4Ø10'), ('Vão 2', 40.0, 3.142, '4Ø10'), ('Vão 3', 9.83, 2.356, '3Ø10'), ('Apoio 1', -4.77, 3.682, '3Ø12.5'), ('Apoio 2', -56.13, 3.682, '3Ø12.5'), ('Apoio 3', -46.85, 3.682, '3Ø12.5'), ('Apoio 4', -1.4, 2.454, '2Ø12.5')] × [('Vão 1', 30.0, 3.142, '4Ø10'), ('Vão 2', 38.85, 3.142, '4Ø10'), ('Vão 3', 9.68, 2.356, '3Ø10'), ('Apoio 1', -4.7, 3.682, '3Ø12.5'), ('Apoio 2', -54.87, 3.682, '3Ø12.5'), ('Apoio 3', -45.79, 3.682, '3Ø12.5'), ('Apoio 4', -1.39, 2.454, '2Ø12.5')]
-- V3.1PAV: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.22, 7.87, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.39, 5.66, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.49, 10.29, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.26, 7.84, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.41, 5.64, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.51, 10.29, 0.0)]
-- V3.1PAV: veredito: True × False
-- V4.1PAV: M_max: 23.89 × 23.25
-- V4.1PAV: M_min: -36.53 × -36.17
-- V4.1PAV: regiões: [('Vão 1', 23.89, 2.356, '3Ø10'), ('Vão 2', 12.61, 1.571, '2Ø10'), ('Apoio 1', -23.23, 2.356, '3Ø10'), ('Apoio 2', -32.68, 2.356, '3Ø10'), ('Apoio 3', -10.95, 2.356, '3Ø10')] × [('Vão 1', 23.25, 2.356, '3Ø10'), ('Vão 2', 12.27, 1.571, '2Ø10'), ('Apoio 1', -22.8, 2.356, '3Ø10'), ('Apoio 2', -32.25, 2.356, '3Ø10'), ('Apoio 3', -10.72, 2.356, '3Ø10')]
-- V4.1PAV: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.76, 3.97, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.52, 6.28, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.79, 3.96, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.52, 6.26, 0.0)]
-- V5.1PAV: veredito: True × False
-- V6.1PAV: veredito: True × False
-- V7.1PAV: M_max: 33.43 × 32.41
-- V7.1PAV: M_min: -49.56 × -48.83
-- V7.1PAV: V_max: 44.19 × 43.93
-- V7.1PAV: regiões: [('Vão 1', 33.43, 2.454, '2Ø12.5'), ('Vão 2', 11.85, 1.571, '2Ø10'), ('Apoio 1', -31.15, 4.021, '2Ø16'), ('Apoio 2', -44.73, 4.021, '2Ø16'), ('Apoio 3', -10.12, 2.356, '3Ø10')] × [('Vão 1', 32.41, 2.454, '2Ø12.5'), ('Vão 2', 11.48, 1.571, '2Ø10'), ('Apoio 1', -30.45, 4.021, '2Ø16'), ('Apoio 2', -43.92, 4.021, '2Ø16'), ('Apoio 3', -9.89, 2.356, '3Ø10')]
-- V7.1PAV: veredito: True × False
-- V1.2PAV: M_max: 25.54 × 25.00
-- V1.2PAV: V_max: 38.65 × 39.00
-- V1.2PAV: regiões: [('Vão 1', 16.44, 2.356, '3Ø10'), ('Vão 2', 25.54, 2.356, '3Ø10'), ('Vão 3', 2.88, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -3.72, 2.454, '2Ø12.5'), ('Apoio 2', -34.34, 2.454, '2Ø12.5'), ('Apoio 3', -28.89, 2.454, '2Ø12.5'), ('Apoio 4', -38.01, 2.356, '3Ø10')] × [('Vão 1', 16.14, 2.356, '3Ø10'), ('Vão 2', 25.0, 2.356, '3Ø10'), ('Vão 3', 2.82, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -3.65, 2.454, '2Ø12.5'), ('Apoio 2', -33.88, 2.454, '2Ø12.5'), ('Apoio 3', -28.43, 2.454, '2Ø12.5'), ('Apoio 4', -38.02, 2.356, '3Ø10')]
-- V1.2PAV: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.66, 2.69, 0.0), ('longitudinal', 'inferior', 1, 10.0, 4.91, 8.21, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.74, 2.66, 0.0), ('longitudinal', 'inferior', 1, 10.0, 4.94, 8.19, 0.0)]
-- V1.2PAV: veredito: True × False
-- V2.2PAV: M_max: 45.72 × 44.25
-- V2.2PAV: M_min: -69.47 × -68.45
-- V2.2PAV: V_max: 68.35 × 68.85
-- V2.2PAV: regiões: [('Vão 1', 31.4, 3.142, '4Ø10'), ('Vão 2', 45.72, 3.142, '4Ø10'), ('Vão 3', 10.57, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -4.55, 4.021, '2Ø16'), ('Apoio 2', -60.12, 4.021, '2Ø16'), ('Apoio 3', -53.0, 4.021, '2Ø16'), ('Apoio 4', -38.57, 3.682, '3Ø12.5')] × [('Vão 1', 30.65, 3.142, '4Ø10'), ('Vão 2', 44.25, 3.142, '4Ø10'), ('Vão 3', 10.24, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -4.45, 4.021, '2Ø16'), ('Apoio 2', -58.94, 4.021, '2Ø16'), ('Apoio 3', -51.84, 4.021, '2Ø16'), ('Apoio 4', -38.58, 3.682, '3Ø12.5')]
-- V2.2PAV: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.12, 7.98, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.14, 7.93, 0.0)]
-- V2.2PAV: veredito: True × False
-- V3.2PAV: M_max: 40.00 × 38.85
-- V3.2PAV: M_min: -64.27 × -63.09
-- V3.2PAV: regiões: [('Vão 1', 30.51, 3.142, '4Ø10'), ('Vão 2', 40.0, 3.142, '4Ø10'), ('Vão 3', 9.83, 2.356, '3Ø10'), ('Apoio 1', -4.77, 3.682, '3Ø12.5'), ('Apoio 2', -56.13, 3.682, '3Ø12.5'), ('Apoio 3', -46.85, 3.682, '3Ø12.5'), ('Apoio 4', -1.4, 2.454, '2Ø12.5')] × [('Vão 1', 30.0, 3.142, '4Ø10'), ('Vão 2', 38.85, 3.142, '4Ø10'), ('Vão 3', 9.68, 2.356, '3Ø10'), ('Apoio 1', -4.7, 3.682, '3Ø12.5'), ('Apoio 2', -54.87, 3.682, '3Ø12.5'), ('Apoio 3', -45.79, 3.682, '3Ø12.5'), ('Apoio 4', -1.39, 2.454, '2Ø12.5')]
-- V3.2PAV: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.22, 7.87, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.39, 5.66, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.49, 10.29, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.26, 7.84, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.41, 5.64, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.51, 10.29, 0.0)]
-- V3.2PAV: veredito: True × False
-- V4.2PAV: M_max: 23.89 × 23.25
-- V4.2PAV: M_min: -36.53 × -36.17
-- V4.2PAV: regiões: [('Vão 1', 23.89, 2.356, '3Ø10'), ('Vão 2', 12.61, 1.571, '2Ø10'), ('Apoio 1', -23.23, 2.356, '3Ø10'), ('Apoio 2', -32.68, 2.356, '3Ø10'), ('Apoio 3', -10.95, 2.356, '3Ø10')] × [('Vão 1', 23.25, 2.356, '3Ø10'), ('Vão 2', 12.27, 1.571, '2Ø10'), ('Apoio 1', -22.8, 2.356, '3Ø10'), ('Apoio 2', -32.25, 2.356, '3Ø10'), ('Apoio 3', -10.72, 2.356, '3Ø10')]
-- V4.2PAV: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.76, 3.97, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.52, 6.28, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.79, 3.96, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.52, 6.26, 0.0)]
-- V5.2PAV: veredito: True × False
-- V6.2PAV: veredito: True × False
-- V7.2PAV: M_max: 33.43 × 32.41
-- V7.2PAV: M_min: -49.56 × -48.83
-- V7.2PAV: V_max: 44.19 × 43.93
-- V7.2PAV: regiões: [('Vão 1', 33.43, 2.454, '2Ø12.5'), ('Vão 2', 11.85, 1.571, '2Ø10'), ('Apoio 1', -31.15, 4.021, '2Ø16'), ('Apoio 2', -44.73, 4.021, '2Ø16'), ('Apoio 3', -10.12, 2.356, '3Ø10')] × [('Vão 1', 32.41, 2.454, '2Ø12.5'), ('Vão 2', 11.48, 1.571, '2Ø10'), ('Apoio 1', -30.45, 4.021, '2Ø16'), ('Apoio 2', -43.92, 4.021, '2Ø16'), ('Apoio 3', -9.89, 2.356, '3Ø10')]
-- V7.2PAV: veredito: True × False
-- V1.COB: M_max: 27.21 × 26.65
-- V1.COB: V_max: 39.38 × 39.72
-- V1.COB: regiões: [('Vão 1', 16.97, 2.356, '3Ø10'), ('Vão 2', 27.21, 2.356, '3Ø10'), ('Vão 3', 2.02, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -2.03, 2.454, '2Ø12.5'), ('Apoio 2', -34.64, 2.454, '2Ø12.5'), ('Apoio 3', -26.63, 2.454, '2Ø12.5'), ('Apoio 4', -38.01, 2.356, '3Ø10')] × [('Vão 1', 16.66, 2.356, '3Ø10'), ('Vão 2', 26.65, 2.356, '3Ø10'), ('Vão 3', 1.97, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -2.0, 2.454, '2Ø12.5'), ('Apoio 2', -34.2, 2.454, '2Ø12.5'), ('Apoio 3', -26.19, 2.454, '2Ø12.5'), ('Apoio 4', -38.02, 2.356, '3Ø10')]
-- V1.COB: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.54, 2.74, 0.0), ('longitudinal', 'inferior', 1, 10.0, 4.86, 8.31, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.59, 2.71, 0.0), ('longitudinal', 'inferior', 1, 10.0, 4.89, 8.29, 0.0)]
-- V1.COB: veredito: True × False
-- V2.COB: M_max: 48.31 × 46.78
-- V2.COB: M_min: -69.81 × -68.84
-- V2.COB: V_max: 69.34 × 69.84
-- V2.COB: regiões: [('Vão 1', 32.15, 3.142, '4Ø10'), ('Vão 2', 48.31, 3.142, '4Ø10'), ('Vão 3', 9.3, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -2.42, 4.021, '2Ø16'), ('Apoio 2', -60.28, 4.021, '2Ø16'), ('Apoio 3', -49.85, 4.021, '2Ø16'), ('Apoio 4', -38.6, 3.682, '3Ø12.5')] × [('Vão 1', 31.4, 3.142, '4Ø10'), ('Vão 2', 46.78, 3.142, '4Ø10'), ('Vão 3', 8.98, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -2.37, 4.021, '2Ø16'), ('Apoio 2', -59.16, 4.021, '2Ø16'), ('Apoio 3', -48.75, 4.021, '2Ø16'), ('Apoio 4', -38.61, 3.682, '3Ø12.5')]
-- V2.COB: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.04, 8.08, 0.0), ('longitudinal', 'superior', 1, 12.5, 11.14, 13.89, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.07, 8.06, 0.0), ('longitudinal', 'superior', 1, 12.5, 11.13, 13.89, 0.0)]
-- V2.COB: veredito: True × False
-- V3.COB: M_max: 42.03 × 40.81
-- V3.COB: M_min: -64.65 × -63.50
-- V3.COB: regiões: [('Vão 1', 31.54, 3.142, '4Ø10'), ('Vão 2', 42.03, 3.142, '4Ø10'), ('Vão 3', 9.59, 2.356, '3Ø10'), ('Apoio 1', -2.57, 3.682, '3Ø12.5'), ('Apoio 2', -56.39, 3.682, '3Ø12.5'), ('Apoio 3', -43.99, 3.682, '3Ø12.5'), ('Apoio 4', -0.68, 2.454, '2Ø12.5')] × [('Vão 1', 31.03, 3.142, '4Ø10'), ('Vão 2', 40.81, 3.142, '4Ø10'), ('Vão 3', 9.45, 2.356, '3Ø10'), ('Apoio 1', -2.53, 3.682, '3Ø12.5'), ('Apoio 2', -55.16, 3.682, '3Ø12.5'), ('Apoio 3', -43.01, 3.682, '3Ø12.5'), ('Apoio 4', -0.68, 2.454, '2Ø12.5')]
-- V3.COB: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.13, 8.0, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.36, 5.66, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.54, 10.41, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.19, 7.96, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.36, 5.64, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.56, 10.42, 0.0)]
-- V3.COB: veredito: True × False
-- V4.COB: M_max: 26.40 × 25.71
-- V4.COB: M_min: -37.83 × -37.43
-- V4.COB: regiões: [('Vão 1', 26.4, 2.356, '3Ø10'), ('Vão 2', 13.36, 1.571, '2Ø10'), ('Apoio 1', -17.8, 2.356, '3Ø10'), ('Apoio 2', -33.79, 2.356, '3Ø10'), ('Apoio 3', -7.68, 2.356, '3Ø10')] × [('Vão 1', 25.71, 2.356, '3Ø10'), ('Vão 2', 13.0, 1.571, '2Ø10'), ('Apoio 1', -17.47, 2.356, '3Ø10'), ('Apoio 2', -33.33, 2.356, '3Ø10'), ('Apoio 3', -7.51, 2.356, '3Ø10')]
-- V4.COB: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.56, 4.04, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.5, 6.38, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.59, 4.04, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.52, 6.36, 0.0)]
-- V5.COB: veredito: True × False
-- V6.COB: veredito: True × False
-- V7.COB: M_max: 37.48 × 36.37
-- V7.COB: M_min: -50.23 × -49.47
-- V7.COB: V_max: 42.63 × 42.41
-- V7.COB: regiões: [('Vão 1', 37.48, 2.454, '2Ø12.5'), ('Vão 2', 12.26, 1.571, '2Ø10'), ('Apoio 1', -23.46, 4.021, '2Ø16'), ('Apoio 2', -45.16, 4.021, '2Ø16'), ('Apoio 3', -6.79, 2.356, '3Ø10')] × [('Vão 1', 36.37, 2.454, '2Ø12.5'), ('Vão 2', 11.88, 1.571, '2Ø10'), ('Apoio 1', -22.93, 4.021, '2Ø16'), ('Apoio 2', -44.33, 4.021, '2Ø16'), ('Apoio 3', -6.64, 2.356, '3Ø10')]
-- V7.COB: veredito: True × False
+| V1.COB | 25.54 / 25.00 | -39.37 / -39.37 | 38.6 / 39.0 | 16 / 16 | DIFEREM |
+| V2.COB | 45.72 / 44.25 | -69.47 / -68.45 | 68.4 / 68.9 | 18 / 18 | DIFEREM |
+| V3.COB | 40.00 / 38.85 | -64.27 / -63.09 | 68.9 / 69.2 | 16 / 16 | DIFEREM |
+| V4.COB | 23.89 / 23.25 | -36.53 / -36.17 | 30.8 / 30.7 | 14 / 14 | DIFEREM |
+| V5.COB | 59.86 / 59.86 | -76.67 / -76.67 | 58.5 / 58.5 | 12 / 12 | iguais |
+| V6.COB | 57.86 / 57.86 | -74.93 / -74.93 | 57.9 / 57.9 | 12 / 12 | iguais |
+| V7.COB | 33.43 / 32.41 | -49.56 / -48.83 | 44.2 / 43.9 | 11 / 11 | DIFEREM |
+- V1.1PAV: M_max: 24.13 × 23.61
+- V1.1PAV: V_max: 37.93 × 38.28
+- V1.1PAV: regiões: [('Vão 1', 15.58, 2.356, '3Ø10'), ('Vão 2', 24.13, 2.356, '3Ø10'), ('Vão 3', 4.21, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -6.29, 2.454, '2Ø12.5'), ('Apoio 2', -33.9, 2.454, '2Ø12.5'), ('Apoio 3', -30.91, 2.454, '2Ø12.5'), ('Apoio 4', -38.02, 2.356, '3Ø10')] × [('Vão 1', 15.3, 2.356, '3Ø10'), ('Vão 2', 23.61, 2.356, '3Ø10'), ('Vão 3', 4.15, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -6.18, 2.454, '2Ø12.5'), ('Apoio 2', -33.41, 2.454, '2Ø12.5'), ('Apoio 3', -30.43, 2.454, '2Ø12.5'), ('Apoio 4', -38.03, 2.356, '3Ø10')]
+- V1.1PAV: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 4.96, 8.11, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 4.99, 8.09, 0.0)]
+- V2.1PAV: M_max: 43.53 × 42.12
+- V2.1PAV: M_min: -68.85 × -67.77
+- V2.1PAV: V_max: 67.38 × 67.88
+- V2.1PAV: regiões: [('Vão 1', 30.09, 3.142, '4Ø10'), ('Vão 2', 43.53, 3.142, '4Ø10'), ('Vão 3', 11.8, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -8.1, 4.021, '2Ø16'), ('Apoio 2', -59.7, 4.021, '2Ø16'), ('Apoio 3', -55.8, 4.021, '2Ø16'), ('Apoio 4', -38.55, 3.682, '3Ø12.5')] × [('Vão 1', 29.38, 3.142, '4Ø10'), ('Vão 2', 42.12, 3.142, '4Ø10'), ('Vão 3', 11.46, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -7.91, 4.021, '2Ø16'), ('Apoio 2', -58.47, 4.021, '2Ø16'), ('Apoio 3', -54.58, 4.021, '2Ø16'), ('Apoio 4', -38.57, 3.682, '3Ø12.5')]
+- V2.1PAV: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.19, 7.86, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.24, 7.81, 0.0)]
+- V3.1PAV: M_max: 37.99 × 36.91
+- V3.1PAV: M_min: -63.62 × -62.42
+- V3.1PAV: regiões: [('Vão 1', 28.92, 3.142, '4Ø10'), ('Vão 2', 37.99, 3.142, '4Ø10'), ('Vão 3', 9.94, 2.356, '3Ø10'), ('Apoio 1', -8.39, 3.682, '3Ø12.5'), ('Apoio 2', -55.64, 3.682, '3Ø12.5'), ('Apoio 3', -49.83, 3.682, '3Ø12.5'), ('Apoio 4', -2.74, 2.454, '2Ø12.5')] × [('Vão 1', 28.42, 3.142, '4Ø10'), ('Vão 2', 36.91, 3.142, '4Ø10'), ('Vão 3', 9.77, 2.356, '3Ø10'), ('Apoio 1', -8.25, 3.682, '3Ø12.5'), ('Apoio 2', -54.35, 3.682, '3Ø12.5'), ('Apoio 3', -48.68, 3.682, '3Ø12.5'), ('Apoio 4', -2.7, 2.454, '2Ø12.5')]
+- V3.1PAV: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.32, 7.75, 0.0), ('longitudinal', 'superior', 1, 12.5, -0.07, 1.31, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.44, 5.66, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.44, 10.14, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.39, 7.69, 0.0), ('longitudinal', 'superior', 1, 12.5, -0.07, 1.32, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.46, 5.64, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.46, 10.14, 0.0)]
+- V4.1PAV: M_max: 22.06 × 21.45
+- V4.1PAV: M_min: -35.35 × -35.02
+- V4.1PAV: regiões: [('Vão 1', 22.06, 2.356, '3Ø10'), ('Vão 2', 11.96, 1.571, '2Ø10'), ('Apoio 1', -27.49, 2.356, '3Ø10'), ('Apoio 2', -31.66, 2.356, '3Ø10'), ('Apoio 3', -13.85, 2.356, '3Ø10')] × [('Vão 1', 21.45, 2.356, '3Ø10'), ('Vão 2', 11.65, 1.571, '2Ø10'), ('Apoio 1', -26.97, 2.356, '3Ø10'), ('Apoio 2', -31.26, 2.356, '3Ø10'), ('Apoio 3', -13.56, 2.356, '3Ø10')]
+- V4.1PAV: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.91, 3.92, 0.0), ('longitudinal', 'superior', 1, 10.0, -0.17, 1.28, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.52, 6.18, 0.0), ('longitudinal', 'superior', 1, 10.0, 8.21, 9.17, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.94, 3.91, 0.0), ('longitudinal', 'superior', 1, 10.0, -0.17, 1.26, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.54, 6.18, 0.0), ('longitudinal', 'superior', 1, 10.0, 7.49, 9.17, 0.0)]
+- V7.1PAV: M_max: 30.39 × 29.43
+- V7.1PAV: M_min: -48.66 × -47.96
+- V7.1PAV: V_max: 45.54 × 45.25
+- V7.1PAV: regiões: [('Vão 1', 30.39, 2.454, '2Ø12.5'), ('Vão 2', 11.44, 1.571, '2Ø10'), ('Apoio 1', -37.42, 4.021, '2Ø16'), ('Apoio 2', -44.03, 4.021, '2Ø16'), ('Apoio 3', -13.17, 2.356, '3Ø10')] × [('Vão 1', 29.43, 2.454, '2Ø12.5'), ('Vão 2', 11.08, 1.571, '2Ø10'), ('Apoio 1', -36.57, 4.021, '2Ø16'), ('Apoio 2', -43.25, 4.021, '2Ø16'), ('Apoio 3', -12.88, 2.356, '3Ø10')]
+- V7.1PAV: posições só no Pórticos: [('longitudinal', 'superior', 1, 10.0, 7.52, 9.17, 0.0)]; só no isolado: [('longitudinal', 'superior', 1, 10.0, 7.51, 9.17, 0.0)]
+- V1.2PAV: M_max: 24.13 × 23.61
+- V1.2PAV: V_max: 37.93 × 38.28
+- V1.2PAV: regiões: [('Vão 1', 15.58, 2.356, '3Ø10'), ('Vão 2', 24.13, 2.356, '3Ø10'), ('Vão 3', 4.21, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -6.29, 2.454, '2Ø12.5'), ('Apoio 2', -33.9, 2.454, '2Ø12.5'), ('Apoio 3', -30.91, 2.454, '2Ø12.5'), ('Apoio 4', -38.02, 2.356, '3Ø10')] × [('Vão 1', 15.3, 2.356, '3Ø10'), ('Vão 2', 23.61, 2.356, '3Ø10'), ('Vão 3', 4.15, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -6.18, 2.454, '2Ø12.5'), ('Apoio 2', -33.41, 2.454, '2Ø12.5'), ('Apoio 3', -30.43, 2.454, '2Ø12.5'), ('Apoio 4', -38.03, 2.356, '3Ø10')]
+- V1.2PAV: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 4.96, 8.11, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 4.99, 8.09, 0.0)]
+- V2.2PAV: M_max: 43.53 × 42.12
+- V2.2PAV: M_min: -68.85 × -67.77
+- V2.2PAV: V_max: 67.38 × 67.88
+- V2.2PAV: regiões: [('Vão 1', 30.09, 3.142, '4Ø10'), ('Vão 2', 43.53, 3.142, '4Ø10'), ('Vão 3', 11.8, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -8.1, 4.021, '2Ø16'), ('Apoio 2', -59.7, 4.021, '2Ø16'), ('Apoio 3', -55.8, 4.021, '2Ø16'), ('Apoio 4', -38.55, 3.682, '3Ø12.5')] × [('Vão 1', 29.38, 3.142, '4Ø10'), ('Vão 2', 42.12, 3.142, '4Ø10'), ('Vão 3', 11.46, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -7.91, 4.021, '2Ø16'), ('Apoio 2', -58.47, 4.021, '2Ø16'), ('Apoio 3', -54.58, 4.021, '2Ø16'), ('Apoio 4', -38.57, 3.682, '3Ø12.5')]
+- V2.2PAV: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.19, 7.86, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.24, 7.81, 0.0)]
+- V3.2PAV: M_max: 37.99 × 36.91
+- V3.2PAV: M_min: -63.62 × -62.42
+- V3.2PAV: regiões: [('Vão 1', 28.92, 3.142, '4Ø10'), ('Vão 2', 37.99, 3.142, '4Ø10'), ('Vão 3', 9.94, 2.356, '3Ø10'), ('Apoio 1', -8.39, 3.682, '3Ø12.5'), ('Apoio 2', -55.64, 3.682, '3Ø12.5'), ('Apoio 3', -49.83, 3.682, '3Ø12.5'), ('Apoio 4', -2.74, 2.454, '2Ø12.5')] × [('Vão 1', 28.42, 3.142, '4Ø10'), ('Vão 2', 36.91, 3.142, '4Ø10'), ('Vão 3', 9.77, 2.356, '3Ø10'), ('Apoio 1', -8.25, 3.682, '3Ø12.5'), ('Apoio 2', -54.35, 3.682, '3Ø12.5'), ('Apoio 3', -48.68, 3.682, '3Ø12.5'), ('Apoio 4', -2.7, 2.454, '2Ø12.5')]
+- V3.2PAV: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.32, 7.75, 0.0), ('longitudinal', 'superior', 1, 12.5, -0.07, 1.31, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.44, 5.66, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.44, 10.14, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.39, 7.69, 0.0), ('longitudinal', 'superior', 1, 12.5, -0.07, 1.32, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.46, 5.64, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.46, 10.14, 0.0)]
+- V4.2PAV: M_max: 22.06 × 21.45
+- V4.2PAV: M_min: -35.35 × -35.02
+- V4.2PAV: regiões: [('Vão 1', 22.06, 2.356, '3Ø10'), ('Vão 2', 11.96, 1.571, '2Ø10'), ('Apoio 1', -27.49, 2.356, '3Ø10'), ('Apoio 2', -31.66, 2.356, '3Ø10'), ('Apoio 3', -13.85, 2.356, '3Ø10')] × [('Vão 1', 21.45, 2.356, '3Ø10'), ('Vão 2', 11.65, 1.571, '2Ø10'), ('Apoio 1', -26.97, 2.356, '3Ø10'), ('Apoio 2', -31.26, 2.356, '3Ø10'), ('Apoio 3', -13.56, 2.356, '3Ø10')]
+- V4.2PAV: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.91, 3.92, 0.0), ('longitudinal', 'superior', 1, 10.0, -0.17, 1.28, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.52, 6.18, 0.0), ('longitudinal', 'superior', 1, 10.0, 8.21, 9.17, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.94, 3.91, 0.0), ('longitudinal', 'superior', 1, 10.0, -0.17, 1.26, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.54, 6.18, 0.0), ('longitudinal', 'superior', 1, 10.0, 7.49, 9.17, 0.0)]
+- V7.2PAV: M_max: 30.39 × 29.43
+- V7.2PAV: M_min: -48.66 × -47.96
+- V7.2PAV: V_max: 45.54 × 45.25
+- V7.2PAV: regiões: [('Vão 1', 30.39, 2.454, '2Ø12.5'), ('Vão 2', 11.44, 1.571, '2Ø10'), ('Apoio 1', -37.42, 4.021, '2Ø16'), ('Apoio 2', -44.03, 4.021, '2Ø16'), ('Apoio 3', -13.17, 2.356, '3Ø10')] × [('Vão 1', 29.43, 2.454, '2Ø12.5'), ('Vão 2', 11.08, 1.571, '2Ø10'), ('Apoio 1', -36.57, 4.021, '2Ø16'), ('Apoio 2', -43.25, 4.021, '2Ø16'), ('Apoio 3', -12.88, 2.356, '3Ø10')]
+- V7.2PAV: posições só no Pórticos: [('longitudinal', 'superior', 1, 10.0, 7.52, 9.17, 0.0)]; só no isolado: [('longitudinal', 'superior', 1, 10.0, 7.51, 9.17, 0.0)]
+- V1.COB: M_max: 25.54 × 25.00
+- V1.COB: V_max: 38.65 × 39.00
+- V1.COB: regiões: [('Vão 1', 16.44, 2.356, '3Ø10'), ('Vão 2', 25.54, 2.356, '3Ø10'), ('Vão 3', 2.88, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -3.72, 2.454, '2Ø12.5'), ('Apoio 2', -34.34, 2.454, '2Ø12.5'), ('Apoio 3', -28.89, 2.454, '2Ø12.5'), ('Apoio 4', -38.01, 2.356, '3Ø10')] × [('Vão 1', 16.14, 2.356, '3Ø10'), ('Vão 2', 25.0, 2.356, '3Ø10'), ('Vão 3', 2.82, 2.011, '4Ø8'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -3.65, 2.454, '2Ø12.5'), ('Apoio 2', -33.88, 2.454, '2Ø12.5'), ('Apoio 3', -28.43, 2.454, '2Ø12.5'), ('Apoio 4', -38.02, 2.356, '3Ø10')]
+- V1.COB: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.66, 2.69, 0.0), ('longitudinal', 'inferior', 1, 10.0, 4.91, 8.21, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.74, 2.66, 0.0), ('longitudinal', 'inferior', 1, 10.0, 4.94, 8.19, 0.0)]
+- V2.COB: M_max: 45.72 × 44.25
+- V2.COB: M_min: -69.47 × -68.45
+- V2.COB: V_max: 68.35 × 68.85
+- V2.COB: regiões: [('Vão 1', 31.4, 3.142, '4Ø10'), ('Vão 2', 45.72, 3.142, '4Ø10'), ('Vão 3', 10.57, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -4.55, 4.021, '2Ø16'), ('Apoio 2', -60.12, 4.021, '2Ø16'), ('Apoio 3', -53.0, 4.021, '2Ø16'), ('Apoio 4', -38.57, 3.682, '3Ø12.5')] × [('Vão 1', 30.65, 3.142, '4Ø10'), ('Vão 2', 44.25, 3.142, '4Ø10'), ('Vão 3', 10.24, 3.142, '4Ø10'), ('Vão 4', 0.0, 0.623, '2Ø6.3'), ('Apoio 1', -4.45, 4.021, '2Ø16'), ('Apoio 2', -58.94, 4.021, '2Ø16'), ('Apoio 3', -51.84, 4.021, '2Ø16'), ('Apoio 4', -38.58, 3.682, '3Ø12.5')]
+- V2.COB: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.12, 7.98, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.14, 7.93, 0.0)]
+- V3.COB: M_max: 40.00 × 38.85
+- V3.COB: M_min: -64.27 × -63.09
+- V3.COB: regiões: [('Vão 1', 30.51, 3.142, '4Ø10'), ('Vão 2', 40.0, 3.142, '4Ø10'), ('Vão 3', 9.83, 2.356, '3Ø10'), ('Apoio 1', -4.77, 3.682, '3Ø12.5'), ('Apoio 2', -56.13, 3.682, '3Ø12.5'), ('Apoio 3', -46.85, 3.682, '3Ø12.5'), ('Apoio 4', -1.4, 2.454, '2Ø12.5')] × [('Vão 1', 30.0, 3.142, '4Ø10'), ('Vão 2', 38.85, 3.142, '4Ø10'), ('Vão 3', 9.68, 2.356, '3Ø10'), ('Apoio 1', -4.7, 3.682, '3Ø12.5'), ('Apoio 2', -54.87, 3.682, '3Ø12.5'), ('Apoio 3', -45.79, 3.682, '3Ø12.5'), ('Apoio 4', -1.39, 2.454, '2Ø12.5')]
+- V3.COB: posições só no Pórticos: [('longitudinal', 'inferior', 2, 10.0, 5.22, 7.87, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.39, 5.66, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.49, 10.29, 0.0)]; só no isolado: [('longitudinal', 'inferior', 2, 10.0, 5.26, 7.84, 0.0), ('longitudinal', 'superior', 1, 12.5, 2.41, 5.64, 0.0), ('longitudinal', 'superior', 1, 12.5, 7.51, 10.29, 0.0)]
+- V4.COB: M_max: 23.89 × 23.25
+- V4.COB: M_min: -36.53 × -36.17
+- V4.COB: regiões: [('Vão 1', 23.89, 2.356, '3Ø10'), ('Vão 2', 12.61, 1.571, '2Ø10'), ('Apoio 1', -23.23, 2.356, '3Ø10'), ('Apoio 2', -32.68, 2.356, '3Ø10'), ('Apoio 3', -10.95, 2.356, '3Ø10')] × [('Vão 1', 23.25, 2.356, '3Ø10'), ('Vão 2', 12.27, 1.571, '2Ø10'), ('Apoio 1', -22.8, 2.356, '3Ø10'), ('Apoio 2', -32.25, 2.356, '3Ø10'), ('Apoio 3', -10.72, 2.356, '3Ø10')]
+- V4.COB: posições só no Pórticos: [('longitudinal', 'inferior', 1, 10.0, 0.76, 3.97, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.52, 6.28, 0.0)]; só no isolado: [('longitudinal', 'inferior', 1, 10.0, 0.79, 3.96, 0.0), ('longitudinal', 'superior', 1, 10.0, 3.52, 6.26, 0.0)]
+- V7.COB: M_max: 33.43 × 32.41
+- V7.COB: M_min: -49.56 × -48.83
+- V7.COB: V_max: 44.19 × 43.93
+- V7.COB: regiões: [('Vão 1', 33.43, 2.454, '2Ø12.5'), ('Vão 2', 11.85, 1.571, '2Ø10'), ('Apoio 1', -31.15, 4.021, '2Ø16'), ('Apoio 2', -44.73, 4.021, '2Ø16'), ('Apoio 3', -10.12, 2.356, '3Ø10')] × [('Vão 1', 32.41, 2.454, '2Ø12.5'), ('Vão 2', 11.48, 1.571, '2Ø10'), ('Apoio 1', -30.45, 4.021, '2Ø16'), ('Apoio 2', -43.92, 4.021, '2Ø16'), ('Apoio 3', -9.89, 2.356, '3Ø10')]
 
-Comparação 1b — **a viga que o Pórticos montou**, gravada no formato do Vigas R04 e aberta no programa original: 24 de 24 idênticas (momentos, regiões e posições de armadura).
-
-Por que o isolado reprova (o Pórticos aprova):
-
-- V1.1PAV: Apoio 1: a armadura negativa (Apoio 1, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 58 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V2.1PAV: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 74 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza 
-- V3.1PAV: Apoio 1: a armadura negativa (Apoio 1, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 59 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz | Apoio 4: a armadura negativa (Apoio 4, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 59 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V5.1PAV: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 74 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza  | Apoio 3: a armadura negativa (Apoio 3, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 55 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V6.1PAV: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 74 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza  | Apoio 3: a armadura negativa (Apoio 3, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 55 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V7.1PAV: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 61 cm a partir da face e há 37 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza 
-- V1.2PAV: Apoio 1: a armadura negativa (Apoio 1, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 58 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V2.2PAV: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 74 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza 
-- V3.2PAV: Apoio 1: a armadura negativa (Apoio 1, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 59 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz | Apoio 4: a armadura negativa (Apoio 4, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 59 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V5.2PAV: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 74 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza  | Apoio 3: a armadura negativa (Apoio 3, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 55 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V6.2PAV: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 74 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza  | Apoio 3: a armadura negativa (Apoio 3, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 55 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V7.2PAV: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 61 cm a partir da face e há 37 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza 
-- V1.COB: Apoio 1: a armadura negativa (Apoio 1, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 58 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V2.COB: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 74 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza 
-- V3.COB: Apoio 1: a armadura negativa (Apoio 1, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 59 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz | Apoio 4: a armadura negativa (Apoio 4, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 59 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V5.COB: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 74 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza  | Apoio 3: a armadura negativa (Apoio 3, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 55 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V6.COB: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 74 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza  | Apoio 3: a armadura negativa (Apoio 3, Ø12.5) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 55 cm a partir da face e há 17 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduz
-- V7.COB: Apoio 1: a armadura negativa (Apoio 1, Ø16) não ancora no apoio de extremidade (18.3.2.4-d e 18.3.2.4.1): exige 61 cm a partir da face e há 37 cm retos; o apoio não é engaste, e não há onde a barra descer. Alargue o apoio, reduza 
+Comparação 1b — **a viga que o Pórticos montou**, gravada no formato do programa de Vigas e aberta nele: 24 de 24 idênticas (momentos, regiões e posições de armadura).
 
 Comparação 2 — **o que o pórtico muda**: momentos de projeto com a envoltória do pórtico (vento, 2ª ordem, rigidez real dos pilares, trecho rígido) contra a viga contínua.
 
 | Viga | região | M viga contínua | M pórtico | As contínua | As pórtico |
 |---|---|---|---|---|---|
 | V8.1PAV | Vão 1 | 28.84 | 20.90 | 3Ø10 | 3Ø10 |
-| V1.1PAV | Vão 1 | 16.44 | 14.83 | 3Ø10 | 3Ø10 |
-| V1.1PAV | Vão 2 | 25.54 | 22.48 | 3Ø10 | 3Ø10 |
-| V1.1PAV | Vão 3 | 2.88 | 2.93 | 4Ø8 | 4Ø8 |
+| V1.1PAV | Vão 1 | 15.58 | 14.83 | 3Ø10 | 3Ø10 |
+| V1.1PAV | Vão 2 | 24.13 | 22.48 | 3Ø10 | 3Ø10 |
+| V1.1PAV | Vão 3 | 4.21 | 2.93 | 4Ø8 | 4Ø8 |
 | V1.1PAV | Vão 4 | 0.00 | 0.29 | 2Ø6.3 | 3Ø10 |
-| V1.1PAV | Apoio 1 | -3.72 | -8.93 | 2Ø12.5 | 2Ø12.5 |
-| V1.1PAV | Apoio 2 | -34.34 | -38.51 | 2Ø12.5 | 2Ø12.5 |
-| V1.1PAV | Apoio 3 | -28.89 | -35.52 | 2Ø12.5 | 2Ø12.5 |
-| V1.1PAV | Apoio 4 | -38.01 | -38.56 | 3Ø10 | 3Ø10 |
-| V2.1PAV | Vão 1 | 31.40 | 28.39 | 4Ø10 | 4Ø10 |
-| V2.1PAV | Vão 2 | 45.72 | 39.68 | 4Ø10 | 4Ø10 |
-| V2.1PAV | Vão 3 | 10.57 | 7.50 | 4Ø10 | 4Ø10 |
+| V1.1PAV | Apoio 1 | -6.29 | -8.93 | 2Ø12.5 | 2Ø12.5 |
+| V1.1PAV | Apoio 2 | -33.90 | -38.51 | 2Ø12.5 | 2Ø12.5 |
+| V1.1PAV | Apoio 3 | -30.91 | -35.52 | 2Ø12.5 | 2Ø12.5 |
+| V1.1PAV | Apoio 4 | -38.02 | -38.56 | 3Ø10 | 3Ø10 |
+| V2.1PAV | Vão 1 | 30.09 | 28.39 | 4Ø10 | 4Ø10 |
+| V2.1PAV | Vão 2 | 43.53 | 39.68 | 4Ø10 | 4Ø10 |
+| V2.1PAV | Vão 3 | 11.80 | 7.50 | 4Ø10 | 4Ø10 |
 | V2.1PAV | Vão 4 | 0.00 | 0.00 | 2Ø6.3 | 2Ø6.3 |
-| V2.1PAV | Apoio 1 | -4.55 | -11.99 | 2Ø16 | 2Ø16 |
-| V2.1PAV | Apoio 2 | -60.12 | -68.37 | 2Ø16 | 2Ø16 |
-| V2.1PAV | Apoio 3 | -53.00 | -62.27 | 2Ø16 | 2Ø16 |
-| V2.1PAV | Apoio 4 | -38.57 | -42.35 | 3Ø12.5 | 3Ø12.5 |
-| V3.1PAV | Vão 1 | 30.51 | 26.98 | 4Ø10 | 4Ø10 |
-| V3.1PAV | Vão 2 | 40.00 | 35.18 | 4Ø10 | 4Ø10 |
-| V3.1PAV | Vão 3 | 9.83 | 8.34 | 3Ø10 | 3Ø10 |
-| V3.1PAV | Apoio 1 | -4.77 | -12.22 | 3Ø12.5 | 3Ø12.5 |
-| V3.1PAV | Apoio 2 | -56.13 | -62.71 | 3Ø12.5 | 3Ø12.5 |
-| V3.1PAV | Apoio 3 | -46.85 | -54.03 | 3Ø12.5 | 3Ø12.5 |
-| V3.1PAV | Apoio 4 | -1.40 | -5.56 | 2Ø12.5 | 2Ø12.5 |
-| V4.1PAV | Vão 1 | 23.89 | 20.95 | 3Ø10 | 3Ø10 |
-| V4.1PAV | Vão 2 | 12.61 | 11.40 | 2Ø10 | 2Ø10 |
-| V4.1PAV | Apoio 1 | -23.23 | -30.79 | 3Ø10 | 3Ø10 |
-| V4.1PAV | Apoio 2 | -32.68 | -38.65 | 3Ø10 | 3Ø10 |
-| V4.1PAV | Apoio 3 | -10.95 | -21.10 | 3Ø10 | 3Ø10 |
-| V5.1PAV | Vão 1 | 59.86 | 51.41 | 4Ø10 | 4Ø10 |
-| V5.1PAV | Vão 2 | 26.75 | 24.35 | 4Ø10 | 4Ø10 |
-| V5.1PAV | Apoio 1 | -16.94 | -34.90 | 2Ø16 | 2Ø16 |
-| V5.1PAV | Apoio 2 | -72.45 | -77.57 | 2Ø16 | 4Ø12.5 |
-| V5.1PAV | Apoio 3 | -6.02 | -18.79 | 3Ø12.5 | 3Ø12.5 |
-| V6.1PAV | Vão 1 | 57.86 | 50.05 | 4Ø10 | 4Ø10 |
-| V6.1PAV | Vão 2 | 26.65 | 24.33 | 4Ø10 | 4Ø10 |
-| V6.1PAV | Apoio 1 | -16.45 | -34.71 | 2Ø16 | 2Ø16 |
-| V6.1PAV | Apoio 2 | -70.78 | -75.75 | 2Ø16 | 4Ø12.5 |
-| V6.1PAV | Apoio 3 | -6.02 | -19.81 | 3Ø12.5 | 3Ø12.5 |
-| V7.1PAV | Vão 1 | 33.43 | 28.95 | 2Ø12.5 | 2Ø12.5 |
-| V7.1PAV | Vão 2 | 11.85 | 11.65 | 2Ø10 | 2Ø10 |
-| V7.1PAV | Apoio 1 | -31.15 | -42.74 | 2Ø16 | 2Ø16 |
-| V7.1PAV | Apoio 2 | -44.73 | -52.32 | 2Ø16 | 2Ø16 |
-| V7.1PAV | Apoio 3 | -10.12 | -26.44 | 3Ø10 | 3Ø10 |
+| V2.1PAV | Apoio 1 | -8.10 | -11.99 | 2Ø16 | 2Ø16 |
+| V2.1PAV | Apoio 2 | -59.70 | -68.37 | 2Ø16 | 2Ø16 |
+| V2.1PAV | Apoio 3 | -55.80 | -62.27 | 2Ø16 | 2Ø16 |
+| V2.1PAV | Apoio 4 | -38.55 | -42.35 | 3Ø12.5 | 3Ø12.5 |
+| V3.1PAV | Vão 1 | 28.92 | 26.98 | 4Ø10 | 4Ø10 |
+| V3.1PAV | Vão 2 | 37.99 | 35.18 | 4Ø10 | 4Ø10 |
+| V3.1PAV | Vão 3 | 9.94 | 8.34 | 3Ø10 | 3Ø10 |
+| V3.1PAV | Apoio 1 | -8.39 | -12.22 | 3Ø12.5 | 3Ø12.5 |
+| V3.1PAV | Apoio 2 | -55.64 | -62.71 | 3Ø12.5 | 3Ø12.5 |
+| V3.1PAV | Apoio 3 | -49.83 | -54.03 | 3Ø12.5 | 3Ø12.5 |
+| V3.1PAV | Apoio 4 | -2.74 | -5.56 | 2Ø12.5 | 2Ø12.5 |
+| V4.1PAV | Vão 1 | 22.06 | 20.95 | 3Ø10 | 3Ø10 |
+| V4.1PAV | Vão 2 | 11.96 | 11.40 | 2Ø10 | 2Ø10 |
+| V4.1PAV | Apoio 1 | -27.49 | -30.79 | 3Ø10 | 3Ø10 |
+| V4.1PAV | Apoio 2 | -31.66 | -38.65 | 3Ø10 | 3Ø10 |
+| V4.1PAV | Apoio 3 | -13.85 | -21.10 | 3Ø10 | 3Ø10 |
+| V5.1PAV | Vão 1 | 54.65 | 51.41 | 4Ø10 | 4Ø10 |
+| V5.1PAV | Vão 2 | 25.87 | 24.35 | 4Ø10 | 4Ø10 |
+| V5.1PAV | Apoio 1 | -26.60 | -34.90 | 2Ø16 | 2Ø16 |
+| V5.1PAV | Apoio 2 | -71.39 | -77.57 | 2Ø16 | 4Ø12.5 |
+| V5.1PAV | Apoio 3 | -10.45 | -18.79 | 3Ø12.5 | 3Ø12.5 |
+| V6.1PAV | Vão 1 | 52.81 | 50.05 | 4Ø10 | 4Ø10 |
+| V6.1PAV | Vão 2 | 25.72 | 24.33 | 4Ø10 | 4Ø10 |
+| V6.1PAV | Apoio 1 | -25.85 | -34.71 | 2Ø16 | 2Ø16 |
+| V6.1PAV | Apoio 2 | -69.68 | -75.75 | 2Ø16 | 4Ø12.5 |
+| V6.1PAV | Apoio 3 | -10.43 | -19.81 | 3Ø12.5 | 3Ø12.5 |
+| V7.1PAV | Vão 1 | 30.39 | 28.95 | 2Ø12.5 | 2Ø12.5 |
+| V7.1PAV | Vão 2 | 11.44 | 11.65 | 2Ø10 | 2Ø10 |
+| V7.1PAV | Apoio 1 | -37.42 | -42.74 | 2Ø16 | 2Ø16 |
+| V7.1PAV | Apoio 2 | -44.03 | -52.32 | 2Ø16 | 2Ø16 |
+| V7.1PAV | Apoio 3 | -13.17 | -26.44 | 3Ø10 | 3Ø10 |
 | V8.2PAV | Vão 1 | 28.84 | 20.39 | 3Ø10 | 3Ø10 |
-| V1.2PAV | Vão 1 | 16.44 | 14.88 | 3Ø10 | 3Ø10 |
-| V1.2PAV | Vão 2 | 25.54 | 21.93 | 3Ø10 | 3Ø10 |
-| V1.2PAV | Vão 3 | 2.88 | 2.75 | 4Ø8 | 4Ø8 |
+| V1.2PAV | Vão 1 | 15.58 | 14.88 | 3Ø10 | 3Ø10 |
+| V1.2PAV | Vão 2 | 24.13 | 21.93 | 3Ø10 | 3Ø10 |
+| V1.2PAV | Vão 3 | 4.21 | 2.75 | 4Ø8 | 4Ø8 |
 | V1.2PAV | Vão 4 | 0.00 | 0.29 | 2Ø6.3 | 3Ø10 |
-| V1.2PAV | Apoio 1 | -3.72 | -9.37 | 2Ø12.5 | 2Ø12.5 |
-| V1.2PAV | Apoio 2 | -34.34 | -35.50 | 2Ø12.5 | 2Ø12.5 |
-| V1.2PAV | Apoio 3 | -28.89 | -36.27 | 2Ø12.5 | 2Ø12.5 |
-| V1.2PAV | Apoio 4 | -38.01 | -38.55 | 3Ø10 | 3Ø10 |
-| V2.2PAV | Vão 1 | 31.40 | 29.01 | 4Ø10 | 4Ø10 |
-| V2.2PAV | Vão 2 | 45.72 | 38.98 | 4Ø10 | 4Ø10 |
-| V2.2PAV | Vão 3 | 10.57 | 8.27 | 4Ø10 | 4Ø10 |
+| V1.2PAV | Apoio 1 | -6.29 | -9.37 | 2Ø12.5 | 2Ø12.5 |
+| V1.2PAV | Apoio 2 | -33.90 | -35.50 | 2Ø12.5 | 2Ø12.5 |
+| V1.2PAV | Apoio 3 | -30.91 | -36.27 | 2Ø12.5 | 2Ø12.5 |
+| V1.2PAV | Apoio 4 | -38.02 | -38.55 | 3Ø10 | 3Ø10 |
+| V2.2PAV | Vão 1 | 30.09 | 29.01 | 4Ø10 | 4Ø10 |
+| V2.2PAV | Vão 2 | 43.53 | 38.98 | 4Ø10 | 4Ø10 |
+| V2.2PAV | Vão 3 | 11.80 | 8.27 | 4Ø10 | 4Ø10 |
 | V2.2PAV | Vão 4 | 0.00 | 0.00 | 2Ø6.3 | 2Ø6.3 |
-| V2.2PAV | Apoio 1 | -4.55 | -14.50 | 2Ø16 | 2Ø16 |
-| V2.2PAV | Apoio 2 | -60.12 | -65.16 | 2Ø16 | 2Ø16 |
-| V2.2PAV | Apoio 3 | -53.00 | -62.96 | 2Ø16 | 2Ø16 |
-| V2.2PAV | Apoio 4 | -38.57 | -41.85 | 3Ø12.5 | 3Ø12.5 |
-| V3.2PAV | Vão 1 | 30.51 | 27.14 | 4Ø10 | 4Ø10 |
-| V3.2PAV | Vão 2 | 40.00 | 34.87 | 4Ø10 | 4Ø10 |
-| V3.2PAV | Vão 3 | 9.83 | 9.06 | 3Ø10 | 3Ø10 |
-| V3.2PAV | Apoio 1 | -4.77 | -15.11 | 3Ø12.5 | 3Ø12.5 |
-| V3.2PAV | Apoio 2 | -56.13 | -60.93 | 3Ø12.5 | 3Ø12.5 |
-| V3.2PAV | Apoio 3 | -46.85 | -53.47 | 3Ø12.5 | 3Ø12.5 |
-| V3.2PAV | Apoio 4 | -1.40 | -5.65 | 2Ø12.5 | 2Ø12.5 |
-| V4.2PAV | Vão 1 | 23.89 | 19.95 | 3Ø10 | 3Ø10 |
-| V4.2PAV | Vão 2 | 12.61 | 10.77 | 2Ø10 | 2Ø10 |
-| V4.2PAV | Apoio 1 | -23.23 | -31.51 | 3Ø10 | 3Ø10 |
-| V4.2PAV | Apoio 2 | -32.68 | -35.88 | 3Ø10 | 3Ø10 |
-| V4.2PAV | Apoio 3 | -10.95 | -19.50 | 3Ø10 | 3Ø10 |
-| V5.2PAV | Vão 1 | 59.86 | 49.50 | 4Ø10 | 4Ø10 |
-| V5.2PAV | Vão 2 | 26.75 | 24.08 | 4Ø10 | 4Ø10 |
-| V5.2PAV | Apoio 1 | -16.94 | -37.42 | 2Ø16 | 2Ø16 |
-| V5.2PAV | Apoio 2 | -72.45 | -74.07 | 2Ø16 | 2Ø16 |
-| V5.2PAV | Apoio 3 | -6.02 | -16.72 | 3Ø12.5 | 3Ø12.5 |
-| V6.2PAV | Vão 1 | 57.86 | 47.93 | 4Ø10 | 4Ø10 |
-| V6.2PAV | Vão 2 | 26.65 | 24.10 | 4Ø10 | 4Ø10 |
-| V6.2PAV | Apoio 1 | -16.45 | -37.54 | 2Ø16 | 2Ø16 |
-| V6.2PAV | Apoio 2 | -70.78 | -71.88 | 2Ø16 | 2Ø16 |
-| V6.2PAV | Apoio 3 | -6.02 | -17.66 | 3Ø12.5 | 3Ø12.5 |
-| V7.2PAV | Vão 1 | 33.43 | 27.34 | 2Ø12.5 | 2Ø12.5 |
-| V7.2PAV | Vão 2 | 11.85 | 10.13 | 2Ø10 | 2Ø10 |
-| V7.2PAV | Apoio 1 | -31.15 | -44.41 | 2Ø16 | 2Ø16 |
-| V7.2PAV | Apoio 2 | -44.73 | -48.05 | 2Ø16 | 2Ø16 |
-| V7.2PAV | Apoio 3 | -10.12 | -23.37 | 3Ø10 | 3Ø10 |
+| V2.2PAV | Apoio 1 | -8.10 | -14.50 | 2Ø16 | 2Ø16 |
+| V2.2PAV | Apoio 2 | -59.70 | -65.16 | 2Ø16 | 2Ø16 |
+| V2.2PAV | Apoio 3 | -55.80 | -62.96 | 2Ø16 | 2Ø16 |
+| V2.2PAV | Apoio 4 | -38.55 | -41.85 | 3Ø12.5 | 3Ø12.5 |
+| V3.2PAV | Vão 1 | 28.92 | 27.14 | 4Ø10 | 4Ø10 |
+| V3.2PAV | Vão 2 | 37.99 | 34.87 | 4Ø10 | 4Ø10 |
+| V3.2PAV | Vão 3 | 9.94 | 9.06 | 3Ø10 | 3Ø10 |
+| V3.2PAV | Apoio 1 | -8.39 | -15.11 | 3Ø12.5 | 3Ø12.5 |
+| V3.2PAV | Apoio 2 | -55.64 | -60.93 | 3Ø12.5 | 3Ø12.5 |
+| V3.2PAV | Apoio 3 | -49.83 | -53.47 | 3Ø12.5 | 3Ø12.5 |
+| V3.2PAV | Apoio 4 | -2.74 | -5.65 | 2Ø12.5 | 2Ø12.5 |
+| V4.2PAV | Vão 1 | 22.06 | 19.95 | 3Ø10 | 3Ø10 |
+| V4.2PAV | Vão 2 | 11.96 | 10.77 | 2Ø10 | 2Ø10 |
+| V4.2PAV | Apoio 1 | -27.49 | -31.51 | 3Ø10 | 3Ø10 |
+| V4.2PAV | Apoio 2 | -31.66 | -35.88 | 3Ø10 | 3Ø10 |
+| V4.2PAV | Apoio 3 | -13.85 | -19.50 | 3Ø10 | 3Ø10 |
+| V5.2PAV | Vão 1 | 54.65 | 49.50 | 4Ø10 | 4Ø10 |
+| V5.2PAV | Vão 2 | 25.87 | 24.08 | 4Ø10 | 4Ø10 |
+| V5.2PAV | Apoio 1 | -26.60 | -37.42 | 2Ø16 | 2Ø16 |
+| V5.2PAV | Apoio 2 | -71.39 | -74.07 | 2Ø16 | 2Ø16 |
+| V5.2PAV | Apoio 3 | -10.45 | -16.72 | 3Ø12.5 | 3Ø12.5 |
+| V6.2PAV | Vão 1 | 52.81 | 47.93 | 4Ø10 | 4Ø10 |
+| V6.2PAV | Vão 2 | 25.72 | 24.10 | 4Ø10 | 4Ø10 |
+| V6.2PAV | Apoio 1 | -25.85 | -37.54 | 2Ø16 | 2Ø16 |
+| V6.2PAV | Apoio 2 | -69.68 | -71.88 | 2Ø16 | 2Ø16 |
+| V6.2PAV | Apoio 3 | -10.43 | -17.66 | 3Ø12.5 | 3Ø12.5 |
+| V7.2PAV | Vão 1 | 30.39 | 27.34 | 2Ø12.5 | 2Ø12.5 |
+| V7.2PAV | Vão 2 | 11.44 | 10.13 | 2Ø10 | 2Ø10 |
+| V7.2PAV | Apoio 1 | -37.42 | -44.41 | 2Ø16 | 2Ø16 |
+| V7.2PAV | Apoio 2 | -44.03 | -48.05 | 2Ø16 | 2Ø16 |
+| V7.2PAV | Apoio 3 | -13.17 | -23.37 | 3Ø10 | 3Ø10 |
 | V8.COB | Vão 1 | 28.84 | 21.88 | 3Ø10 | 3Ø10 |
-| V1.COB | Vão 1 | 16.97 | 15.42 | 3Ø10 | 3Ø10 |
-| V1.COB | Vão 2 | 27.21 | 23.67 | 3Ø10 | 3Ø10 |
-| V1.COB | Vão 3 | 2.02 | 0.00 | 4Ø8 | 2Ø6.3 |
+| V1.COB | Vão 1 | 16.44 | 15.42 | 3Ø10 | 3Ø10 |
+| V1.COB | Vão 2 | 25.54 | 23.67 | 3Ø10 | 3Ø10 |
+| V1.COB | Vão 3 | 2.88 | 0.00 | 4Ø8 | 2Ø6.3 |
 | V1.COB | Vão 4 | 0.00 | 0.31 | 2Ø6.3 | 3Ø10 |
-| V1.COB | Apoio 1 | -2.03 | -4.86 | 2Ø12.5 | 2Ø12.5 |
-| V1.COB | Apoio 2 | -34.64 | -34.11 | 2Ø12.5 | 2Ø12.5 |
-| V1.COB | Apoio 3 | -26.63 | -31.25 | 2Ø12.5 | 2Ø12.5 |
+| V1.COB | Apoio 1 | -3.72 | -4.86 | 2Ø12.5 | 2Ø12.5 |
+| V1.COB | Apoio 2 | -34.34 | -34.11 | 2Ø12.5 | 2Ø12.5 |
+| V1.COB | Apoio 3 | -28.89 | -31.25 | 2Ø12.5 | 2Ø12.5 |
 | V1.COB | Apoio 4 | -38.01 | -37.77 | 3Ø10 | 3Ø10 |
-| V2.COB | Vão 1 | 32.15 | 29.68 | 4Ø10 | 4Ø10 |
-| V2.COB | Vão 2 | 48.31 | 41.77 | 4Ø10 | 4Ø10 |
-| V2.COB | Vão 3 | 9.30 | 3.28 | 4Ø10 | 4Ø10 |
+| V2.COB | Vão 1 | 31.40 | 29.68 | 4Ø10 | 4Ø10 |
+| V2.COB | Vão 2 | 45.72 | 41.77 | 4Ø10 | 4Ø10 |
+| V2.COB | Vão 3 | 10.57 | 3.28 | 4Ø10 | 4Ø10 |
 | V2.COB | Vão 4 | 0.00 | 0.00 | 2Ø6.3 | 2Ø6.3 |
-| V2.COB | Apoio 1 | -2.42 | -7.60 | 2Ø16 | 2Ø16 |
-| V2.COB | Apoio 2 | -60.28 | -62.27 | 2Ø16 | 2Ø16 |
-| V2.COB | Apoio 3 | -49.85 | -56.32 | 2Ø16 | 2Ø16 |
-| V2.COB | Apoio 4 | -38.60 | -42.08 | 3Ø12.5 | 3Ø12.5 |
-| V3.COB | Vão 1 | 31.54 | 28.57 | 4Ø10 | 4Ø10 |
-| V3.COB | Vão 2 | 42.03 | 37.48 | 4Ø10 | 4Ø10 |
-| V3.COB | Vão 3 | 9.59 | 7.50 | 3Ø10 | 3Ø10 |
-| V3.COB | Apoio 1 | -2.57 | -8.20 | 3Ø12.5 | 3Ø12.5 |
-| V3.COB | Apoio 2 | -56.39 | -58.83 | 3Ø12.5 | 3Ø12.5 |
-| V3.COB | Apoio 3 | -43.99 | -47.79 | 3Ø12.5 | 3Ø12.5 |
-| V3.COB | Apoio 4 | -0.68 | -2.82 | 2Ø12.5 | 2Ø12.5 |
-| V4.COB | Vão 1 | 26.40 | 22.77 | 3Ø10 | 3Ø10 |
-| V4.COB | Vão 2 | 13.36 | 11.15 | 2Ø10 | 2Ø10 |
-| V4.COB | Apoio 1 | -17.80 | -21.89 | 3Ø10 | 3Ø10 |
-| V4.COB | Apoio 2 | -33.79 | -35.66 | 3Ø10 | 3Ø10 |
-| V4.COB | Apoio 3 | -7.68 | -11.01 | 3Ø10 | 3Ø10 |
-| V5.COB | Vão 1 | 63.97 | 55.38 | 3Ø12.5 | 4Ø10 |
-| V5.COB | Vão 2 | 27.22 | 23.86 | 4Ø10 | 4Ø10 |
-| V5.COB | Apoio 1 | -9.85 | -22.05 | 2Ø16 | 2Ø16 |
-| V5.COB | Apoio 2 | -72.76 | -73.58 | 2Ø16 | 2Ø16 |
-| V5.COB | Apoio 3 | -3.23 | -7.91 | 3Ø12.5 | 3Ø12.5 |
-| V6.COB | Vão 1 | 61.85 | 54.05 | 4Ø10 | 4Ø10 |
-| V6.COB | Vão 2 | 27.16 | 23.84 | 4Ø10 | 4Ø10 |
-| V6.COB | Apoio 1 | -9.57 | -21.64 | 2Ø16 | 2Ø16 |
-| V6.COB | Apoio 2 | -71.14 | -71.15 | 2Ø16 | 2Ø16 |
-| V6.COB | Apoio 3 | -3.24 | -8.31 | 3Ø12.5 | 3Ø12.5 |
-| V7.COB | Vão 1 | 37.48 | 32.02 | 2Ø12.5 | 2Ø12.5 |
-| V7.COB | Vão 2 | 12.26 | 9.79 | 2Ø10 | 2Ø10 |
-| V7.COB | Apoio 1 | -23.46 | -31.47 | 2Ø16 | 2Ø16 |
-| V7.COB | Apoio 2 | -45.16 | -45.57 | 2Ø16 | 2Ø16 |
-| V7.COB | Apoio 3 | -6.79 | -11.92 | 3Ø10 | 3Ø10 |
+| V2.COB | Apoio 1 | -4.55 | -7.60 | 2Ø16 | 2Ø16 |
+| V2.COB | Apoio 2 | -60.12 | -62.27 | 2Ø16 | 2Ø16 |
+| V2.COB | Apoio 3 | -53.00 | -56.32 | 2Ø16 | 2Ø16 |
+| V2.COB | Apoio 4 | -38.57 | -42.08 | 3Ø12.5 | 3Ø12.5 |
+| V3.COB | Vão 1 | 30.51 | 28.57 | 4Ø10 | 4Ø10 |
+| V3.COB | Vão 2 | 40.00 | 37.48 | 4Ø10 | 4Ø10 |
+| V3.COB | Vão 3 | 9.83 | 7.50 | 3Ø10 | 3Ø10 |
+| V3.COB | Apoio 1 | -4.77 | -8.20 | 3Ø12.5 | 3Ø12.5 |
+| V3.COB | Apoio 2 | -56.13 | -58.83 | 3Ø12.5 | 3Ø12.5 |
+| V3.COB | Apoio 3 | -46.85 | -47.79 | 3Ø12.5 | 3Ø12.5 |
+| V3.COB | Apoio 4 | -1.40 | -2.82 | 2Ø12.5 | 2Ø12.5 |
+| V4.COB | Vão 1 | 23.89 | 22.77 | 3Ø10 | 3Ø10 |
+| V4.COB | Vão 2 | 12.61 | 11.15 | 2Ø10 | 2Ø10 |
+| V4.COB | Apoio 1 | -23.23 | -21.89 | 3Ø10 | 3Ø10 |
+| V4.COB | Apoio 2 | -32.68 | -35.66 | 3Ø10 | 3Ø10 |
+| V4.COB | Apoio 3 | -10.95 | -11.01 | 3Ø10 | 3Ø10 |
+| V5.COB | Vão 1 | 59.86 | 55.38 | 4Ø10 | 4Ø10 |
+| V5.COB | Vão 2 | 26.75 | 23.86 | 4Ø10 | 4Ø10 |
+| V5.COB | Apoio 1 | -16.94 | -22.05 | 2Ø16 | 2Ø16 |
+| V5.COB | Apoio 2 | -72.45 | -73.58 | 2Ø16 | 2Ø16 |
+| V5.COB | Apoio 3 | -6.02 | -7.91 | 3Ø12.5 | 3Ø12.5 |
+| V6.COB | Vão 1 | 57.86 | 54.05 | 4Ø10 | 4Ø10 |
+| V6.COB | Vão 2 | 26.65 | 23.84 | 4Ø10 | 4Ø10 |
+| V6.COB | Apoio 1 | -16.45 | -21.64 | 2Ø16 | 2Ø16 |
+| V6.COB | Apoio 2 | -70.78 | -71.15 | 2Ø16 | 2Ø16 |
+| V6.COB | Apoio 3 | -6.02 | -8.31 | 3Ø12.5 | 3Ø12.5 |
+| V7.COB | Vão 1 | 33.43 | 32.02 | 2Ø12.5 | 2Ø12.5 |
+| V7.COB | Vão 2 | 11.85 | 9.79 | 2Ø10 | 2Ø10 |
+| V7.COB | Apoio 1 | -31.15 | -31.47 | 2Ø16 | 2Ø16 |
+| V7.COB | Apoio 2 | -44.73 | -45.57 | 2Ø16 | 2Ø16 |
+| V7.COB | Apoio 3 | -10.12 | -11.92 | 3Ø10 | 3Ø10 |
 
 ## Lajes
 
@@ -320,7 +289,7 @@ Comparação 2 — **o que o pórtico muda**: momentos de projeto com a envoltó
 
 ## Pilares
 
-Pórticos: 214 verificações de lance (1181 s)
+Pórticos: 214 verificações de lance (266 s)
 
 | Lance | combinação | Nd (kN) | Mx base/topo (kN·cm) | My base/topo (kN·cm) | arranjo Pórticos | arranjo isolado | resultado |
 |---|---|---|---|---|---|---|---|
@@ -541,10 +510,10 @@ Pórticos: 214 verificações de lance (1181 s)
 
 ## Armadura em 3D
 
-- cota 3 m: {'pilar longitudinal': 76, 'pilar estribo': 300, 'viga longitudinal': 1079, 'viga estribo': 1070, 'laje positiva': 510, 'laje negativa': 497}; avisos: nenhum; pontos de barra fora do concreto: nenhum
-- cota 6 m: {'pilar longitudinal': 76, 'pilar estribo': 300, 'viga longitudinal': 1022, 'viga estribo': 1028, 'laje positiva': 510, 'laje negativa': 497}; avisos: nenhum; pontos de barra fora do concreto: nenhum
-- cota 9 m: {'pilar longitudinal': 76, 'pilar estribo': 300, 'viga longitudinal': 988, 'viga estribo': 1028, 'laje positiva': 510, 'laje negativa': 497}; avisos: nenhum; pontos de barra fora do concreto: nenhum
+- cota 3 m: {'pilar longitudinal': 76, 'pilar estribo': 300, 'viga longitudinal': 1080, 'viga estribo': 1066, 'laje positiva': 510, 'laje negativa': 497}; avisos: nenhum; pontos de barra fora do concreto: nenhum
+- cota 6 m: {'pilar longitudinal': 76, 'pilar estribo': 300, 'viga longitudinal': 1016, 'viga estribo': 1024, 'laje positiva': 510, 'laje negativa': 497}; avisos: nenhum; pontos de barra fora do concreto: nenhum
+- cota 9 m: {'pilar longitudinal': 76, 'pilar estribo': 300, 'viga longitudinal': 1000, 'viga estribo': 1024, 'laje positiva': 510, 'laje negativa': 497}; avisos: nenhum; pontos de barra fora do concreto: nenhum
 
 ## Resumo
 
-Vigas com diferença: 21; pavimentos de laje com diferença: 3; verificações de pilar com diferença: 0. Tempo: 3779 s.
+Vigas com diferença: 15; pavimentos de laje com diferença: 3; verificações de pilar com diferença: 0. Tempo: 1395 s.

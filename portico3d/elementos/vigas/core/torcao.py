@@ -93,6 +93,12 @@ class ResultadoTorcao:
     a_transversal: float      # cm²/m, total dos dois ramos + cortante
     biela_ok: bool
     avisos: list[str] = field(default_factory=list)
+    #: parcela de Asl das faces superior e inferior depois da redução do
+    #: banzo comprimido (17.7.1.3); sem redução, as duas valem a fração de Asl
+    #: da face. Preenchidas pelo dimensionamento da viga
+    Asl_sup: float = 0.0
+    Asl_inf: float = 0.0
+    reducao_banzo: float = 0.0
 
     @property
     def veredito(self) -> str:

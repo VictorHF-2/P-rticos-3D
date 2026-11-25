@@ -935,4 +935,10 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # No executável do PyInstaller, cada processo filho (o pool dos pilares,
+    # ``portico3d.cache_motores``, e o da busca do motor de Pilares) reexecuta
+    # este arquivo; sem isto, o filho abriria o programa de novo em vez de
+    # fazer a conta que lhe foi pedida
+    import multiprocessing
+    multiprocessing.freeze_support()
     sys.exit(main(sys.argv[1:]))

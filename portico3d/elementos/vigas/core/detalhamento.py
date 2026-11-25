@@ -270,6 +270,12 @@ class ZonaEstribo:
     #: faixa adensada para costurar uma emenda (9.5.2.4.1), embutida na
     #: distribuição. O espaçamento dela vem da emenda, e não do cortante
     costura: bool = False
+    #: faixa adensada pela armadura de suspensão (18.3.6), somada ao
+    #: cisalhamento no cruzamento com outra viga
+    suspensao: bool = False
+    #: faixa adensada pela armadura transversal ao longo de uma ancoragem
+    #: (9.4.2.6), onde os estribos existentes não davam 25 % da força da barra
+    ancoragem: bool = False
 
     @property
     def comprimento(self) -> float:
@@ -728,6 +734,10 @@ def escalonar(x: np.ndarray, As_req: np.ndarray, arranjo: Arranjo,
     armadura de uma face é simétrica, e cortar uma barra sozinha desmancha a
     simetria da seção. Cada par recebe o comprimento da sua barra **mais
     interna** -- a que é exigida no trecho maior --, o que é o lado seguro.
+
+    A barra que só existe pela armadura mínima (o cálculo não a exige em
+    seção nenhuma) vai até onde a face ainda tem As_req > 0, decalado de aℓ,
+    mais ℓb,nec; as ``manter_ate_apoio`` primeiras correm a região inteira.
     """
     mask = (x >= x_ini - 1e-9) & (x <= x_fim + 1e-9)
     xs, As = x[mask], As_req[mask]
@@ -750,6 +760,13 @@ def escalonar(x: np.ndarray, As_req: np.ndarray, arranjo: Arranjo,
         # a k-ésima barra é necessária onde As_dec > (k-1) * A1
         limite = (k_par - 1) * A1
         necessarias = As_dec > limite + 1e-9
+        if not necessarias.any() and k > manter_ate_apoio:
+            # barra que só existe pela armadura mínima (17.3.5.2.1): não é
+            # exigida pelo cálculo em seção nenhuma, mas também não precisa
+            # ir além de onde a face tem momento -- vai até onde As_req
+            # daquela face (já decalado de aℓ) é maior que zero, mais ℓb,nec,
+            # como as calculadas. Sem momento algum na face, a região toda.
+            necessarias = As_dec > 1e-9
         if k <= manter_ate_apoio or not necessarias.any():
             a, b = x_min_barra, x_max_barra
         else:

@@ -112,20 +112,8 @@ def roteiro(res: ResultadoViga) -> list[Verificacao]:
             cfg.redistribuicao >= 0.75),
         "sem redistribuição" if cfg.redistribuicao >= 1.0
         else f"δ = {cfg.redistribuicao:g}"))
-    v.append(Verificacao(
-        "14.6.6.1", "Momentos mínimos pela solidariedade viga–pilar",
-        NAO_VERIFICADO,
-        "os apoios extremos são modelados como rótulas; o critério de "
-        "engastamento parcial "
-        + ("está ligado em "
-           f"{cfg.engastamento_minimo_extremidade:.0%} do momento do vão"
-           if cfg.engastamento_minimo_extremidade
-           else "está desligado — verifique à parte se a viga é monolítica "
-                "com o pilar")))
-    v.append(Verificacao(
-        "15.10", "Estabilidade lateral de vigas esbeltas",
-        NAO_VERIFICADO, "fora do escopo do programa; conferir à parte em viga "
-                        "alta e estreita"))
+    _solidariedade(res, v)
+    _estabilidade_lateral(res, v)
 
     # -- flexão -------------------------------------------------------------
     reais = [r for r in res.regioes if not r.construtiva]
@@ -174,6 +162,16 @@ def roteiro(res: ResultadoViga) -> list[Verificacao]:
             APLICADO if cfg.reducao_apoio else NAO_APLICAVEL,
             "só a alínea (a), de carga distribuída; cargas concentradas a "
             "menos de 2d não são reduzidas — a favor da segurança"))
+    v.append(Verificacao(
+        "17.6", "Fissuração inclinada da alma: estribos a no máximo 15 cm "
+                "(casos especiais)",
+        (_sit(all(z.s <= 15.0 + 1e-9 for z in res.zonas_estribo))
+         if cfg.fissuracao_inclinada_alma else NAO_APLICAVEL),
+        (f"maior espaçamento adotado: "
+         f"{max((z.s for z in res.zonas_estribo), default=0.0):g} cm"
+         if cfg.fissuracao_inclinada_alma else
+         "usualmente não é necessário verificar (17.6); critério desligado "
+         "nos dados")))
     if res.zonas_estribo:
         v.append(Verificacao(
             "18.3.3.2", "Bitola do estribo entre 5 mm e bw/10, s,máx e st,máx",
@@ -189,6 +187,27 @@ def roteiro(res: ResultadoViga) -> list[Verificacao]:
             _sit(all(t.biela_ok for t in res.torcoes)),
             f"pior caso x = {pior_t.x:.2f} m: Tsd/TRd2 + Vsd/VRd2 = "
             f"{pior_t.interacao:.3f}"))
+        esp = getattr(res, "espacamentos_torcao", [])
+        if esp:
+            pior_e = max(esp, key=lambda e: e.espacamento)
+            v.append(Verificacao(
+                "18.3.4", "Barras longitudinais de torção a no máximo 35 cm "
+                          "e uma barra em cada vértice do estribo",
+                _sit(all(e.ok for e in esp)),
+                f"maior espaçamento: {pior_e.espacamento:.1f} cm (tramo "
+                f"{pior_e.tramo + 1}, face {pior_e.face}); "
+                f"{min(e.n_barras for e in esp if e.face != 'laterais')} "
+                f"barras na face mais pobre"))
+        reduz = max((t.reducao_banzo for t in res.torcoes), default=0.0)
+        v.append(Verificacao(
+            "17.7.1.3", "Redução da armadura longitudinal de torção no banzo "
+                        "comprimido",
+            APLICADO if cfg.reduzir_torcao_banzo_comprimido else NAO_APLICAVEL,
+            (f"pela compressão concomitante mínima na espessura he da face; "
+             f"maior redução {reduz:.2f} cm²"
+             if cfg.reduzir_torcao_banzo_comprimido else
+             "não aplicada (opção dos dados): a parcela da face comprimida fica "
+             "inteira, a favor da segurança")))
     else:
         v.append(Verificacao(
             "17.5", "Torção", NAO_APLICAVEL if not viga.torcores
@@ -233,10 +252,26 @@ def roteiro(res: ResultadoViga) -> list[Verificacao]:
             _sit(all(w.ok for w in fiss)),
             f"pior caso {pior_w.regiao}: wk = {pior_w.wk:.3f} mm contra "
             f"{pior_w.wk_limite:.2f} mm"))
-        v.append(Verificacao(
-            "17.3.3.2", "Armadura de pele no controle de fissuração",
-            NAO_VERIFICADO,
-            "o wk considera só a armadura de flexão — conservador"))
+        pele_f = getattr(res, "pele_fissuracao", [])
+        if pele_f:
+            pior_p = max(pele_f, key=lambda p: p.wk / max(p.wk_limite, 1e-9))
+            espac = [p for p in pele_f if not p.espacamento_ok]
+            v.append(Verificacao(
+                "17.3.3.2 (Nota)", "Armadura de pele tracionada no controle "
+                                   "de fissuração (Acri de cada barra)",
+                _sit(all(p.ok for p in pele_f)),
+                f"pior caso {pior_p.regiao}, N{pior_p.posicao} a "
+                f"{pior_p.y:.1f} cm da face comprimida: wk = {pior_p.wk:.3f} mm "
+                f"contra {pior_p.wk_limite:.2f} mm"
+                + (f"; espaçamento {espac[0].s:g} cm acima de 15 Ø = "
+                   f"{espac[0].s_max:g} cm (recomendação da Nota)"
+                   if espac else "")))
+        else:
+            v.append(Verificacao(
+                "17.3.3.2 (Nota)", "Armadura de pele tracionada no controle "
+                                   "de fissuração",
+                NAO_APLICAVEL, "nenhuma barra de pele na zona tracionada "
+                               "fissurada"))
 
     # -- detalhamento -------------------------------------------------------
     if res.apoios_extremos:
@@ -284,13 +319,13 @@ def roteiro(res: ResultadoViga) -> list[Verificacao]:
         APLICADO if pele else NAO_APLICAVEL,
         f"{len(pele)} posição(ões) de pele" if pele
         else "dispensada: nenhum tramo passa de 60 cm de altura"))
-    susp = [p for p in res.posicoes if p.tipo == "suspensao"]
-    indiretas = [c for c in viga.concentradas if getattr(c, "indireta", False)]
+    susp = getattr(res, "suspensoes", [])
     v.append(Verificacao(
-        "18.3.6", "Armadura de suspensão sob carga indireta",
+        "18.3.6", "Armadura de suspensão em cruzamento de vigas",
         APLICADO if susp else NAO_APLICAVEL,
-        f"{len(susp)} posição(ões) para {len(indiretas)} carga(s) indireta(s)"
-        if susp else "nenhuma carga foi declarada como indireta"))
+        f"{len(susp)} faixa(s) adensada(s) dos estribos — "
+        + ", ".join(sorted({s.papel for s in susp}))
+        if susp else "nenhuma viga se apoia nesta nem esta se apoia em viga"))
 
     # -- fadiga -------------------------------------------------------------
     if res.fadigas or res.fadigas_estribo:
@@ -315,17 +350,46 @@ def roteiro(res: ResultadoViga) -> list[Verificacao]:
             "critério desligado; só se aplica a estruturas com ações "
             "cíclicas relevantes (23.5.1)"))
 
-    # -- o que o programa não cobre ----------------------------------------
-    for item, exig in (
-            ("13.2.5 e 21.3", "Aberturas e furos na alma"),
-            ("17.6", "Fissuração inclinada da alma"),
-            ("23.3",
-             "Estado-limite de vibrações excessivas (fn > 1,2 fcrit)"),
-            ("9.4.2.6",
-             "Armadura transversal na ancoragem (25 % da força de uma barra; "
-             "duas direções e s <= 5 Ø acima de Ø32)")):
-        v.append(Verificacao(item, exig, NAO_VERIFICADO,
-                             "fora do escopo do programa"))
+    # -- vibrações (23.3) ----------------------------------------------------
+    vib = getattr(res, "vibracao", None)
+    if vib is not None:
+        v.append(Verificacao(
+            "23.3", "Estado-limite de vibrações excessivas: fn > 1,2 fcrit e "
+                    "fn >= 3 Hz",
+            _sit(vib.ok),
+            f"fn = {vib.fn:.2f} Hz (análise modal, massas da combinação "
+            f"frequente, {vib.rigidez}) contra 1,2 × {vib.fcrit:g} = "
+            f"{1.2 * vib.fcrit:.2f} Hz"))
+    else:
+        v.append(Verificacao(
+            "23.3", "Estado-limite de vibrações excessivas (fn > 1,2 fcrit)",
+            NAO_VERIFICADO, "frequência crítica não informada nos critérios — "
+                            "depende do uso (Tabela 23.1)"))
+
+    # -- armadura transversal na ancoragem (9.4.2.6) ---------------------------
+    tra = getattr(res, "transversais_ancoragem", [])
+    if not cfg.verificar_transversal_ancoragem:
+        v.append(Verificacao(
+            "9.4.2.6", "Armadura transversal ao longo das ancoragens",
+            NAO_VERIFICADO, "verificação desligada nos critérios"))
+    elif tra:
+        adens = [t for t in tra if t.adensada]
+        disp = [t for t in tra if t.dispensada]
+        v.append(Verificacao(
+            "9.4.2.6", "Armadura transversal ao longo das ancoragens: 25 % da "
+                       "força da maior barra (s <= 5 Ø acima de Ø32)",
+            _sit(all(t.ok for t in tra)),
+            f"{len(tra)} ancoragem(ns) conferida(s), um ramo por estribo"
+            + (f"; {len(adens)} receberam faixa adensada" if adens else "")
+            + (f"; {len(disp)} dispensada(s) pelo 9.4.1.1" if disp else "")))
+    else:
+        v.append(Verificacao(
+            "9.4.2.6", "Armadura transversal ao longo das ancoragens",
+            NAO_APLICAVEL, "nenhuma ancoragem por aderência fora de traspasse"))
+
+    # -- furos e aberturas na alma (13.2.5 e 21.3.3) -----------------------
+    from .aberturas import verificacoes as verificacoes_aberturas
+    v += verificacoes_aberturas(res)
     _juntas(res, v)
     for g in res.grampos:
         v.append(Verificacao(
@@ -335,6 +399,98 @@ def roteiro(res: ResultadoViga) -> list[Verificacao]:
             f"{g.n} grampo(s) Ø{g.phi:g} assumem {g.fracao * 100:.0f}% da "
             f"força (teto da bitola: Ø{g.phi_max:.1f} mm)"))
     return v
+
+
+def _solidariedade(res: ResultadoViga, v: list[Verificacao]) -> None:
+    """As linhas do 14.6.6.1."""
+    s = getattr(res, "solidariedade", None)
+    viga = res.viga
+    pilares = [ap for ap in viga.apoios if ap.pilar]
+    if s is None or not pilares:
+        v.append(Verificacao(
+            "14.6.6.1", "Solidariedade viga–pilar", NAO_APLICAVEL,
+            "nenhum apoio em pilar"))
+        return
+    if s.modelo == "rigidez":
+        sem = [k + 1 for k, ap in enumerate(viga.apoios)
+               if ap.tipo == "simples" and ap.pilar
+               and not ap.pilar_informado]
+        v.append(Verificacao(
+            "14.6.6.1", "Solidariedade viga–pilar pela rigidez dos pilares "
+                        "no modelo",
+            APLICADO if s.pilares else NAO_VERIFICADO,
+            (f"{len(s.pilares)} pilar(es) como mola k = 4·Ecs·Σ I/(ℓ/2)"
+             + (f"; apoio(s) {', '.join(map(str, sem))} sem lance, como "
+                f"rótula" if sem else ""))
+            if s.pilares else "nenhum lance de pilar informado: os apoios "
+                              "ficaram como rótulas"))
+        return
+    internos = [k for k in range(1, len(viga.apoios) - 1)
+                if viga.apoios[k].pilar and viga.apoios[k].tipo == "simples"]
+    v.append(Verificacao(
+        "14.6.6.1 a", "Momento positivo não menor que o de engastamento "
+                      "perfeito nos apoios internos",
+        APLICADO if internos else NAO_APLICAVEL,
+        (f"governou o(s) tramo(s) "
+         f"{', '.join(str(i + 1) for i, _, _ in s.positivos)}"
+         if s.positivos else "não governou nenhum tramo")
+        if internos else "nenhum apoio interno em pilar"))
+    sem_lance = [k + 1 for k in internos
+                 if not viga.apoios[k].pilar_informado]
+    v.append(Verificacao(
+        "14.6.6.1 b", "Negativo de engastamento no apoio interno com largura "
+                      "> ¼ do lance do pilar",
+        (APLICADO if s.internos else
+         NAO_VERIFICADO if sem_lance else NAO_APLICAVEL),
+        ("; ".join(f"apoio {c.apoio}: {c.largura:g} cm "
+                   f"{'>' if c.aplica else '<='} {c.l_pilar / 4.0:g} cm"
+                   for c in s.internos)
+         if s.internos else
+         f"lance do pilar não informado no(s) apoio(s) "
+         f"{', '.join(map(str, sem_lance))}" if sem_lance
+         else "nenhum apoio interno em pilar")))
+    extremos = [k for k in (0, len(viga.apoios) - 1)
+                if viga.apoios[k].pilar and viga.apoios[k].tipo == "simples"]
+    v.append(Verificacao(
+        "14.6.6.1 c", "Momento de solidariedade nos apoios extremos",
+        (NAO_VERIFICADO if s.sem_altura else
+         APLICADO if s.extremos else NAO_APLICAVEL),
+        ("; ".join(f"apoio {c.apoio}: {c.coef:.3f} × {c.M_eng:.1f} = "
+                   f"{c.M_viga:.1f} kN·m" for c in s.extremos)
+         + (f"; sem lance informado no(s) apoio(s) "
+            f"{', '.join(map(str, s.sem_altura))} (rótula)"
+            if s.sem_altura else ""))
+        if extremos else "nenhum apoio extremo simples em pilar"))
+
+
+def _estabilidade_lateral(res: ResultadoViga, v: list[Verificacao]) -> None:
+    """A linha do 15.10: a pior zona comprimida, ou a dispensa."""
+    itens = getattr(res, "estabilidade_lateral", [])
+    if not itens:
+        v.append(Verificacao(
+            "15.10", "Instabilidade lateral de vigas", NAO_APLICAVEL,
+            "nenhuma zona comprimida"))
+        return
+    conferidas = [e for e in itens if not e.dispensada]
+    if not conferidas:
+        v.append(Verificacao(
+            "15.10", "Instabilidade lateral: b >= l0/50 e b >= βfl·h",
+            NAO_APLICAVEL, "todas as zonas comprimidas estão contidas pela laje "
+                           "da face superior"))
+        return
+    pior = max(conferidas, key=lambda e: e.b_min / max(e.b, 1e-9))
+    alerta = [e for e in conferidas if not e.atende and not e.critica]
+    v.append(Verificacao(
+        "15.10", "Instabilidade lateral: b >= l0/50 e b >= βfl·h "
+                 "(procedimento aproximado)",
+        (NAO_ATENDIDO if any(not e.ok for e in conferidas)
+         else APLICADO if alerta else ATENDIDO),
+        f"pior caso tramo {pior.tramo + 1}, zona comprimida "
+        f"{pior.face_comprimida}: b = {pior.b:.0f} cm contra "
+        f"{pior.b_min:.1f} cm (l0 = {pior.l0:.2f} m, βfl = {pior.beta_fl:.2f})"
+        + ("; não atendida só em zona de momento negativo com a face "
+           "superior travada pela laje — alerta, decisão do projetista"
+           if alerta else "")))
 
 
 def resumo(verificacoes: list[Verificacao]) -> dict[str, int]:

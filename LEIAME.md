@@ -22,7 +22,7 @@ ou, direto no Python:
 ```
 py main.py                             abre a janela
 py main.py modelo.json --janela        abre a janela já com um modelo
-py main.py --autoteste                 roda as 740 conferências de referência
+py main.py --autoteste                 roda as 751 conferências de referência
 py main.py modelo.json [caso]          resolve um caso e imprime o resumo
 py main.py modelo.json --envoltoria    gera as combinações da NBR 6118,
                                        resolve todas e imprime a envoltória
@@ -43,7 +43,7 @@ subia e quebrava na primeira exportação.
 Tabelas à esquerda, desenho à direita, relatório embaixo. O caminho é montar,
 analisar e ler o resultado, e a interface existe só para encurtá-lo: não há
 uma linha de mecânica nela, e é de propósito — tudo continua no `core`, que é
-o que as 740 conferências cobrem.
+o que as 751 conferências cobrem.
 
 **A janela cabe em qualquer tela.** O tamanho de abertura sai da área útil
 da tela desta máquina — já sem a barra de tarefas —, a janela é centrada nela,
@@ -1237,6 +1237,16 @@ viga, seção de pilar ou laje) não acha barra fora do concreto.
 
 Conferências: seção 53 de `validacao.py`.
 
+**Atualização de 25/11/2026.** O achado do Vigas R04 foi corrigido lá
+(`e1afab0`) e entrou com a recópia `motor-2026-11-25`; a mesa da viga de
+borda agora é a seção L do próprio motor (`Secao.lado_mesa`), e a mola dos
+pilares é a do 14.6.6.1 feita pelo motor. Na nova rodada a viga que o
+Pórticos monta continua idêntica no programa de Vigas (24 de 24). A ponte
+passava a altura da viga apoiada em cm × 100 (`h_apoiada`, que reduz a
+carga de suspensão do 18.3.6); corrigido. Os momentos de vão 1 a 3 %
+maiores que os da montagem à mão continuam sendo a carga de laje só no vão
+flexível.
+
 ## Sacada: viga em balanço que carrega laje (2026-10-16)
 
 O usuário lançou uma sacada (vigas avançando em balanço além dos pilares, uma
@@ -2074,12 +2084,48 @@ uma tag por revisão — e as pastas de revisão (`Vigas R04`, `Pilares R05`,
 | Cópia | Commit de origem | Situação |
 |---|---|---|
 | Lajes | `05e344c` (tag R11 de `Lajes/Programa`) | idêntica, confrontada |
-| Vigas | — | feita da pasta `Vigas R04` em 03/11, antes de o estado virar commit; nenhum commit é idêntico (o mais próximo difere em 3 arquivos) |
+| Vigas | `1508440` (tag `motor-2026-11-25` de `Vigas/Programa`) | recopiada em 25/11; idêntica, confrontada |
 | Pilares | — | feita da pasta `Pilares R05` em 05/11, idem (o mais próximo difere em 5) |
 
-Para as duas sem commit, o autoteste diz que a origem está fora de alcance
-em vez de acusar diferença. Recopiar de um commit (e com isso confrontá-las)
-muda resultado e fica para quando for pedido.
+Para a que fica sem commit (Pilares), o autoteste diz que a origem está
+fora de alcance em vez de acusar diferença. Recopiá-la de um commit (e com
+isso confrontá-la) muda resultado e fica para quando for pedido.
+
+**Vigas recopiado em 25/11/2026 (`motor-2026-11-25`).** O programa de Vigas
+atendeu dois pedidos do Pórticos e ganhou outras coisas desde 03/11. O que
+isso mudou aqui:
+
+* **Barra pela mínima** (pedido): a barra que só existe porque As,mín
+  governa para onde o momento negativo daquela face acaba, mais aℓ e ℓb,nec,
+  e não no fim da região do apoio. Na V1 da sacada, as duas barras além das
+  de canto do apoio 1 iam a 3,36 m e agora param em 1,56 m.
+* **Seção L** (pedido): `Secao.lado_mesa`. A ponte o preenche na viga de
+  borda — "esquerda" é o lado +1 de quem anda no sentido da cadeia — e o
+  motor põe o laço da mesa só desse lado. O deslocamento da mesa que o
+  desenho 3D fazia sai. E o desenho passou a levar o `u` da seção do motor
+  (que cresce para a direita de quem olha a viga entrando no papel) para
+  −(ẑ × eixo): antes ia para o +y local, que numa viga horizontal aponta para
+  a **esquerda** — com a seção simétrica não aparecia, com a L sairia
+  espelhada.
+* **Solidariedade viga-pilar, 14.6.6.1** (novo no Vigas): a ponte deixa de
+  calcular a mola ela mesma (`4EI/ℓ` do lance, metade da do item) e passa
+  ao motor o pilar descrito — largura na direção da viga, a perpendicular e
+  os lances acima e abaixo —, com o modelo `rigidez`: o motor faz
+  `k = 4·Ecs·(I_sup/(ℓ_sup/2) + I_inf/(ℓ_inf/2))`, a rigidez da Figura 14.8.
+  As correções do modelo clássico (alíneas a, b e c, feitas com a análise da
+  viga isolada) não entram: no modo pórtico a envoltória é a do pórtico,
+  onde a solidariedade é exata. A viga contínua daqui fica igual à do
+  programa de Vigas montado à mão; muda o que sai dela (flecha, reações
+  entre vigas, e os modos `motor` e `envolvente`).
+* **Negativa de extremidade descendo no pilar** (corrigido no Vigas em 05/11,
+  `e1afab0`): o motor aceita mola e apoio simples com o lance de baixo
+  informado. A troca temporária para "engaste" que a ponte fazia na
+  verificação de ancoragem (`_no_monolitico_na_ancoragem`) saiu.
+* **Apoio em outra viga** (18.3.6): o apoio leva `viga_apoio`,
+  `x_na_viga_apoio`, `h_viga_apoio` e os topos alinhados (o desenho nivela os
+  topos do pavimento); a reação recebida leva a altura da viga apoiada, com
+  que o motor reduz a carga de suspensão. Sem `viga_apoio`, o motor tomava o
+  apoio por pilar.
 
 Vieram o `core/` e o `saidas/` (é do `saidas/` que saem os desenhos das
 peças); as interfaces ficaram de fora.
@@ -2088,7 +2134,7 @@ peças); as interfaces ficaram de fora.
 
 | Elemento | Revisão | O que a troca trouxe para cá |
 |---|---|---|
-| Vigas | Vigas R04 | arredondamento R·t/8 sobre o apoio (14.6.3) no lugar da redução à face; ancoragem das negativas e da torção nos extremos; ductilidade com o aço adotado; costura em faixas |
+| Vigas | `motor-2026-11-25` (25/11) | seção L; barra pela mínima cortada pelo diagrama; solidariedade viga-pilar do 14.6.6.1; apoio em outra viga (18.3.6); itens complementares e furos na alma. Antes (R04, 03/11): arredondamento R·t/8 sobre o apoio (14.6.3) no lugar da redução à face; ancoragem das negativas e da torção nos extremos; ductilidade com o aço adotado; costura em faixas |
 | Pilares | Pilares R05 (de novo em 2026-11-05) | várias combinações por pilar com armadura comum; método geral; elipse do momento mínimo; desaprumo no balanço; busca exata dos arranjos (com processos paralelos, desligáveis por `PILARES_SEM_PARALELO`) |
 | Lajes | Lajes R11 (2026-11-05) | laje em balanço reconhecida pelo destino; fissuração nas bordas comuns; nervurada, alveolar, MEF de placa (não usados aqui) |
 
@@ -2125,6 +2171,52 @@ a cópia não se edita; a ponte o chama uma vez por combinação governante.
   barras de canto dentro da laje, fora da alma. O desenho 3D já as punha no
   lugar certo; a conferência de "barra dentro da seção" passou a aceitar
   barra fora da alma quando ela cai na faixa da laje.
+
+## Cache e paralelismo dos motores (2026-11-25)
+
+O motor de Pilares é a parte lenta do programa — no edifício de 3 pavimentos,
+214 verificações de lance a uns 5 s cada —, e a mesma verificação era feita
+de novo na armadura 3D de cada pavimento, no projeto completo e na
+compatibilização. `cache_motores.py` resolve as duas coisas sem tocar nas
+cópias:
+
+* **Cache pela impressão da entrada.** O resultado do motor fica guardado
+  pelo SHA-256 do `para_dict()` da entrada (o `asdict` dela inteira); na
+  viga, mais a impressão da envoltória externa que a ponte aplica
+  (`envoltoria_externa` a anota em `aplicar.chave`; envoltória sem
+  impressão não é guardada). Entrada diferente, chave diferente: modelo
+  alterado nunca reaproveita resultado velho e não há invalidação a
+  esquecer. Guarda os 5000 mais recentes de cada motor.
+* **Pilares em paralelo.** `verificar_pilares` monta primeiro todos os
+  `Pilar` e passa o lote de uma vez; os que não estão no cache vão para um
+  pool de processos (núcleos − 1, no máximo 8), com a busca paralela do
+  próprio motor desligada nos filhos (`PILARES_SEM_PARALELO`). A ordem e o
+  resultado são os da execução em série; pool que falha cai para série.
+  `PORTICOS_SEM_PARALELO=1` desliga. `main.py` chama
+  `multiprocessing.freeze_support()` para o executável.
+* `armadura_do_pavimento` chama `verificar_pilares` uma vez por cota, com
+  todos os lances, em vez de uma vez por lance.
+
+Medido no edifício de 3 pavimentos (`edificio_3pav.py`), mesma máquina:
+
+| etapa | antes (s) | depois (s) |
+|---|---|---|
+| análise com 2ª ordem | 1,1 | 1,5 |
+| pilares (214 verificações) | 1097,5 | 224,1 |
+| vigas (24 cadeias) | 5,7 | 6,4 |
+| lajes | 0,8 | 0,7 |
+| armadura 3D, cota 3 m | 313,7 | 0,9 |
+| armadura 3D, cota 6 m | 292,3 | 0,9 |
+| armadura 3D, cota 9 m | 287,6 | 1,2 |
+| **total** | **1998,7** | **235,7** |
+
+Os pilares, as posições de armadura das vigas e a contagem de barras do 3D
+saíram idênticos nas duas rodadas. Conferências: em
+`ponte_roda_o_lote_do_edificio`, série × paralelo × cache no mesmo lote.
+
+O que sobra é o próprio motor de Pilares (a integração da seção e o
+refinamento da elipse do momento mínimo); a otimização dele foi pedida à
+janela do programa de Pilares, e entra aqui na próxima recópia.
 
 ## A ponte com o dimensionamento
 
@@ -2266,13 +2358,13 @@ O motor de Vigas resolve a viga contínua a partir das cargas e das **suas**
 combinações, e isso deixava três coisas para trás. As três estão corrigidas, e
 vale saber quais são porque cada uma muda o resultado:
 
-**A rigidez dos pilares.** Os apoios vão como **mola**, e não como rótula. O
-motor já previa isso — o `Apoio` dele tem o tipo `mola` com `k_mola`, e o
-docstring diz "útil para representar a rigidez dos pilares" —, e a ponte é que
-não usava. A mola vale `4EI/ℓ` somado sobre os lances que chegam ao nó, com a
-inércia medida **na direção da viga**: pilar 20×60 com os 60 cm no rumo da
-viga trava muito mais que o mesmo pilar virado, e há conferência travando isso
-pela razão dos cubos.
+**A rigidez dos pilares.** Os apoios não vão como rótula. Até 25/11 a
+ponte passava uma mola de `4EI/ℓ` por lance; desde a recópia do Vigas
+(`motor-2026-11-25`) ela passa o pilar descrito e o motor faz a mola do
+14.6.6.1 (modelo `rigidez`, Figura 14.8) — ver "Vigas recopiado em
+25/11/2026". A inércia é medida **na direção da viga**: pilar 20×60 com os
+60 cm no rumo da viga trava muito mais que o mesmo pilar virado, e há
+conferência travando isso pela razão dos cubos.
 
 **O peso próprio, uma vez só.** Ele vem do pórtico, e o do motor fica
 desligado. Antes os dois entravam: na viga 20×50 do exemplo, 2,5 kN/m sobre

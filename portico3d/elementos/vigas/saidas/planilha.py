@@ -869,6 +869,8 @@ def _abas_da_viga(wb: Workbook, res: ResultadoViga,
     _aba_ancoragem(wb, res)
     _aba_els(wb, res)
     _aba_detalhamento(wb, res)
+    from .aberturas import aba_planilha     # furos na alma (13.2.5, 21.3)
+    aba_planilha(wb, res)
     _aba_quantitativo(wb, res)
     _aba_avisos(wb, res)
 

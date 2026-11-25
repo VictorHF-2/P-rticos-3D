@@ -26,6 +26,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 from .modelo import Viga
+from .solidariedade import k_rotacional
 
 DX_MAX = 0.025         # m, comprimento máximo do elemento na discretização
 TOL = 1e-9
@@ -168,9 +169,11 @@ def montar_rigidez(viga: Viga, malha: Malha) -> sp.csr_matrix:
     K = sp.coo_matrix((valores, (linhas, colunas)), shape=(n, n)).tocsr()
     molas = []
     for i, ap in enumerate(viga.apoios):
-        if ap.tipo == "mola" and ap.k_mola > 0:
+        # a mola do usuário e, no modelo "rigidez" do 14.6.6.1, a do pilar
+        k_rot = k_rotacional(viga, i)
+        if k_rot > 0 and ap.tipo != "engaste":
             no = _no_do_apoio(malha, viga.x_apoios[i])
-            molas.append((2 * no + 1, ap.k_mola))
+            molas.append((2 * no + 1, k_rot))
     if molas:
         idx = [m[0] for m in molas]
         val = [m[1] for m in molas]
@@ -379,8 +382,8 @@ def resolver(viga: Viga, dx_max: float = DX_MAX,
             reac[i] = R[2 * no]
             if ap.tipo == "engaste":
                 mom[i] = R[2 * no + 1]
-            elif ap.tipo == "mola":
-                mom[i] = ap.k_mola * u[2 * no + 1]
+            else:
+                mom[i] = k_rotacional(viga, i) * u[2 * no + 1]
         respostas.append(RespostaBase(
             acao=caso.acao, tramo=caso.tramo, V=V, M=M, flecha=flecha,
             reacoes=reac, momentos_apoio=mom))

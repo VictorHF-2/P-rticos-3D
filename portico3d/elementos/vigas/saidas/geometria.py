@@ -298,6 +298,23 @@ def retangulo_arredondado(largura: float, altura: float, raio: float,
 TIPOS_ESTRIBO = TIPOS_TRANSVERSAIS
 
 
+def laco_da_mesa(secao: Secao, cob: float) -> tuple[float, float,
+                                                    float, float] | None:
+    """Retângulo do laço que abraça a mesa, ``(y0, z0, y1, z1)`` em cm.
+
+    Mesmo referencial de :func:`cantos_da_mesa`. Na T vai de ponta a ponta
+    da mesa; na L (``lado_mesa`` esquerda/direita) vai da ponta da mesa até
+    a face da alma do lado sem laje. Fonte única da seção transversal e da
+    vista 3D.
+    """
+    if secao.tipo == "retangular" or secao.bf <= secao.bw + 1e-9:
+        return None
+    z0, z1 = ((secao.h - secao.hf, secao.h) if secao.tipo == "T"
+              else (0.0, secao.hf))
+    return (-secao.aba_esquerda + cob, z0 + cob,
+            secao.bw + secao.aba_direita - cob, z1 - cob)
+
+
 def cantos_da_mesa(secao: Secao, cob: float,
                    phi_mm: float) -> list[tuple[float, float]]:
     """Os quatro cantos do laço que abraça a mesa, cm na seção.
@@ -314,14 +331,21 @@ def cantos_da_mesa(secao: Secao, cob: float,
     """
     if secao.tipo == "retangular" or secao.bf <= secao.bw + 1e-9:
         return []
-    aba = (secao.bf - secao.bw) / 2.0
     recuo = cob + phi_mm / 20.0
-    y_esq, y_dir = -aba + recuo, secao.bw + aba - recuo
+    y_esq = -secao.aba_esquerda + recuo
+    y_dir = secao.bw + secao.aba_direita - recuo
     if secao.tipo == "T":                      # mesa em cima
         z_ext, z_int = secao.h - recuo, secao.h - secao.hf + recuo
     else:                                      # T invertida: mesa embaixo
         z_ext, z_int = recuo, secao.hf - recuo
-    return [(y_esq, z_ext), (y_dir, z_ext), (y_esq, z_int), (y_dir, z_int)]
+    cantos = [(y_esq, z_ext), (y_dir, z_ext), (y_esq, z_int), (y_dir, z_int)]
+    # seção L: o laço fecha na face da alma sem laje, e o canto externo desse
+    # lado é o canto da alma, onde já corre a barra longitudinal da face
+    if secao.lado_mesa == "esquerda":
+        cantos.remove((y_dir, z_ext))
+    elif secao.lado_mesa == "direita":
+        cantos.remove((y_esq, z_ext))
+    return cantos
 
 
 def camada_barra(face: str, tipo: str = "") -> str:
@@ -341,15 +365,24 @@ def camada_barra(face: str, tipo: str = "") -> str:
 
 def _contorno_secao(secao: Secao) -> list[tuple[float, float]]:
     """Polígono da seção transversal, com origem no canto inferior esquerdo."""
-    b, h, bf, hf = secao.bw, secao.h, secao.bf, secao.hf
+    b, h, hf = secao.bw, secao.h, secao.hf
     if secao.tipo == "retangular":
         return [(0, 0), (b, 0), (b, h), (0, h)]
-    e = (bf - b) / 2.0
+    ee, ed = secao.aba_esquerda, secao.aba_direita
     if secao.tipo == "T":
-        return [(0, 0), (b, 0), (b, h - hf), (b + e, h - hf), (b + e, h),
-                (-e, h), (-e, h - hf), (0, h - hf)]
-    return [(-e, 0), (b + e, 0), (b + e, hf), (b, hf), (b, h), (0, h),
-            (0, hf), (-e, hf)]
+        pts = [(0, 0), (b, 0), (b, h - hf), (b + ed, h - hf), (b + ed, h),
+               (-ee, h), (-ee, h - hf), (0, h - hf)]
+    else:
+        pts = [(-ee, 0), (b + ed, 0), (b + ed, hf), (b, hf), (b, h), (0, h),
+               (0, hf), (-ee, hf)]
+    # seção L: o lado sem aba deixa vértices repetidos -- fora com eles
+    saida: list[tuple[float, float]] = []
+    for p in pts:
+        if not saida or p != saida[-1]:
+            saida.append(p)
+    if len(saida) > 1 and saida[-1] == saida[0]:
+        saida.pop()
+    return saida
 
 
 # ---------------------------------------------------------------------------
@@ -698,6 +731,10 @@ def montar_elevacao(res: ResultadoViga, mostrar_estribos: bool = True,
                     (xa * 100.0, xb * 100.0, el.h_max + 14.0,
                      f"{max(1, quantos)} N{p.numero} c/{esp:g}"))
 
+    # furos e aberturas na alma: contorno, estribos retirados e armadura nova
+    from . import aberturas as desenho_aberturas
+    desenho_aberturas.na_elevacao(res, el, bases, mostrar_estribos)
+
     # duas faixas vizinhas com a mesma posição e o mesmo passo são uma cota:
     # a divisa entre elas é a divisa dos tramos, que não interessa a quem monta
     unidas: list[tuple[float, float, float, str]] = []
@@ -864,6 +901,10 @@ def _forma_barra(p: Posicao, secao: Secao, cob: float,
         if p.papel == "mesa":
             b = secao.bf - 2.0 * cob
             h = secao.hf - 2.0 * cob
+        elif p.papel == "banzo" and any(p.faixa_altura):
+            # estribo de um banzo do furo: abraça só a altura do banzo
+            b = secao.bw - 2.0 * cob
+            h = p.faixa_altura[1] - p.faixa_altura[0] - 2.0 * cob
         else:
             b = secao.bw - 2.0 * cob
             h = secao.h - 2.0 * cob
@@ -1082,11 +1123,9 @@ def montar_secao(res: ResultadoViga, x_m: float, nome: str = ""
                    and p.x_ini - 1e-9 <= x_m <= p.x_fim + 1e-9
                    for p in res.posicoes)
     if tem_laco and secao.tipo != "retangular" and secao.bf > secao.bw:
-        aba = (secao.bf - secao.bw) / 2.0
-        z0, z1 = ((h - secao.hf, h) if secao.tipo == "T" else (0.0, secao.hf))
+        y0, z0, y1, z1 = laco_da_mesa(secao, cob)
         est_mesa = Polilinha(
-            [(-aba + cob, z0 + cob), (b + aba - cob, z0 + cob),
-             (b + aba - cob, z1 - cob), (-aba + cob, z1 - cob)],
+            [(y0, z0), (y1, z0), (y1, z1), (y0, z1)],
             camada="ESTRIBO", fechada=True)
 
     barras: list[Circulo] = []

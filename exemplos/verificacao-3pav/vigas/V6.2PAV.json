@@ -8,7 +8,8 @@
         "h": 50.0,
         "tipo": "T",
         "bf": 95.0,
-        "hf": 12.0
+        "hf": 12.0,
+        "lado_mesa": "ambos"
       },
       "nome": "",
       "mudancas": [],
@@ -21,7 +22,8 @@
         "h": 50.0,
         "tipo": "T",
         "bf": 80.0,
-        "hf": 12.0
+        "hf": 12.0,
+        "lado_mesa": "ambos"
       },
       "nome": "",
       "mudancas": [],
@@ -30,25 +32,43 @@
   ],
   "apoios": [
     {
-      "tipo": "mola",
+      "tipo": "simples",
       "largura": 20.0,
-      "k_mola": 23856.360282447247,
+      "k_mola": 0.0,
       "nome": "",
-      "altura_pilar_abaixo": 275.0
+      "altura_pilar_abaixo": 300.0,
+      "viga_apoio": "",
+      "x_na_viga_apoio": 0.0,
+      "h_viga_apoio": 0.0,
+      "topos_alinhados": true,
+      "altura_pilar_acima": 300.0,
+      "largura_pilar_transversal": 50.0
     },
     {
-      "tipo": "mola",
+      "tipo": "simples",
       "largura": 25.0,
-      "k_mola": 55913.344411985716,
+      "k_mola": 0.0,
       "nome": "",
-      "altura_pilar_abaixo": 275.0
+      "altura_pilar_abaixo": 300.0,
+      "viga_apoio": "",
+      "x_na_viga_apoio": 0.0,
+      "h_viga_apoio": 0.0,
+      "topos_alinhados": true,
+      "altura_pilar_acima": 300.0,
+      "largura_pilar_transversal": 60.0
     },
     {
-      "tipo": "mola",
+      "tipo": "simples",
       "largura": 20.0,
-      "k_mola": 23856.360282447247,
+      "k_mola": 0.0,
       "nome": "",
-      "altura_pilar_abaixo": 275.0
+      "altura_pilar_abaixo": 300.0,
+      "viga_apoio": "",
+      "x_na_viga_apoio": 0.0,
+      "h_viga_apoio": 0.0,
+      "topos_alinhados": true,
+      "altura_pilar_acima": 300.0,
+      "largura_pilar_transversal": 50.0
     }
   ],
   "distribuidas": [
@@ -294,7 +314,14 @@
     "tipo_gancho": "Ângulo reto",
     "ganchos_flexao": {},
     "reduzir_ancoragem_com_gancho": false,
-    "largura_reduzida_excepcional": false
+    "largura_reduzida_excepcional": false,
+    "fissuracao_inclinada_alma": false,
+    "reduzir_torcao_banzo_comprimido": false,
+    "face_superior_travada": true,
+    "l0_lateral": 0.0,
+    "fcrit_vibracao": 0.0,
+    "verificar_transversal_ancoragem": true,
+    "modelo_pilares": "rigidez"
   },
   "projeto": "",
   "observacoes": "",

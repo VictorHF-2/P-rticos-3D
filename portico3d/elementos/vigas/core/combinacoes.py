@@ -318,7 +318,8 @@ def momento_arredondado(viga: Viga, sols: list[Solicitacao],
 
 
 def momentos_de_projeto(viga: Viga, env: Envoltoria,
-                        sols: list[Solicitacao] | None = None
+                        sols: list[Solicitacao] | None = None,
+                        minimos: dict | None = None
                         ) -> list[MomentoProjeto]:
     """Momentos de dimensionamento em cada vão e em cada apoio.
 
@@ -374,8 +375,44 @@ def momentos_de_projeto(viga: Viga, env: Envoltoria,
                 obs.append(f"engastamento parcial mínimo adotado "
                            f"({cfg.engastamento_minimo_extremidade:.0%} do "
                            f"momento do vão) -- critério de projeto")
+        # 14.6.6.1 b) e c): pisos de momento negativo pela solidariedade com
+        # o pilar -- depois do arredondamento, que não pode tirar o piso
+        if minimos and k in minimos and minimos[k][0] < M - 1e-9:
+            M = minimos[k][0]
+            obs.append(minimos[k][1])
+        if k in extremos and M < M_eixo - 1e-6:
+            impor_momento_extremo(viga, env, k, M - min(M_eixo, 0.0))
         if M >= -1e-6:
             continue          # apoio sem momento negativo: sem armadura de topo
         momentos.append(MomentoProjeto("apoio", k, xs[k], M, M_eixo,
                                        "; ".join(obs)))
     return momentos
+
+
+def impor_momento_extremo(viga: Viga, env: Envoltoria, k: int,
+                          dM: float) -> None:
+    """Leva para a envoltória negativa o momento imposto num apoio extremo.
+
+    O engastamento parcial dos critérios e a solidariedade com o pilar do
+    14.6.6.1 c) dão um momento negativo no apoio de extremidade que o modelo
+    rotulado não tem. Entrando só como momento de projeto, o diagrama de
+    armadura necessária continuava nulo junto ao apoio, e o escalonamento não
+    tinha onde cortar a barra: a negativa do extremo atravessava o vão e se
+    encontrava com a do apoio vizinho sem traspasse. Aqui o acréscimo ``dM``
+    (negativo) entra como o momento de uma extremidade de vão biapoiado,
+    decaindo linearmente até o apoio seguinte, somado à envoltória mínima --
+    a combinação que menos carrega o vão com a restrição inteira, que é a
+    que estende mais o trecho negativo (a favor da segurança).
+    """
+    if dM >= 0.0:
+        return
+    xs = viga.x_apoios
+    if k == 0:
+        a, b = xs[0], xs[1]
+        xi = (env.x - a) / (b - a)
+    else:
+        a, b = xs[-2], xs[-1]
+        xi = (b - env.x) / (b - a)
+    m = (env.x >= a - 1e-9) & (env.x <= b + 1e-9)
+    acrescimo = np.where(m, dM * np.clip(1.0 - xi, 0.0, 1.0), 0.0)
+    env.M_min = np.minimum(env.M_min, env.M_min + acrescimo)
