@@ -47,20 +47,36 @@ class Esbeltez:
     #: 2ª ordem imposta pelo critério de projeto (``Config.sempre_2a_ordem``)
     imposta: bool = False
     avisos: list[str] = field(default_factory=list)
+    #: Seção sem eixo de simetria: a análise nos eixos principais
+    #: (:class:`principais.EixosPrincipais`), compartilhada por x e y.
+    principal: object = None
+
+    @property
+    def lam_governante(self) -> float:
+        """O lambda que decide os limites do 15.8.1, o método obrigatório e
+        a fluência: o desta direção ou, na seção sem simetria, o maior dos
+        eixos principais -- a flambagem não escolhe x ou y."""
+        if self.principal is not None:
+            return max(self.lam, self.principal.lam_max)
+        return self.lam
 
     @property
     def considerar_2a_ordem(self) -> bool:
         """A segunda ordem local entra nesta direção: obrigatória pelo item
-        15.8.2 (lambda > lambda_1) ou imposta pelo critério de projeto."""
+        15.8.2 (lambda > lambda_1) ou imposta pelo critério de projeto. Na
+        seção sem simetria, a decisão é a dos eixos principais: entra em x
+        (y) se alguma direção principal com componente em x (y) a pede."""
+        if self.principal is not None:
+            return self.imposta or self.principal.exige_2a_ordem(self.direcao)
         return self.lam > self.lam_1 or self.imposta
 
     @property
     def fluencia_obrigatoria(self) -> bool:
-        return self.lam > ESBELTEZ_FLUENCIA
+        return self.lam_governante > ESBELTEZ_FLUENCIA
 
     @property
     def metodo_exato_obrigatorio(self) -> bool:
-        return self.lam > ESBELTEZ_METODO_EXATO
+        return self.lam_governante > ESBELTEZ_METODO_EXATO
 
     @property
     def veredito(self) -> str:
@@ -177,33 +193,52 @@ def analisar(pilar: Pilar, direcao: str) -> Esbeltez:
     lam_1, av_l1 = esbeltez_limite(abs(e1), h, ab)
     avisos += av_l1
 
+    principal = None
+    lam_x_y = lam
     if not prop.simetrica:
-        avisos.append(av.construtivo(
-            f"A seção {pilar.secao.tipo} tem produto de inércia não nulo "
-            f"(Ixy = {num(prop.Ixy, 0)} cm⁴): os eixos x e y não são principais. "
-            f"A esbeltez em {direcao} foi calculada com o raio de giração "
-            f"desses eixos, que é o que casa com a direção dos momentos de "
-            f"entrada, mas a flambagem real se dá segundo os eixos "
-            f"principais. Confira se o comprimento equivalente informado "
-            f"corresponde a essa direção."))
+        from . import principais
+        principal = principais.analisar(pilar)
+        if direcao == "x":
+            avisos += principal.avisos
+            d1, d2 = principal.direcoes
+            avisos.append(av.construtivo(
+                f"Seção {pilar.secao.tipo} sem eixo de simetria (Ixy = "
+                f"{num(principal.Ixy, 0)} cm⁴): esbeltez e 2ª ordem nos eixos "
+                f"principais de inércia (15.8.3.3.5) -- direção 1 a "
+                f"{num(math.degrees(d1.phi), 1)}° de x, i = {num(d1.i, 2)} cm, "
+                f"λ = {num(d1.lam, 1)}; direção 2 a "
+                f"{num(math.degrees(d2.phi), 1)}°, i = {num(d2.i, 2)} cm, "
+                f"λ = {num(d2.lam, 1)} (em x/y: λx = "
+                f"{num(pilar.le('x') / prop.ix, 1)}, λy = "
+                f"{num(pilar.le('y') / prop.iy, 1)}). A 2ª ordem de cada "
+                f"direção principal é projetada de volta em x e y."))
+        # os limites abaixo valem para a direção principal mais esbelta
+        lam = max(lam, principal.lam_max)
 
     metodo = pilar.config.metodo_2a_ordem
     pouco_comprimido = pilar_pouco_comprimido(pilar)
-    if lam > ESBELTEZ_MAXIMA and pouco_comprimido:
+    # Na seção sem simetria os limites são da direção principal mais esbelta
+    # e valem uma vez só (a análise de y repetiria os mesmos avisos).
+    rotulo = (f"em {direcao}" if principal is None
+              else "na direção principal mais esbelta")
+    checar = principal is None or direcao == "x"
+    if checar and lam > ESBELTEZ_MAXIMA and pouco_comprimido:
         avisos.append(av.construtivo(
-            f"Esbeltez em {direcao} = {num(lam, 0)}, acima de "
+            f"Esbeltez {rotulo} = {num(lam, 0)}, acima de "
             f"{num(ESBELTEZ_MAXIMA)}: o item 15.8.1 só a admite em elemento pouco "
             f"comprimido, com Nd < 0,10 fcd Ac -- é o caso. O método geral "
             f"continua obrigatório (λ > 140)."))
-    if lam > ESBELTEZ_MAXIMA and not pouco_comprimido:
+    if not checar:
+        pass
+    elif lam > ESBELTEZ_MAXIMA and not pouco_comprimido:
         avisos.append(av.erro(
-            f"Esbeltez em {direcao} = {num(lam, 0)}, acima do limite de "
+            f"Esbeltez {rotulo} = {num(lam, 0)}, acima do limite de "
             f"{num(ESBELTEZ_MAXIMA)} do item 15.8.1. A norma só admite o pilar "
             f"se ele for pouco comprimido (Nd < 0,10 fcd Ac), e não é; "
             f"aumente a seção ou reduza o comprimento de flambagem."))
     elif lam > ESBELTEZ_METODO_EXATO and metodo != "geral":
         avisos.append(av.erro(
-            f"Esbeltez em {direcao} = {num(lam, 0)}, acima de "
+            f"Esbeltez {rotulo} = {num(lam, 0)}, acima de "
             f"{num(ESBELTEZ_METODO_EXATO)}: o item 15.8.3.2 torna o **método "
             f"geral** obrigatório, com análise não linear de 2ª ordem e "
             f"relação momento-curvatura real. Os métodos do pilar-padrão não "
@@ -212,7 +247,7 @@ def analisar(pilar: Pilar, direcao: str) -> Esbeltez:
     elif lam > ESBELTEZ_FLUENCIA and metodo in ("curvatura", "rigidez",
                                                 "menor"):
         avisos.append(av.erro(
-            f"Esbeltez em {direcao} = {num(lam, 0)}, acima de "
+            f"Esbeltez {rotulo} = {num(lam, 0)}, acima de "
             f"{num(ESBELTEZ_FLUENCIA)}: os métodos do pilar-padrão com "
             f"curvatura e com rigidez aproximadas ficam restritos a "
             f"λ <= 90 (itens 15.8.3.3.2 e 15.8.3.3.3) -- use o "
@@ -220,16 +255,17 @@ def analisar(pilar: Pilar, direcao: str) -> Esbeltez:
             f"geral; e o item 15.8.4 torna a **fluência** obrigatória."))
 
     imposta = pilar.config.sempre_2a_ordem
-    if imposta and lam <= lam_1 and Nd > 0.0:
+    g1 = gamma_n1(lam) if pilar.config.aplicar_gamma_n1 else 1.0
+    lam = lam_x_y
+    if imposta and lam <= lam_1 and Nd > 0.0 and principal is None:
         avisos.append(av.construtivo(
             f"Esbeltez em {direcao} = {num(lam, 1)} <= λ₁ = {num(lam_1, 1)}: o "
             f"item 15.8.2 dispensaria a 2ª ordem, mas o critério de projeto "
             f"manda considerá-la sempre (a favor da segurança)."))
 
-    g1 = gamma_n1(lam) if pilar.config.aplicar_gamma_n1 else 1.0
-    if g1 > 1.0:
+    if g1 > 1.0 and checar:
         avisos.append(av.construtivo(
-            f"Esbeltez em {direcao} = {num(lam, 0)} > 140: os efeitos locais de "
+            f"Esbeltez {rotulo} = {num(max(lam, principal.lam_max) if principal else lam, 0)} > 140: os efeitos locais de "
             f"2ª ordem foram majorados por γn1 = {num(g1, 3)} (item "
             f"15.8.1)."))
 
@@ -237,7 +273,7 @@ def analisar(pilar: Pilar, direcao: str) -> Esbeltez:
                     alfa_b=ab, vinculo=pilar.lance.vinculo(direcao), e1=e1,
                     e1_min=e1_min, M1d_A=M1d_A, M1d_B=M1d_B, M1d_min=M1d_min,
                     gamma_n1=g1, sinal_A=pilar.sinal_A(direcao),
-                    imposta=imposta, avisos=avisos)
+                    imposta=imposta, avisos=avisos, principal=principal)
 
 
 def lambda_retangular(le: float, h: float) -> float:

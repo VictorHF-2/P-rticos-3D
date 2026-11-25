@@ -44,7 +44,7 @@ da casa:
 
 | Elemento | Norma | Motor copiado de |
 |---|---|---|
-| Pilares | ABNT NBR 6118:2026 | **Pilares em Concreto Armado**, revisão R05 |
+| Pilares | ABNT NBR 6118:2026 | **Pilares em Concreto Armado**, tag `motor-2026-11-25` |
 | Vigas contínuas | ABNT NBR 6118:2026 | **Dimensionador de Vigas**, tag `motor-2026-11-25` |
 | Lajes maciças, em balanço e treliçadas | ABNT NBR 6118:2026 | **Lajes de Concreto Armado**, revisão R11 |
 | Vento | ABNT NBR 6123:2023 | **NBR-6123** (cálculo de S2 e das forças) |
@@ -214,7 +214,7 @@ O detalhe de cada decisão, com o porquê e a conferência que a trava, está no
 ### O autoteste
 
 `py main.py --autoteste <pasta>` roda **751 conferências** e o autoteste da
-janela, sem abrir nada na tela (cerca de 18 minutos). O motor de Pilares é a parte lenta; os
+janela, sem abrir nada na tela (cerca de 3 minutos). O motor de Pilares é a parte lenta; os
 lances vão em paralelo (um processo por núcleo) e cada resultado de motor
 fica guardado na sessão pela impressão da entrada, de modo que a armadura 3D
 e o projeto completo não redimensionam o que o "Dimensionar" já fez. Cada valor esperado é uma solução fechada, uma condição de
@@ -252,7 +252,7 @@ montada à mão:
 | | Resultado |
 |---|---|
 | Vigas (24 cadeias) | a viga que o Pórticos monta, aberta no programa de Vigas, dá resultado **idêntico** (momentos, regiões e cada posição de armadura); seções T, apoios e molas montados à mão batem exatamente |
-| Pilares (214 verificações) | mesmo Nd, mesmos momentos de topo e base e **mesmo arranjo** em todas |
+| Pilares (214 verificações) | mesmo Nd, mesmos momentos de topo e base e **mesmo arranjo** em todas, contra o programa de Pilares no commit da cópia |
 | Lajes (3 pavimentos) | posições, vínculos e larguras de apoio idênticos, menos nas duas lajes em balanço lado a lado, que o programa de Lajes engasta pela borda lateral livre (achado passado à janela dele) |
 | Armadura 3D | nenhum ponto de barra fora do concreto |
 
@@ -403,6 +403,7 @@ autoteste e os temporários do Python e do Office.
 | 25/11/2026 | Repositório publicado; pasta reorganizada no padrão dos outros programas (`Programa/`, `Fontes/`, `Exe atual/`); R01, R02 e R03 como commits datados com tags; procedência dos motores pelo commit do repositório de origem |
 | 25/11/2026 | Motor de Vigas recopiado (`motor-2026-11-25`): seção L na viga de borda, barra pela mínima cortada pelo diagrama, solidariedade viga-pilar do 14.6.6.1, apoio em outra viga pelo 18.3.6; corrigida a altura da viga apoiada passada ao motor (ia em cm × 100) |
 | 25/11/2026 | Cache e paralelismo dos motores: no edifício de 3 pavimentos o fluxo pilares + vigas + lajes + armadura 3D dos três pavimentos caiu de 33 min para 4 min, com resultado idêntico |
+| 25/11/2026 | Motor de Pilares recopiado (`motor-2026-11-25`, 1,6 a 20 vezes mais rápido, resultado idêntico bit a bit no programa de Pilares); os 214 arranjos do edifício de 3 pavimentos não mudaram. Autoteste de 18 para 2,5 min; verificação contra os programas isolados de 23 para 2 min |
 
 ## Limites de escopo
 

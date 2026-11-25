@@ -183,6 +183,22 @@ class Propriedades:
         ref = max(abs(self.Ix), abs(self.Iy), 1.0)
         return abs(self.Ixy) / ref < 1e-6
 
+    def inercia_na_direcao(self, phi: float) -> float:
+        """Inércia para a flexão na direção ``(cos phi, sin phi)``, cm⁴:
+        ``∫ (x cos phi + y sin phi)² dA`` -- a mesma convenção de ``Ix``
+        (flexão na direção x) e ``Iy``."""
+        c, s = math.cos(phi), math.sin(phi)
+        return self.Ix * c * c + self.Iy * s * s + 2.0 * self.Ixy * s * c
+
+    def principais(self) -> tuple[float, float, float]:
+        """``(I1, I2, phi1)``: inércias principais (I1 >= I2), cm⁴, e a
+        direção de flexão da maior, rad, medida a partir de x. A menor é a
+        direção ``phi1 + pi/2``. ``tan 2 phi = 2 Ixy / (Ix - Iy)``."""
+        phi1 = 0.5 * math.atan2(2.0 * self.Ixy, self.Ix - self.Iy)
+        media = (self.Ix + self.Iy) / 2.0
+        raio = math.hypot((self.Ix - self.Iy) / 2.0, self.Ixy)
+        return media + raio, media - raio, phi1
+
 
 def propriedades(contornos: list[Poligono], hx: float | None = None,
                  hy: float | None = None) -> Propriedades:

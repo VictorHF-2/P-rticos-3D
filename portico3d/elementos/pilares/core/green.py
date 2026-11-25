@@ -180,8 +180,32 @@ def _antideriv1(c: Concreto, eps_mil: np.ndarray) -> np.ndarray:
     return np.where(eps <= eps_c2, baixo, alto)
 
 
+def _antiderivs(consts: tuple, eps_mil: np.ndarray
+                ) -> tuple[np.ndarray, np.ndarray]:
+    """:func:`_antideriv0` e :func:`_antideriv1` de uma vez.
+
+    As mesmas expressões, na mesma ordem, com ``eps``, ``r`` e ``r^(n+1)``
+    calculados uma vez só para as duas (antes, cada uma refazia os três) e
+    as constantes do concreto já lidas (``consts`` de
+    :meth:`pilares.core.seccional.SecaoDiscreta.constantes`). O resultado é
+    o mesmo das duas funções, bit a bit; elas ficam como a referência que o
+    autoteste deriva numericamente.
+    """
+    fcd_ac, eps_c2, _, n, _, _ = consts
+    eps = np.maximum(eps_mil, 0.0)
+    r = _r(eps, eps_c2)
+    p1 = _pot(r, n + 1.0)
+    a0 = fcd_ac * (eps + eps_c2 / (n + 1.0) * p1)
+    baixo = -fcd_ac * eps_c2 * eps_c2 * (
+        r - r * r / 2.0 - p1 / (n + 1.0)
+        + _pot(r, n + 2.0) / (n + 2.0))
+    alto = fcd_ac * (eps * eps - eps_c2 * eps_c2) / 2.0
+    return a0, np.where(eps <= eps_c2, baixo, alto)
+
+
 def _h0_h1(c: Concreto, u: np.ndarray, eps_ref: float, k: float,
-           u_ref: float) -> tuple[np.ndarray, np.ndarray]:
+           u_ref: float, consts: tuple | None = None
+           ) -> tuple[np.ndarray, np.ndarray]:
     """``H0(u)`` e ``H1(u)`` -- antiderivadas em ``u`` --, vetorizadas.
 
     Por substituição ``w = eps(u) = eps_ref + k(u - u_ref)``:
@@ -190,8 +214,11 @@ def _h0_h1(c: Concreto, u: np.ndarray, eps_ref: float, k: float,
         H1(u) = (u_ref/k)·Sigma_C(w) + [Sigma_C1(w) − eps_ref·Sigma_C(w)] / k²
     """
     w = eps_ref + k * (u - u_ref)
-    sigma_c0 = _antideriv0(c, w)
-    sigma_c1 = _antideriv1(c, w)
+    if consts is not None:
+        sigma_c0, sigma_c1 = _antiderivs(consts, w)
+    else:
+        sigma_c0 = _antideriv0(c, w)
+        sigma_c1 = _antideriv1(c, w)
     h0 = sigma_c0 / k
     h1 = (u_ref / k) * sigma_c0 + (sigma_c1 - eps_ref * sigma_c0) / (k * k)
     return h0, h1
@@ -220,7 +247,9 @@ def _clip_zero(pol: geo.Poligono, theta: float, eps_ref: float, k: float,
 
 def resultantes_concreto(contornos: list[geo.Poligono], concreto: Concreto,
                          theta: float, eps_ref: float, k: float,
-                         u_ref: float) -> tuple[float, float, float]:
+                         u_ref: float, cos_sin: tuple | None = None,
+                         consts: tuple | None = None
+                         ) -> tuple[float, float, float]:
     """``(N, Mx, My)`` da contribuição do concreto, pelo Teorema de Green.
 
     ``eps_ref``, ``k`` e ``u_ref`` descrevem o plano de deformações --
@@ -235,32 +264,40 @@ def resultantes_concreto(contornos: list[geo.Poligono], concreto: Concreto,
     lado: para os 4 a 12 lados usuais de uma seção de pilar, isso troca uma
     dúzia de operações vetorizadas de meia dúzia de elementos -- onde o custo
     fixo do numpy pesa mais que a conta em si -- por uma só, de umas cem.
+
+    ``cos_sin`` e ``consts`` (opcionais) são o ``cos``/``sin`` de ``theta``
+    e as constantes do concreto já calculados pela seção -- os mesmos
+    valores, sem refazer a conta a cada chamada.
     """
     if abs(k) < K_MINIMO:
         return 0.0, 0.0, 0.0
-    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    cos_t, sin_t = (cos_sin if cos_sin is not None
+                    else (math.cos(theta), math.sin(theta)))
+    u_zero = u_ref - eps_ref / k
 
     u0s: list[float] = []
     dus: list[float] = []
     v0s: list[float] = []
     dvs: list[float] = []
     for anel in contornos:
-        recortado = _clip_zero(anel, theta, eps_ref, k, u_ref)
+        recortado = geo.recortar_semiplano(anel, cos_t, sin_t, u_zero,
+                                           manter_acima=(k > 0.0))
         n = len(recortado)
         if n < 3:
             continue
+        # (u, v) de cada vértice uma vez só -- cada um é o início de um lado
+        # e o fim do anterior; a mesma expressão de antes, sem refazê-la
+        us = [x * cos_t + y * sin_t for x, y in recortado]
+        vs = [-x * sin_t + y * cos_t for x, y in recortado]
         for i in range(n):
-            x0, y0 = recortado[i]
-            x1, y1 = recortado[(i + 1) % n]
-            v0 = -x0 * sin_t + y0 * cos_t
-            v1 = -x1 * sin_t + y1 * cos_t
-            dv = v1 - v0
+            j = i + 1 if i + 1 < n else 0
+            v0 = vs[i]
+            dv = vs[j] - v0
             if abs(dv) < 1e-12:
                 continue                    # lado paralelo à linha neutra
-            u0 = x0 * cos_t + y0 * sin_t
-            u1 = x1 * cos_t + y1 * sin_t
+            u0 = us[i]
             u0s.append(u0)
-            dus.append(u1 - u0)
+            dus.append(us[j] - u0)
             v0s.append(v0)
             dvs.append(dv)
     if not dvs:
@@ -273,7 +310,7 @@ def resultantes_concreto(contornos: list[geo.Poligono], concreto: Concreto,
 
     u_t = u0_arr + du_arr * _T_NOS[None, :]         # (lados, ordem)
     v_t = v0_arr + dv_arr[:, None] * _T_NOS[None, :]
-    h0, h1 = _h0_h1(concreto, u_t, eps_ref, k, u_ref)
+    h0, h1 = _h0_h1(concreto, u_t, eps_ref, k, u_ref, consts)
 
     S0 = float(dv_arr @ (h0 @ _T_PESOS))
     S1 = float(dv_arr @ (h1 @ _T_PESOS))

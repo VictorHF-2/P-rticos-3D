@@ -2085,11 +2085,20 @@ uma tag por revisão — e as pastas de revisão (`Vigas R04`, `Pilares R05`,
 |---|---|---|
 | Lajes | `05e344c` (tag R11 de `Lajes/Programa`) | idêntica, confrontada |
 | Vigas | `1508440` (tag `motor-2026-11-25` de `Vigas/Programa`) | recopiada em 25/11; idêntica, confrontada |
-| Pilares | — | feita da pasta `Pilares R05` em 05/11, idem (o mais próximo difere em 5) |
+| Pilares | `97c23ad` (tag `motor-2026-11-25` de `Pilares/Programa`) | recopiada em 25/11; idêntica, confrontada |
 
-Para a que fica sem commit (Pilares), o autoteste diz que a origem está
-fora de alcance em vez de acusar diferença. Recopiá-la de um commit (e com
-isso confrontá-la) muda resultado e fica para quando for pedido.
+Desde 25/11 as três cópias vêm de um commit e são confrontadas com ele.
+
+**Pilares recopiado em 25/11/2026 (`motor-2026-11-25`).** Pedido do Pórticos
+ao programa de Pilares: o `dimensionar` ficou de 1,6 a 20 vezes mais rápido,
+com resultado idêntico bit a bit lá. A cópia anterior era a pasta `Pilares
+R05` de 05/11; entre ela e o commit o programa ganhou também verificação em
+incêndio (NBR 15200, desligada por padrão), ações com combinações próprias,
+seções vazadas e eixos principais — nada disso a ponte liga — e mudou dois
+padrões: `exigir_interacao_17_2_5` desligado (parecer de 11/11) e a escolha
+do arranjo por custo (`peso_por_barra` 0,02). No edifício de 3 pavimentos os
+214 arranjos saíram os mesmos da cópia anterior e os mesmos do programa de
+Pilares no commit; os pilares levaram 37 s em vez de 266 s.
 
 **Vigas recopiado em 25/11/2026 (`motor-2026-11-25`).** O programa de Vigas
 atendeu dois pedidos do Pórticos e ganhou outras coisas desde 03/11. O que
@@ -2135,16 +2144,18 @@ peças); as interfaces ficaram de fora.
 | Elemento | Revisão | O que a troca trouxe para cá |
 |---|---|---|
 | Vigas | `motor-2026-11-25` (25/11) | seção L; barra pela mínima cortada pelo diagrama; solidariedade viga-pilar do 14.6.6.1; apoio em outra viga (18.3.6); itens complementares e furos na alma. Antes (R04, 03/11): arredondamento R·t/8 sobre o apoio (14.6.3) no lugar da redução à face; ancoragem das negativas e da torção nos extremos; ductilidade com o aço adotado; costura em faixas |
-| Pilares | Pilares R05 (de novo em 2026-11-05) | várias combinações por pilar com armadura comum; método geral; elipse do momento mínimo; desaprumo no balanço; busca exata dos arranjos (com processos paralelos, desligáveis por `PILARES_SEM_PARALELO`) |
+| Pilares | `motor-2026-11-25` (25/11) | dimensionar 1,6 a 20 vezes mais rápido, resultado idêntico; incêndio, ações, seções vazadas (não usados aqui); interação do 17.2.5 desligada por padrão; arranjo por custo. Antes (R05, 05/11): várias combinações por pilar com armadura comum; método geral; elipse do momento mínimo; desaprumo no balanço; busca exata dos arranjos (com processos paralelos, desligáveis por `PILARES_SEM_PARALELO`) |
 | Lajes | Lajes R11 (2026-11-05) | laje em balanço reconhecida pelo destino; fissuração nas bordas comuns; nervurada, alveolar, MEF de placa (não usados aqui) |
 
-Do Pilares R05 ficou de fora o `compat_pcalc.py`: é o modo de
+Do Pilares ficou de fora o `compat_pcalc.py`: é o modo de
 compatibilidade com o PCalc, que não é verificação pela NBR, e o motor o
 importa como opcional.
 
-**Custo.** O Pilares R05 verifica a envoltória e a seção mínima com mais
-rigor, e cada combinação de cada lance leva cerca de 4 s (no pórtico de três
-pavimentos da conferência de continuidade, 18 lances). O tempo é do motor, e
+**Custo.** O Pilares R05 verificava a envoltória e a seção mínima com mais
+rigor, e cada combinação de cada lance levava cerca de 4 s (no pórtico de três
+pavimentos da conferência de continuidade, 18 lances); com o
+`motor-2026-11-25` e o paralelismo do Pórticos, os 214 lances do edifício de
+3 pavimentos levam 37 s. O tempo é do motor, e
 a cópia não se edita; a ponte o chama uma vez por combinação governante.
 
 **O que a troca para o Vigas R04 mudou nos resultados:**
@@ -2214,9 +2225,10 @@ Os pilares, as posições de armadura das vigas e a contagem de barras do 3D
 saíram idênticos nas duas rodadas. Conferências: em
 `ponte_roda_o_lote_do_edificio`, série × paralelo × cache no mesmo lote.
 
-O que sobra é o próprio motor de Pilares (a integração da seção e o
-refinamento da elipse do momento mínimo); a otimização dele foi pedida à
-janela do programa de Pilares, e entra aqui na próxima recópia.
+Depois disso o programa de Pilares otimizou o próprio motor (pedido
+daqui) e ele foi recopiado (`motor-2026-11-25`): os pilares do mesmo
+edifício caíram de 266 s para 37 s (no script de verificação), e o autoteste inteiro, de 18 para
+2,5 minutos.
 
 ## A ponte com o dimensionamento
 

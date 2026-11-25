@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from . import avisos as av
 from . import momento_curvatura as mc
 from .esbeltez import Esbeltez
+from .materiais import ESBELTEZ_FLUENCIA
 from .modelo import (PONTOS_VARREDURA_MINIMO, THETA1_LOCAL,
                      THETA1_MAXIMO_LOCAL, Pilar)
 from .formato import num
@@ -49,6 +50,11 @@ class SegundaOrdem:
     kappa: float = 0.0               # rigidez adimensional do 15.8.3.3.3
     EI_sec: float = 0.0              # kN·cm², (EI)sec da Figura 15.1 (15.8.3.3.4)
     geral: object = None             # metodo_geral.ResultadoGeral (15.8.3.2)
+    #: seção sem simetria: a 2ª ordem saiu dos eixos principais
+    #: (:class:`principais.EixosPrincipais`), e ``e2`` é a componente nesta
+    #: direção do vetor projetado, com o sinal relativo ao de ``e1`` (pode
+    #: ser negativa: a deformada da direção principal fraca puxa contra)
+    principal: object = None
     avisos: list[str] = field(default_factory=list)
 
 
@@ -142,8 +148,20 @@ def e2_por_diagrama(Nd: float, le: float, EI_sec: float, e1: float
     return e1 / den - e1
 
 
+def normal_amplificacao(pilar: Pilar, Nd: float) -> float:
+    """A normal que entra na amplificação do pilar-padrão acoplado a
+    diagramas M, N, 1/r: ``Nd`` (padrão, o PCalc) ou, com o critério
+    ``alivio_gamma_f3_diagrama``, ``Nd/γf3`` -- a formulação de segurança do
+    15.3.1, em que o momento total ``γf3 . (Nd/γf3)(e1 + e2)`` fica
+    ``Nd (e1 + e2)`` com o ``e2`` da normal reduzida."""
+    if pilar.config.alivio_gamma_f3_diagrama:
+        return Nd / mc.GAMMA_F3
+    return Nd
+
+
 def excentricidade_fluencia(pilar: Pilar, direcao: str, e1: float,
-                            Ic: float) -> tuple[float, list[str]]:
+                            Ic: float, le: float | None = None
+                            ) -> tuple[float, list[str]]:
     """Excentricidade adicional de fluência, cm (item 15.8.4).
 
     ``e_cc = (M_Sg/N_Sg + e_a) [exp(phi N_Sg/(N_e - N_Sg)) - 1]``, com
@@ -159,10 +177,12 @@ def excentricidade_fluencia(pilar: Pilar, direcao: str, e1: float,
     ``M_Sg/N_Sg``: com ``Msg_sobre_Md`` informado, ``e1 . (Msg/Md)/(Nsg/Nd)``;
     deixado em zero, o ``e1`` de cálculo -- a mesma parcela para momento e
     normal, que é o lado seguro quando o momento tem parcela variável maior.
+    O ``e1`` que chega aqui é o maior de 1ª ordem (:func:`e1_quase_permanente`).
     """
     avisos: list[str] = []
     cfg = pilar.config
-    le = pilar.le(direcao)
+    # ``le`` explícito: direção principal da seção sem simetria
+    le = pilar.le(direcao) if le is None else le
     # N_Sg é da combinação quase permanente: sem gamma_n (que só majora os
     # esforços finais de cálculo)
     Nsg = abs(pilar.Nd) / pilar.gamma_n * cfg.Nsg_sobre_Nd
@@ -174,11 +194,42 @@ def excentricidade_fluencia(pilar: Pilar, direcao: str, e1: float,
             f"expressão do item 15.8.4 diverge, o que é a própria peça "
             f"dizendo que instabiliza sob carga de longa duração."))
         return 0.0, avisos
-    fator = math.exp(pilar.phi_fluencia * Nsg / (Ne - Nsg)) - 1.0
+    try:
+        fator = math.expm1(pilar.phi_fluencia * Nsg / (Ne - Nsg))
+    except OverflowError:
+        # N_e mal supera N_Sg: o expoente passa de ~710 e o fator não cabe
+        # num float -- a mesma divergência do ramo acima, só que por um fio
+        # (RVZ-048 do cadastro de paridade, 12/11/2026: N_e = 9.773 kN contra
+        # N_Sg = 9.758 kN, expoente ~1.400). Antes estourava OverflowError.
+        avisos.append(av.erro(
+            f"Fluência em {direcao}: a carga de flambagem N_e = {num(Ne, 0)} kN "
+            f"mal supera a normal quase permanente N_Sg = {num(Nsg, 0)} kN, e "
+            f"o fator exp(φ N_Sg/(N_e − N_Sg)) − 1 do item 15.8.4 é "
+            f"numericamente infinito: a peça instabiliza sob carga de longa "
+            f"duração."))
+        return 0.0, avisos
     razao = (cfg.Msg_sobre_Md / cfg.Nsg_sobre_Nd
              if cfg.Msg_sobre_Md > 0 and cfg.Nsg_sobre_Nd > 0 else 1.0)
     e_sg = abs(e1) * razao
     return (e_sg + excentricidade_acidental_local(pilar)) * fator, avisos
+
+
+def e1_quase_permanente(pilar: Pilar, e1: float, e1_min: float = 0.0
+                        ) -> float:
+    """O ``e1`` de cálculo que entra como ``M_Sg/N_Sg`` na e_cc do 15.8.4,
+    cm: o **maior** de 1ª ordem, ``|M1d,A|/Nd`` -- não o ``alfa_b e1``
+    equivalente do pilar-padrão.
+
+    A norma não diz qual momento quase permanente tomar quando ele varia ao
+    longo do pilar; vale o mais desfavorável (decisão do projetista). Até
+    13/11/2026 entrava o ``alfa_b e1``, que com momentos de extremidade de
+    sinais opostos (alfa_b = 0,4) dava metade da e_cc: a contraprova
+    independente da 2ª ordem mostrou que isso aprovava o CIR-054 pelo
+    método geral com fluência (F.S. 1,239), que ela acha instável. Com o
+    critério da planilha o piso do mínimo entra aqui também."""
+    if pilar.config.momento_minimo_metodo == "planilha":
+        return max(abs(e1), e1_min)
+    return abs(e1)
 
 
 def theta1_local(altura_cm: float) -> float:
@@ -236,9 +287,14 @@ def analisar(pilar: Pilar, esb: Esbeltez, secao=None) -> SegundaOrdem:
 
     if not esb.considerar_2a_ordem or Nd <= 0.0:
         motivo = ("a normal é de tração" if Nd <= 0.0
+                  else "λ <= λ₁ nas direções principais com componente "
+                       f"em {esb.direcao}" if esb.principal is not None
                   else f"λ = {num(esb.lam, 1)} <= λ₁ = {num(esb.lam_1, 1)}")
         return SegundaOrdem(direcao=esb.direcao, aplicavel=False, nu=nu,
                             metodo=f"dispensada ({motivo})", avisos=avisos)
+
+    if esb.principal is not None and metodo_efetivo(pilar) != "geral":
+        return _analisar_principal(pilar, esb, secao, nu, avisos)
 
     h = esb.h
     # e1 que entra na segunda ordem: alfa_b vezes o de primeira ordem -- o
@@ -267,7 +323,9 @@ def analisar(pilar: Pilar, esb: Esbeltez, secao=None) -> SegundaOrdem:
                   and metodo_cfg == "diagrama")
     if cfg.considerar_fluencia and not pela_curva:
         Ic = prop.Ix if esb.direcao == "x" else prop.Iy
-        e_cc, av_flu = excentricidade_fluencia(pilar, esb.direcao, e1, Ic)
+        e_cc, av_flu = excentricidade_fluencia(
+            pilar, esb.direcao, e1_quase_permanente(pilar, esb.e1, esb.e1_min),
+            Ic)
         avisos += av_flu
     elif pela_curva:
         fator_fluencia = 1.0 + pilar.phi_fluencia * cfg.Nsg_sobre_Nd
@@ -312,11 +370,12 @@ def analisar(pilar: Pilar, esb: Esbeltez, secao=None) -> SegundaOrdem:
                     f"definida."))
             else:
                 EI_sec = rs.EI
-                e2 = e2_por_diagrama(Nd_2, esb.le, rs.EI, e1_amp)
+                N_amp = normal_amplificacao(pilar, Nd_2)
+                e2 = e2_por_diagrama(N_amp, esb.le, rs.EI, e1_amp)
                 if not math.isfinite(e2):
                     avisos.append(av.erro(
                         f"Diagrama M, N, 1/r em {esb.direcao}: Nd le²/10 = "
-                        f"{num(Nd_2 * esb.le ** 2 / 10, sig=3)} kN·cm² atinge a "
+                        f"{num(N_amp * esb.le ** 2 / 10, sig=3)} kN·cm² atinge a "
                         f"rigidez secante (EI)sec = {num(rs.EI, sig=3)} kN·cm² -- "
                         f"instabilidade."))
             metodo = "pilar-padrão acoplado a diagramas M, N, 1/r"
@@ -360,6 +419,101 @@ def analisar(pilar: Pilar, esb: Esbeltez, secao=None) -> SegundaOrdem:
                         e_cc=e_cc, kappa=kappa, EI_sec=EI_sec, avisos=avisos)
 
 
+def _analisar_principal(pilar: Pilar, esb: Esbeltez, secao, nu: float,
+                        avisos: list[str]) -> SegundaOrdem:
+    """2ª ordem da seção sem simetria: calculada em cada direção principal
+    (``esb.principal``) e projetada em ``esb.direcao``.
+
+    Cada direção principal ``p`` tem o seu ``h``, ``le``, ``lambda`` e a 1ª
+    ordem projetada; a 2ª ordem dela sai pelo mesmo método do pilar-padrão
+    escolhido -- curvatura, rigidez ou o ``(EI)sec`` da flexão na própria
+    direção principal (M-N-1/r) -- e o vetor ``sum s_p e2_p u_p`` volta para
+    x e y. ``s_p`` é o sentido de ``M1d,A`` ao longo de ``u_p``.
+    """
+    ep = esb.principal
+    cfg = pilar.config
+    Nd = pilar.Nd
+    metodo_cfg = metodo_efetivo(pilar)
+    pela_curva = (cfg.considerar_fluencia and cfg.fluencia_metodo == "diagrama"
+                  and metodo_cfg == "diagrama")
+    fator_fluencia = (1.0 + pilar.phi_fluencia * cfg.Nsg_sobre_Nd
+                      if pela_curva else 1.0)
+    Nd_2 = abs(Nd) / pilar.gamma_n
+    for d in ep.direcoes:
+        d.sentido = d.sinal_A
+        d.e2 = d.e_cc = d.EI_sec = 0.0
+        if not d.considerar_2a_ordem:
+            d.metodo = (f"dispensada (λ = {num(d.lam, 1)} <= λ₁ = "
+                        f"{num(d.lam_1, 1)})")
+            continue
+        if cfg.momento_minimo_metodo == "planilha":
+            e1 = d.alfa_b * max(abs(d.e1), d.e1_min)
+        else:
+            e1 = d.alfa_b * abs(d.e1)
+        if cfg.considerar_fluencia and not pela_curva:
+            d.e_cc, av_flu = excentricidade_fluencia(
+                pilar, f"na direção principal {d.indice}",
+                e1_quase_permanente(pilar, d.e1, d.e1_min), d.I, le=d.le)
+            if esb.direcao == "x":
+                avisos += av_flu
+        elif (not pela_curva and d.lam > ESBELTEZ_FLUENCIA
+              and esb.direcao == "x"):
+            avisos.append(av.erro(
+                f"Esbeltez na direção principal {d.indice} = "
+                f"{num(d.lam, 0)} > 90 e a fluência está desligada nos "
+                f"critérios; o item 15.8.4 a torna obrigatória nessa faixa."))
+        e1_amp = e1 + d.e_cc
+        e2_curv = e2_por_curvatura(d.le, curvatura_aproximada(d.h, nu))
+        e_tot, _ = e2_por_rigidez(d.le, d.h, e1_amp)
+        e2_rig = max(e_tot - e1_amp, 0.0)
+        if metodo_cfg == "curvatura":
+            e2, d.metodo = e2_curv, "curvatura aproximada"
+        elif metodo_cfg == "rigidez":
+            e2, d.metodo = e2_rig, "rigidez aproximada"
+        elif metodo_cfg == "diagrama" and secao is not None:
+            rs = mc.rigidez_secante(secao, Nd_2, d.phi, d.sentido,
+                                    fator_fluencia=fator_fluencia)
+            if rs is None:
+                e2 = float("inf")
+                if esb.direcao == "x":
+                    avisos.append(av.erro(
+                        f"Diagrama M, N, 1/r na direção principal "
+                        f"{d.indice}: a curva de deformabilidade não alcança "
+                        f"MRd/γf3 dentro dos limites de deformação -- a "
+                        f"rigidez secante (EI)sec não fica definida."))
+            else:
+                d.EI_sec = rs.EI
+                e2 = e2_por_diagrama(normal_amplificacao(pilar, Nd_2), d.le,
+                                     rs.EI, e1_amp)
+            d.metodo = "M, N, 1/r na direção principal"
+        elif metodo_cfg == "diagrama":
+            e2, d.metodo = e2_curv, ("estimativa pela curvatura aproximada "
+                                     "(ainda sem armadura)")
+        else:
+            e2 = min(e2_curv, e2_rig)
+            d.metodo = ("curvatura aproximada (menor dos dois)"
+                        if e2_curv <= e2_rig
+                        else "rigidez aproximada (menor dos dois)")
+        d.e2 = e2 * d.gamma_n1 + d.e_cc
+    if metodo_cfg == "rigidez" and esb.direcao == "x":
+        avisos.append(av.erro(
+            f"O método da rigidez aproximada (15.8.3.3.3) só vale para seção "
+            f"retangular constante, e a seção é {pilar.secao.tipo}. Adote "
+            f"outro método nos critérios de cálculo."))
+    ex, ey = ep.e2_vetor()
+    comp = ex if esb.direcao == "x" else ey
+    sinal = esb.sinal_A if esb.e1 != 0.0 else 1.0
+    e2 = sinal * comp if math.isfinite(comp) else float("inf")
+    d1, d2 = ep.direcoes
+    metodo = (f"eixos principais: e2,1 = {num(d1.e2, 2)} cm ({d1.metodo}), "
+              f"e2,2 = {num(d2.e2, 2)} cm ({d2.metodo}), projetados")
+    return SegundaOrdem(direcao=esb.direcao, aplicavel=True, nu=nu,
+                        e2=e2, metodo=metodo,
+                        e_cc=max(d.e_cc for d in ep.direcoes),
+                        EI_sec=max(d.EI_sec for d in ep.direcoes),
+                        avisos=avisos, principal=ep)
+
+
 # ---------------------------------------------------------------------------
 # Situações de cálculo
 # ---------------------------------------------------------------------------
@@ -375,6 +529,9 @@ class Situacao:
     Mx: float                    # kN·cm, já com o piso do momento mínimo
     My: float
     descricao: str = ""
+    #: Cota relativa z/L da seção (0 = base, 1 = topo) quando a situação é
+    #: uma seção da barra discretizada (método geral); None nas demais.
+    z_rel: float | None = None
 
     @property
     def modulo(self) -> float:

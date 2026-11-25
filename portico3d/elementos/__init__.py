@@ -21,7 +21,7 @@ deixa de ser cópia e passa a ser um garfo que ninguém sabe que existe.
 
 Do Pilares, do Vigas e do Lajes vieram o ``core/`` e o ``saidas/`` — é do
 ``saidas/`` que saem os desenhos das peças dimensionadas. As interfaces
-ficaram de fora em todos os casos, e do Pilares R05 ficou de fora também o
+ficaram de fora em todos os casos, e do Pilares ficou de fora também o
 ``compat_pcalc.py`` (modo de compatibilidade com o PCalc, que não é
 verificação pela NBR): o motor o importa como opcional e segue sem ele.
 """
@@ -41,14 +41,15 @@ from __future__ import annotations
 PROCEDENCIA = {
     "pilares": {
         "programa": "Pilares",
-        "revisao": "Pilares R05 (pasta de 05/11/2026, anterior ao "
-                   "repositório)",
+        "revisao": "Pilares motor-2026-11-25",
         "repositorio": "Pilares/Programa",
         "pacote": "pilares",
-        "commit": "",
-        "origem": "Pilares/Pilares R05/Programa/pilares",
+        # tag motor-2026-11-25: dimensionar 1,6 a 20 vezes mais rápido,
+        # resultado idêntico bit a bit, pedido pelo Pórticos
+        "commit": "97c23adb974051dcce3e348f9733cc7440ccdba0",
+        "origem": "",
         "partes": ("core", "saidas"),
-        "copiado_em": "2026-11-05",
+        "copiado_em": "2026-11-25",
     },
     "vigas": {
         "programa": "Vigas",

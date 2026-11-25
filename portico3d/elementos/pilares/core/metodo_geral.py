@@ -120,15 +120,25 @@ def estado_por_esforcos(secao: sc.SecaoDiscreta, N: float, Mx: float,
     else:
         # deformação uniforme que equilibra N, por bisseção (N cresce com e0)
         # -- um chute elástico pode cair além do patamar do concreto e do
-        # escoamento do aço, onde dN/de0 ~ 0 e o Newton não sai do lugar
-        lo, hi = -sc.EPS_S_MAXIMA, secao.concreto.eps_c2_mil
-        for _ in range(60):
-            m = (lo + hi) / 2.0
-            if _resultantes(secao, m, 0.0, 0.0).N < N:
-                lo = m
-            else:
-                hi = m
-        p[0] = (lo + hi) / 2.0
+        # escoamento do aço, onde dN/de0 ~ 0 e o Newton não sai do lugar.
+        # Depende só da seção e de N: guardada na seção, porque as 11 seções
+        # da barra, em todas as análises da mesma armadura (situações e os
+        # dois mínimos), pedem a mesma -- eram 60 avaliações fatiadas a cada
+        # vez, ~10 % do método geral.
+        cache = getattr(secao, "_e0_uniforme", None)
+        if not isinstance(cache, dict):
+            cache = secao._e0_uniforme = {}
+        e0 = cache.get(N)
+        if e0 is None:
+            lo, hi = -sc.EPS_S_MAXIMA, secao.concreto.eps_c2_mil
+            for _ in range(60):
+                m = (lo + hi) / 2.0
+                if _resultantes(secao, m, 0.0, 0.0).N < N:
+                    lo = m
+                else:
+                    hi = m
+            e0 = cache[N] = (lo + hi) / 2.0
+        p[0] = e0
         # curvaturas: elásticas, com o módulo inicial do diagrama -- só a
         # ordem de grandeza importa. Ix é a inércia da flexão na direção x
         # (a que o Mx = ∫ sigma x dA mobiliza), Iy a da direção y

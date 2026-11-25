@@ -67,11 +67,27 @@ def _geometria(res: ResultadoPilar, v: list[Verificacao]) -> None:
     p = res.pilar
     secao = p.secao
     menor = secao.menor_dimensao
-    v.append(Verificacao(
-        "13.2.3", "Dimensão mínima da seção transversal",
-        "menor dimensão >= 19 cm; entre 19 e 14 cm com γn",
-        f"menor dimensão = {num(menor)} cm; γn = {num(p.gamma_n, 2)}",
-        _sit(menor >= 14.0)))
+    if secao.eh_vazada and not p.config.gamma_n_secao_vazada:
+        # o 13.2.3 trata de seções maciças; a parede do pilar vazado segue
+        # a NBR 9062:2017 (complemento normativo, 13/11/2026)
+        from ..core.materiais import (ESPESSURA_MINIMA_PAREDE_PLUVIAL,
+                                      ESPESSURA_MINIMA_PAREDE_VAZADA)
+        pluvial = p.config.vazado_condutor_pluvial
+        minimo = (ESPESSURA_MINIMA_PAREDE_PLUVIAL if pluvial
+                  else ESPESSURA_MINIMA_PAREDE_VAZADA)
+        v.append(Verificacao(
+            "NBR 9062 " + ("6.2.2" if pluvial else "6.2.1"),
+            "Espessura mínima da parede do pilar vazado",
+            f"parede >= {num(minimo)} cm"
+            + (" (vazio como condutor de água pluvial)" if pluvial else ""),
+            f"parede = {num(menor)} cm",
+            _sit(menor >= minimo - 1e-9)))
+    else:
+        v.append(Verificacao(
+            "13.2.3", "Dimensão mínima da seção transversal",
+            "menor dimensão >= 19 cm; entre 19 e 14 cm com γn",
+            f"menor dimensão = {num(menor)} cm; γn = {num(p.gamma_n, 2)}",
+            _sit(menor >= 14.0)))
     v.append(Verificacao(
         "13.2.3", "Área mínima da seção transversal", "Ac >= 360 cm²",
         f"Ac = {num(secao.area, 0)} cm²", _sit(secao.area >= 360.0)))
@@ -106,6 +122,20 @@ def _geometria(res: ResultadoPilar, v: list[Verificacao]) -> None:
 
 def _esbeltez(res: ResultadoPilar, v: list[Verificacao]) -> None:
     p = res.pilar
+    ep = res.esbeltez["x"].principal if "x" in res.esbeltez else None
+    if ep is not None:
+        for d in ep.direcoes:
+            v.append(Verificacao(
+                "15.8.2 / 15.8.3.3.5",
+                f"Esbeltez na direção principal {d.rotulo}",
+                "seção sem simetria: λ = le/i com o raio de giração "
+                "principal; 2ª ordem se λ > λ₁",
+                f"i = {num(d.i, 2)} cm, λ = {num(d.lam, 1)}, λ₁ = "
+                f"{num(d.lam_1, 1)}; e2 = {num(d.e2, 2)} cm"
+                if d.considerar_2a_ordem else
+                f"i = {num(d.i, 2)} cm, λ = {num(d.lam, 1)} <= λ₁ = "
+                f"{num(d.lam_1, 1)}",
+                ATENDIDO if d.considerar_2a_ordem else DISPENSADO))
     for direcao in ("x", "y"):
         e = res.esbeltez.get(direcao)
         if e is None:
@@ -160,8 +190,9 @@ def _esbeltez(res: ResultadoPilar, v: list[Verificacao]) -> None:
             Msd = mm.Msd_x if direcao == "x" else mm.Msd_y
             MRd = mm.MRd_x if direcao == "x" else mm.MRd_y
             ok = mm.ok_x if direcao == "x" else mm.ok_y
+            rot = mm.rotulos[0 if direcao == "x" else 1]
             v.append(Verificacao(
-                "11.3.3.4.3", f"Envoltória mínima na direção {direcao}",
+                "11.3.3.4.3", f"Envoltória mínima na direção {rot}",
                 "Md,tot,min <= MRd da direção, em análise isolada à flexão "
                 "composta normal (item 3.1 da apostila de referência)",
                 f"Md,tot,min = {num(Msd / 100, 1)} kN·m contra "
@@ -233,7 +264,10 @@ def _segunda_ordem(res: ResultadoPilar, v: list[Verificacao]) -> None:
             INFORMATIVO))
         v.append(Verificacao(
             "15.8.3.3", f"Efeito local de 2ª ordem adotado ({direcao})",
-            f"critério de projeto: {res.pilar.config.metodo_2a_ordem}",
+            f"critério de projeto: {res.pilar.config.metodo_2a_ordem}"
+            + (" (governante do caso mais conservador: "
+               + ", ".join(res.metodos_pior) + " rodaram)"
+               if res.metodos_pior else ""),
             f"e2 = {num(s.e2, 2)} cm por {s.metodo}", INFORMATIVO))
         if e.gamma_n1 > 1.0:
             v.append(Verificacao(
@@ -265,6 +299,16 @@ def _flexao(res: ResultadoPilar, v: list[Verificacao]) -> None:
             f"caso {d.caso} — {cl.excentricidade.lower() or 'n/d'} "
             f"excentricidade, domínio {d.dominio}; "
             f"As por camada = {num(max(d.As1, d.As2), 2)} cm²", INFORMATIVO))
+    nr = res.normal
+    if nr is not None:
+        v.append(Verificacao(
+            "17.2.2", "Força normal resistente (esmagamento)",
+            "NRd,mín = −As·fyd <= Nd <= NRd,máx, compressão uniforme a εc2 "
+            "(retas a e b)",
+            f"Nd = {num(nr.Nd, 1)} kN; NRd,máx = {num(nr.NRd_max, 1)} kN "
+            f"(concreto {num(nr.N_concreto, 1)} + aço {num(nr.N_aco, 1)}); "
+            f"NRd,mín = {num(nr.NRd_min, 1)} kN",
+            _sit(nr.ok)))
     for vf in res.verificacoes:
         v.append(Verificacao(
             "17.2.5", f"Flexão composta oblíqua — {vf.situacao.nome}",
@@ -454,12 +498,23 @@ def _omissoes(res: ResultadoPilar, v: list[Verificacao]) -> None:
             "theta_a = 1/(100 sqrt(H))",
             "fora do escopo: entra nos esforços do modelo global",
             NAO_VERIFICADO))
-    v.append(Verificacao(
-        "16.2.3", "Combinações de ações",
-        "combinação última normal com γf e ψ",
-        f"fora do escopo: os esforços de entrada são tomados como de "
-        f"cálculo (γf de entrada = {num(p.config.gamma_f)})",
-        NAO_VERIFICADO))
+    if p.acoes:
+        n_comb = max(len(res.combinacoes), 1)
+        v.append(Verificacao(
+            "11.8 / Tab. 11.3", "Combinações de ações",
+            "combinações últimas com γf (Tab. 11.1) e ψ0 (Tab. 11.2), cada "
+            "variável direta como principal",
+            f"{len(p.acoes)} ação(ões) → {n_comb} combinação(ões); governa "
+            f"{res.combinacao_governante or p.nome_combinacao}",
+            ATENDIDO))
+    else:
+        v.append(Verificacao(
+            "11.8", "Combinações de ações",
+            "combinação última normal com γf e ψ",
+            f"não geradas: os esforços de entrada são tomados como de "
+            f"cálculo (γf de entrada = {num(p.config.gamma_f)}); informe as "
+            f"ações características para o programa gerá-las",
+            NAO_VERIFICADO))
     for direcao, c in (res.cisalhamento or {}).items():
         if c.Vd <= 0.0:
             v.append(Verificacao(

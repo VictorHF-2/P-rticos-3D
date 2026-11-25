@@ -30,6 +30,7 @@ import contextlib
 import math
 from dataclasses import dataclass, field
 
+from . import acoes as acoes_mod
 from . import ancoragem as anc
 from . import arranjo as arr_mod
 from . import avisos as av
@@ -44,7 +45,8 @@ from . import seccional as sc
 from . import segunda_ordem as so_mod
 from .arranjo import Arranjo
 from .esbeltez import Esbeltez
-from .materiais import RHO_MAXIMO, area_barra, rho_minimo
+from .materiais import (ESBELTEZ_FLUENCIA, ESBELTEZ_METODO_EXATO, RHO_MAXIMO,
+                        RHO_MAXIMO_CORRENTE, area_barra, rho_minimo)
 from .modelo import METODOS_COM_SECAO, Pilar
 from .formato import num
 
@@ -197,6 +199,18 @@ class VerificacaoMomentoMinimo:
     pontos_elipse: list = field(default_factory=list)
     #: F.S. truncado nesta casa decimal (modo compatível com o PCalc).
     casas_fs: int | None = None                              # COMPAT-PCALC
+    #: Seção sem simetria: a elipse está nos eixos principais, e os campos
+    #: "x" e "y" acima são as direções principais 1 (``phi``, rad, a partir
+    #: de x) e 2 (``phi + pi/2``). ``None``: x e y.
+    phi: float | None = None
+
+    @property
+    def rotulos(self) -> tuple[str, str]:
+        """Nome das duas direções nas saídas."""
+        if self.phi is None:
+            return "x", "y"
+        g = math.degrees(self.phi)
+        return (f"1 ({num(g, 1)}°)", f"2 ({num(g + 90.0, 1)}°)")
 
     def _truncar(self, v: float) -> float:                   # COMPAT-PCALC
         if self.casas_fs is None or not math.isfinite(v):
@@ -252,6 +266,126 @@ class ResumoCombinacao:
     ok: bool
     erro: str = ""
     governante: bool = False
+    descricao: str = ""    # fórmula, quando gerada das ações
+
+
+@dataclass
+class VerificacaoNormal:
+    """A força normal contra a normal resistente da seção armada.
+
+    Compressão: a reta b do item 17.2.2 g) -- compressão uniforme em
+    ``eps_c2``, o concreto na tensão de pico ``0,85 eta_c fcd`` do 17.2.2 e) e
+    cada barra na tensão do seu diagrama na mesma deformação (17.2.2 f)),
+    descontada a área de concreto que ela ocupa. ``Nd`` acima de ``NRd,máx``
+    é o esmagamento do concreto: nenhum plano de deformação equilibra essa
+    normal, com momento nenhum. Tração: a reta a, toda a armadura escoando;
+    o concreto tracionado não entra (17.2.2 d)).
+
+    Até 10/11/2026 o caso caía só como consequência -- ``MRd = 0`` em toda
+    direção e a expressão de interação infinita --, sem dizer a causa.
+    """
+
+    Nd: float = 0.0              # kN, compressão positiva
+    area_concreto: float = 0.0   # cm², bruta (as barras são descontadas abaixo)
+    area_aco: float = 0.0        # cm²
+    eps_c2: float = 0.0          # ‰
+    sigma_cd: float = 0.0        # kN/cm², 0,85 eta_c fcd
+    sigma_s: float = 0.0         # kN/cm², aço em eps_c2
+    fyd: float = 0.0             # kN/cm²
+    N_concreto: float = 0.0      # kN, sigma_cd · Ac
+    N_aco: float = 0.0           # kN, soma de As (sigma_s - sigma_cd)
+    NRd_max: float = 0.0         # kN
+    NRd_min: float = 0.0         # kN (negativa), -As fyd
+
+    @property
+    def compressao(self) -> bool:
+        return self.Nd >= 0.0
+
+    @property
+    def ok(self) -> bool:
+        return self.NRd_min - 1e-6 <= self.Nd <= self.NRd_max + 1e-6
+
+    @property
+    def fs(self) -> float:
+        """``NRd/Nd`` no sentido da normal (infinito com Nd nulo)."""
+        if abs(self.Nd) < 1e-9:
+            return float("inf")
+        return (self.NRd_max / self.Nd if self.compressao
+                else self.NRd_min / self.Nd)
+
+    @property
+    def tensao_media(self) -> float:
+        """``Nd/Ac``, kN/cm² -- a conta de mão que o esmagamento lembra."""
+        return self.Nd / self.area_concreto if self.area_concreto > 0 else 0.0
+
+
+def verificar_normal(secao: sc.SecaoDiscreta, Nd: float) -> VerificacaoNormal:
+    """Normal resistente máxima e mínima da seção armada
+    (:class:`VerificacaoNormal`)."""
+    c, aco = secao.concreto, secao.aco
+    e = c.eps_c2_mil
+    v = VerificacaoNormal(Nd=Nd, area_concreto=secao.area_concreto,
+                          area_aco=secao.area_aco, eps_c2=e,
+                          sigma_cd=c.sigma_c(e), sigma_s=sc.tensao_aco(aco, e),
+                          fyd=aco.fyd_kNcm2)
+    v.N_concreto = v.sigma_cd * v.area_concreto
+    v.N_aco = sum((sc.tensao_aco(aco, e) - c.sigma_c(e)) * b.area
+                  for b in secao.barras)
+    v.NRd_max = sc.normal_resistente_maxima(secao)
+    v.NRd_min = sc.normal_resistente_minima(secao)
+    return v
+
+
+def _causa_normal(pilar: Pilar) -> str:
+    """Quando a busca não acha arranjo: a normal passa do que a seção
+    resiste mesmo com a taxa máxima de 4 % (17.3.5.3.2)? É a explicação que
+    o "nenhum arranjo" não dava -- esmagamento, não falta de bitola."""
+    c, aco = pilar.concreto, pilar.aco
+    Ac = pilar.secao.area
+    As = RHO_MAXIMO_CORRENTE * Ac
+    e = c.eps_c2_mil
+    if pilar.Nd >= 0.0:
+        teto = c.sigma_c(e) * Ac + As * (sc.tensao_aco(aco, e) - c.sigma_c(e))
+        if pilar.Nd <= teto:
+            return ""
+        return (f" A causa é a normal: Nd = {num(pilar.Nd, 1)} kN passa da "
+                f"normal resistente máxima mesmo com a taxa máxima de "
+                f"{num(RHO_MAXIMO_CORRENTE * 100, 0)} % (17.3.5.3.2) -- "
+                f"{num(teto, 1)} kN em compressão uniforme (17.2.2 g), reta "
+                f"b): concreto {num(c.sigma_c(e) * 10, 2)} MPa × "
+                f"{num(Ac, 1)} cm² mais {num(As, 1)} cm² de aço a "
+                f"{num(sc.tensao_aco(aco, e) * 10, 0)} MPa. É esmagamento do "
+                f"concreto: só uma seção maior ou um fck maior resolvem.")
+    teto = As * aco.fyd_kNcm2
+    if -pilar.Nd <= teto:
+        return ""
+    return (f" A causa é a normal: |Nd| = {num(-pilar.Nd, 1)} kN de tração "
+            f"passa de As·fyd mesmo com a taxa máxima de "
+            f"{num(RHO_MAXIMO_CORRENTE * 100, 0)} % ({num(teto, 1)} kN, "
+            f"17.2.2 g), reta a). Só uma seção maior resolve.")
+
+
+def mensagem_normal(v: VerificacaoNormal) -> str:
+    """O erro de normal acima da resistente, com a conta."""
+    if v.compressao:
+        return (
+            f"Esmagamento do concreto (item 17.2.2 g), reta b): Nd = "
+            f"{num(v.Nd, 1)} kN > NRd,máx = {num(v.NRd_max, 1)} kN, a normal "
+            f"resistente da seção armada em compressão uniforme a "
+            f"εc2 = {num(v.eps_c2, 2)} ‰ -- concreto "
+            f"{num(v.sigma_cd * 10, 2)} MPa × {num(v.area_concreto, 1)} cm² "
+            f"= {num(v.N_concreto, 1)} kN, mais o aço a "
+            f"{num(v.sigma_s * 10, 0)} MPa, descontado o concreto que ele "
+            f"ocupa, {num(v.area_aco, 2)} cm² → {num(v.N_aco, 1)} kN. Nenhum "
+            f"plano de deformação equilibra essa normal, com momento nenhum: "
+            f"é preciso aumentar a seção, o fck ou a armadura. (Nd/Ac = "
+            f"{num(v.tensao_media * 10, 2)} MPa, contra os "
+            f"{num(v.sigma_cd * 10, 2)} MPa que o concreto sozinho resiste.)")
+    return (
+        f"Normal de tração acima da resistente (item 17.2.2 g), reta a): "
+        f"|Nd| = {num(-v.Nd, 1)} kN > As·fyd = {num(-v.NRd_min, 1)} kN "
+        f"({num(v.area_aco, 2)} cm² a {num(v.fyd * 10, 0)} MPa; o concreto "
+        f"tracionado não entra, 17.2.2 d)). É preciso aumentar a armadura.")
 
 
 @dataclass
@@ -293,6 +427,8 @@ class ResultadoPilar:
     #: Verificação isolada do momento mínimo pela envoltória do item 3.1 da
     #: apostila (``None`` quando ``momento_minimo_metodo == "planilha"``).
     momento_minimo: VerificacaoMomentoMinimo | None = None
+    #: A normal contra a normal resistente (esmagamento / reta a).
+    normal: VerificacaoNormal | None = None
     #: Verificação à força cortante por direção (item 17.4, modelo I).
     #: Sempre presente; com Vd = 0 ela apenas declara que o item não se
     #: aplica e que o estribo saiu do 18.4.3.
@@ -302,6 +438,11 @@ class ResultadoPilar:
     servico: object = None
     #: ELU de fadiga do pilar de ponte (``core.fadiga``).
     fadiga: object = None
+    #: Situação de incêndio, NBR 15200 (``core.incendio``).
+    incendio: object = None
+    #: Critério "caso mais conservador": os métodos que rodaram (vazio fora
+    #: dele). As linhas de ``combinacoes`` são então método × combinação.
+    metodos_pior: list = field(default_factory=list)
     secao_discreta: sc.SecaoDiscreta | None = None
     avisos: list[str] = field(default_factory=list)
     #: Com mais de uma combinação de esforços: uma linha por combinação, e
@@ -557,9 +698,11 @@ def _analise_geral(pilar: Pilar, esb: dict[str, Esbeltez],
             if not ativa[k]:
                 continue
             eb, et = e1[d]
-            # Msg/Nsg ~ alfa_b e1 da situação real (ou e1,mín na envoltória)
-            e_ref = (esb[d].alfa_b * abs(esb[d].e1) if entrada
-                     else max(abs(eb), abs(et)))
+            # Msg/Nsg = o maior e1 de 1ª ordem (o mais desfavorável; a norma
+            # não diz qual; 13/11/2026 -- antes alfa_b e1), ou e1,mín na
+            # envoltória
+            e_ref = (so_mod.e1_quase_permanente(pilar, esb[d].e1)
+                     if entrada else max(abs(eb), abs(et)))
             Ic = prop.Ix if d == "x" else prop.Iy
             v, _ = so_mod.excentricidade_fluencia(pilar, d, e_ref, Ic)
             sinal = 1.0 if (eb + et if abs(eb + et) > 1e-12
@@ -618,7 +761,8 @@ def _situacoes_geral(pilar: Pilar, esb: dict[str, Esbeltez],
             ex=r.Mx[i] / Nd if abs(Nd) > 1e-9 else 0.0,
             ey=r.My[i] / Nd if abs(Nd) > 1e-9 else 0.0,
             Mx=r.Mx[i], My=r.My[i],
-            descricao=f"método geral, seção {i + 1} de {n} (z/L = {num(t, 2)})"))
+            descricao=f"método geral, seção {i + 1} de {n} (z/L = {num(t, 2)})",
+            z_rel=t))
     return lista, so
 
 
@@ -701,8 +845,9 @@ def _momento_total_minimo(pilar: Pilar, esb: Esbeltez,
         for s_ in sentidos:
             rs = mc.rigidez_secante(secao, Nd_2, esb.direcao, s_,
                                     fator_fluencia=fator_fluencia)
-            e2 = max(e2, so_mod.e2_por_diagrama(Nd_2, esb.le, rs.EI, e1a)
-                     if rs is not None else float("inf"))
+            e2 = max(e2, so_mod.e2_por_diagrama(
+                so_mod.normal_amplificacao(pilar, Nd_2), esb.le, rs.EI, e1a)
+                if rs is not None else float("inf"))
     elif metodo == "rigidez":
         e2 = e2_rig
     elif metodo == "menor":
@@ -710,6 +855,106 @@ def _momento_total_minimo(pilar: Pilar, esb: Esbeltez,
     else:
         e2 = e2_curv
     return esb.M1d_min + abs(pilar.Nd) * (e_cc + e2 * esb.gamma_n1)
+
+
+def _minimo_total_principal(pilar: Pilar, d, secao: sc.SecaoDiscreta | None
+                            = None) -> float:
+    """``Md,tot,min`` numa direção principal ``d``
+    (:class:`principais.DirecaoPrincipal`) da seção sem simetria: o mesmo de
+    :func:`_momento_total_minimo`, com ``h``, ``le`` e lambda da direção
+    principal e a 2ª ordem do mínimo pela flexão naquela direção."""
+    if pilar.Nd <= 0.0:
+        return d.M1d_min
+    lam_1_min, _ = esb_mod.esbeltez_limite(d.e1_min, d.h, 1.0)
+    if d.lam <= lam_1_min and not pilar.config.sempre_2a_ordem:
+        return d.M1d_min
+    prop = pilar.secao.propriedades()
+    cfg = pilar.config
+    metodo = so_mod.metodo_efetivo(pilar)
+    pela_curva = (cfg.considerar_fluencia and cfg.fluencia_metodo == "diagrama"
+                  and metodo in ("diagrama", "geral"))
+    e_cc = 0.0
+    if cfg.considerar_fluencia and not pela_curva:
+        e_cc, _ = so_mod.excentricidade_fluencia(
+            pilar, f"na direção principal {d.indice}", d.e1_min, d.I, le=d.le)
+    fator_fluencia = (1.0 + pilar.phi_fluencia * cfg.Nsg_sobre_Nd
+                      if pela_curva else 1.0)
+    e1a = d.e1_min + e_cc
+    nu = so_mod.forca_normal_adimensional(abs(pilar.Nd) / pilar.gamma_n,
+                                          prop.area, pilar.concreto.fcd_kNcm2)
+    e2_curv = so_mod.e2_por_curvatura(d.le,
+                                      so_mod.curvatura_aproximada(d.h, nu))
+    e_rig, _ = so_mod.e2_por_rigidez(d.le, d.h, e1a)
+    e2_rig = max(e_rig - e1a, 0.0)
+    sentidos = ((1.0,) if secao is None
+                or arr_mod.barras_simetricas(secao.barras) else (1.0, -1.0))
+    if metodo == "geral" and secao is not None:
+        # o mínimo constante ao longo do lance, na direção principal: as
+        # componentes em x e y, com a 2ª ordem acoplada nas duas
+        esbs = {k: esb_mod.analisar(pilar, k) for k in ("x", "y")}
+        pior = 0.0
+        for s_ in sentidos:
+            e = s_ * d.e1_min
+            e1 = {"x": (e * d.ux, e * d.ux), "y": (e * d.uy, e * d.uy)}
+            r = _analise_geral(pilar, esbs, secao, e1=e1, forcar=True)
+            if not r.convergiu:
+                return float("inf")
+            pior = max(pior, max(abs(mx * d.ux + my * d.uy)
+                                 for mx, my in zip(r.Mx, r.My)))
+        return pior
+    if metodo == "diagrama" and secao is not None:
+        Nd_2 = abs(pilar.Nd) / pilar.gamma_n
+        e2 = 0.0
+        for s_ in sentidos:
+            rs = mc.rigidez_secante(secao, Nd_2, d.phi, s_,
+                                    fator_fluencia=fator_fluencia)
+            e2 = max(e2, so_mod.e2_por_diagrama(
+                so_mod.normal_amplificacao(pilar, Nd_2), d.le, rs.EI, e1a)
+                if rs is not None else float("inf"))
+    elif metodo == "rigidez":
+        e2 = e2_rig
+    elif metodo == "menor":
+        e2 = min(e2_curv, e2_rig)
+    else:
+        e2 = e2_curv
+    return d.M1d_min + abs(pilar.Nd) * (e_cc + e2 * d.gamma_n1)
+
+
+def _semi_eixos_minimo(pilar: Pilar, esb: dict[str, Esbeltez],
+                       secao: sc.SecaoDiscreta | None = None
+                       ) -> tuple[float, float, float | None]:
+    """``(A1, A2, phi)``: semi-eixos da elipse mínima e a direção do
+    primeiro (``None`` = x e y). Na seção sem simetria, nas direções
+    principais -- é onde o item 11.3.3.4.3 e a Figura 11.3 a põem."""
+    ep = esb["x"].principal
+    if ep is None:
+        return (_momento_total_minimo(pilar, esb["x"], secao),
+                _momento_total_minimo(pilar, esb["y"], secao), None)
+    d1, d2 = ep.direcoes
+    return (_minimo_total_principal(pilar, d1, secao),
+            _minimo_total_principal(pilar, d2, secao), d1.phi)
+
+
+def _mrd_minimo(secao: sc.SecaoDiscreta, pilar: Pilar, k: int,
+                phi: float | None) -> float:
+    """Momento resistente de um vértice da elipse mínima (``k`` = 0 ou 1),
+    no sentido mais fraco quando a armadura não é simétrica. Em x/y, a
+    flexão composta normal; numa direção principal, a envoltória de
+    equilíbrio naquela direção (o momento resultante sai nela)."""
+    Nd = pilar.Nd
+    sentidos = ((1.0,) if arr_mod.barras_simetricas(secao.barras)
+                else (1.0, -1.0))
+    if phi is None:
+        d = "x" if k == 0 else "y"
+        return min(sc.momento_resistente_uniaxial(secao, Nd, d, s)
+                   for s in sentidos)
+    ang = phi + k * math.pi / 2.0
+    valores = []
+    for s in sentidos:
+        estados = sc.estados_na_direcao(secao, Nd,
+                                        ang + (math.pi if s < 0 else 0.0))
+        valores.append(estados[-1].M if estados else 0.0)
+    return min(valores)
 
 
 def _verificar_momento_minimo(secao: sc.SecaoDiscreta, pilar: Pilar,
@@ -722,9 +967,8 @@ def _verificar_momento_minimo(secao: sc.SecaoDiscreta, pilar: Pilar,
     calculadas de forma isolada e com momentos fletores mínimos de 1ª ordem
     atuantes nos extremos do pilar, nas suas direções principais".
     """
-    Ax = _momento_total_minimo(pilar, esb["x"], secao)
-    Ay = _momento_total_minimo(pilar, esb["y"], secao)
-    return _verificar_minimo_secao(secao, pilar, Ax, Ay)
+    Ax, Ay, phi = _semi_eixos_minimo(pilar, esb, secao)
+    return _verificar_minimo_secao(secao, pilar, Ax, Ay, phi)
 
 
 #: Ângulos da elipse da envoltória mínima (``Mx = Ax cos f``, ``My = Ay sin
@@ -759,7 +1003,8 @@ ANGULOS_ELIPSE_CIRCULO_FINO = ANGULOS_ELIPSE_CIRCULO + tuple(
 
 
 def _verificar_minimo_secao(secao: sc.SecaoDiscreta, pilar: Pilar,
-                            Ax: float, Ay: float, parar_no_primeiro: bool = False,
+                            Ax: float, Ay: float, phi: float | None = None,
+                            parar_no_primeiro: bool = False,
                             fino: bool = True) -> VerificacaoMomentoMinimo:
     """Envoltória mínima com 2ª ordem (Figura 15.2) contra a seção armada.
 
@@ -772,17 +1017,18 @@ def _verificar_minimo_secao(secao: sc.SecaoDiscreta, pilar: Pilar,
     ``parar_no_primeiro``: a busca do arranjo só precisa saber se passa; o
     relatório precisa de todos os pontos. ``fino``: conjunto fino de ângulos
     (verificação final) ou o grosso (varredura dos candidatos).
+
+    ``phi``: seção sem simetria -- ``Ax`` e ``Ay`` são os semi-eixos nas
+    direções principais 1 (``phi``) e 2 (``phi + pi/2``), e a elipse é girada
+    para x e y antes de ir à envoltória.
     """
     Nd = pilar.Nd
-    v = VerificacaoMomentoMinimo(Msd_x=Ax, Msd_y=Ay)
+    v = VerificacaoMomentoMinimo(Msd_x=Ax, Msd_y=Ay, phi=phi)
     simetrico = arr_mod.barras_simetricas(secao.barras)
     # a elipse mínima tem os dois sentidos; só a armadura simétrica deixa um
     # representar o outro
-    sentidos = (1.0,) if simetrico else (1.0, -1.0)
-    v.MRd_x = min(sc.momento_resistente_uniaxial(secao, Nd, "x", s)
-                  for s in sentidos)
-    v.MRd_y = min(sc.momento_resistente_uniaxial(secao, Nd, "y", s)
-                  for s in sentidos)
+    v.MRd_x = _mrd_minimo(secao, pilar, 0, phi)
+    v.MRd_y = _mrd_minimo(secao, pilar, 1, phi)
     if not pilar.config.elipse_minima or (
             parar_no_primeiro and not (v.ok_x and v.ok_y)):
         return v
@@ -797,9 +1043,23 @@ def _verificar_minimo_secao(secao: sc.SecaoDiscreta, pilar: Pilar,
                    else ANGULOS_ELIPSE_CIRCULO_FINO)
     else:
         angulos = ANGULOS_ELIPSE_QUADRANTE if retang else ANGULOS_ELIPSE_CIRCULO
+    if phi is not None:
+        angulos = ANGULOS_ELIPSE_CIRCULO_FINO if fino else ANGULOS_ELIPSE_CIRCULO
+    if phi is not None and not (math.isfinite(Ax) and math.isfinite(Ay)):
+        # semi-eixo infinito (instabilidade do mínimo): os vértices já
+        # reprovam, e girar ∞ daria NaN (∞ - ∞·0) em todos os pontos --
+        # direção indefinida, que nem o cache da envoltória reconhece. Um
+        # ponto de razão infinita deixa o F.S. da elipse em zero.
+        v.pontos_elipse.append((0.0, 0.0, float("inf"), False))
+        return v
+    c1, s1 = (1.0, 0.0) if phi is None else (math.cos(phi), math.sin(phi))
     for graus in angulos:
         f = math.radians(graus)
-        Mx, My = Ax * math.cos(f), Ay * math.sin(f)
+        a1, a2 = Ax * math.cos(f), Ay * math.sin(f)
+        # componentes nas direções 1 e 2, giradas para x e y (em x/y, sem
+        # conta nenhuma: o resultado é o mesmo de antes, bit a bit)
+        Mx, My = ((a1, a2) if phi is None
+                  else (a1 * c1 - a2 * s1, a1 * s1 + a2 * c1))
         if math.hypot(Mx, My) <= 1e-9:
             continue
         s = Situacao(nome="elipse mínima", posicao="extremo",
@@ -841,14 +1101,58 @@ def _testar_arranjo(pilar: Pilar, a: Arranjo, situacoes: list[Situacao],
             if any(not math.isfinite(so[d].e2) for d in so):
                 return False, [], avisos
             situacoes = so_mod.situacoes(pilar, esb, so)
-        if minimo is not None:
-            minimo = (_momento_total_minimo(pilar, esb["x"], secao),
-                      _momento_total_minimo(pilar, esb["y"], secao))
-            if not all(math.isfinite(m) for m in minimo):
-                return False, [], avisos
-    verifs = [_verificar(secao, pilar, s, rigorosa=False) for s in situacoes]
-    if not all(v.ok for v in verifs):
-        return False, verifs, avisos
+    # Os dois vértices da envoltória mínima antes das situações (25/11/2026),
+    # quando o mínimo já vem pronto (2ª ordem que não depende da armadura):
+    # custam duas flexões compostas normais, contra a varredura de direções
+    # de linha neutra das situações. O veredito do candidato é o "e" de
+    # todas as verificações, e a ordem não o muda; o teste é o mesmo
+    # ``ok_x``/``ok_y`` de _verificar_minimo_secao, com os mesmos MRd, que
+    # ficam no cache da seção para ela.
+    if minimo is not None and not (
+            esb is not None
+            and so_mod.metodo_efetivo(pilar) in METODOS_COM_SECAO):
+        phi_m = minimo[2] if len(minimo) > 2 else None
+        if (minimo[0] > _mrd_minimo(secao, pilar, 0, phi_m) + 1e-6
+                or minimo[1] > _mrd_minimo(secao, pilar, 1, phi_m) + 1e-6):
+            return False, [], avisos
+    # Para na primeira situação reprovada (25/11/2026): quem chama só lê
+    # ``passou`` e os avisos, e as verificações de um candidato reprovado
+    # não são usadas -- conferir as situações seguintes dele não mudava
+    # nada, só custava as buscas de direção delas.
+    verifs = []
+    for s in situacoes:
+        v = _verificar(secao, pilar, s, rigorosa=False)
+        verifs.append(v)
+        if not v.ok:
+            return False, verifs, avisos
+    if (minimo is not None and esb is not None
+            and so_mod.metodo_efetivo(pilar) in METODOS_COM_SECAO):
+        # O mínimo com a 2ª ordem do candidato (no método geral, uma análise
+        # da barra por direção e sentido -- ~70 % do custo do candidato) só
+        # depois das situações: o candidato que já reprova nelas não precisa
+        # dele. O veredito é o mesmo nas duas ordens; quem chama só lê
+        # ``passou`` e os avisos.
+        #
+        # E o vértice x da elipse é conferido assim que o mínimo em x sai:
+        # se já passa do MRd,x (o ``ok_x`` de VerificacaoMomentoMinimo, com
+        # o mesmo MRd,x que _verificar_minimo_secao usa), o candidato reprova
+        # de qualquer jeito, e a análise da barra em y fica sem fazer.
+        ep = esb["x"].principal
+        phi = None if ep is None else ep.direcoes[0].phi
+
+        def semi(k):
+            if ep is None:
+                return _momento_total_minimo(pilar, esb["xy"[k]], secao)
+            return _minimo_total_principal(pilar, ep.direcoes[k], secao)
+        Ax = semi(0)
+        if not math.isfinite(Ax):
+            return False, [], avisos
+        if Ax > _mrd_minimo(secao, pilar, 0, phi) + 1e-6:
+            return False, verifs, avisos
+        Ay = semi(1)
+        if not math.isfinite(Ay):
+            return False, [], avisos
+        minimo = (Ax, Ay, phi)
     if minimo is not None:
         # grosso primeiro (barato, reprova cedo); o fino só para quem passou
         for fino in (False, True):
@@ -879,7 +1183,8 @@ def _escolher_arranjo(pilar: Pilar, situacoes: list[Situacao], nu: float,
                                        camadas, minimo, esb)
     simetria = _exige_simetria(pilar)
     for phi, nx, ny, n in arr_mod.candidatos(pilar.secao,
-                                             cfg.bitolas_permitidas):
+                                             cfg.bitolas_permitidas,
+                                             peso=cfg.peso_por_barra):
         area = area_barra(phi)
         As = n * area
         if As < As_necessaria - 1e-9:
@@ -929,7 +1234,8 @@ def _candidatos_validos(pilar: Pilar, As_necessaria: float,
     cfg = pilar.config
     saida: list[Arranjo] = []
     for phi, nx, ny, n in arr_mod.candidatos(pilar.secao,
-                                             cfg.bitolas_permitidas):
+                                             cfg.bitolas_permitidas,
+                                             peso=cfg.peso_por_barra):
         area = area_barra(phi)
         As = n * area
         if As < As_necessaria - 1e-9:
@@ -1066,9 +1372,14 @@ def dimensionar(pilar: Pilar) -> ResultadoPilar:
     """Calcula o lance de pilar por inteiro, em todas as combinações de
     esforços (``Pilar.combinacoes``), com a mesma armadura; o resultado é o
     da combinação que governa."""
+    # Ações características informadas: as combinações da Tabela 11.3
+    # substituem os esforços de entrada
+    pilar = acoes_mod.aplicar(pilar)
     modo = pilar.config.compat_pcalc                         # COMPAT-PCALC
     with _contexto_compat(pilar):                            # COMPAT-PCALC
-        if pilar.combinacoes:
+        if pilar.config.metodo_2a_ordem == "pior":
+            res = _dimensionar_pior(pilar)
+        elif pilar.combinacoes or _desaprumo_por_direcao(pilar):
             res = _dimensionar_combinacoes(pilar)
         else:
             res = _dimensionar_unico(pilar)
@@ -1114,6 +1425,13 @@ def _avisos_finais(pilar: Pilar, res: ResultadoPilar) -> None:
             "Desaprumo do pilar em balanço (item 11.3.3.4.1, θ1 = 1/200) "
             "somado ao momento de base: "
             + "; ".join(f"{d}: {num(v, 1)} kN·m" for d, v in extra.items() if v)
+            + ("" if pilar.desaprumo_angulo is None else
+               f". Balanço nas duas direções: θ1 é a inclinação do eixo na "
+               f"direção mais desfavorável do plano, achada por busca "
+               f"(ângulo {num(pilar.desaprumo_angulo, 1)}° na convenção "
+               f"interna; acima, as componentes). A norma não fixa a direção "
+               f"em flexão oblíqua; somar θ1 nas duas direções daria √2·θ1, "
+               f"acima do θ1,máx = 1/200")
             + ". Vale para pilar isolado. Se o lance é parte de um pórtico "
               "cujos esforços já vêm do modelo global -- pilares de OAE com "
               "travessa, por exemplo --, desligue 'Desaprumo do pilar em "
@@ -1235,8 +1553,10 @@ def _armadura_comum(pilar: Pilar, variantes: list[Pilar]):
     if not arranjos:
         return None, False
 
+    peso = pilar.config.peso_por_barra
+
     def custo(a):
-        return arr_mod.custo(a.phi, a.n_barras, pilar.secao, a.nx, a.ny)
+        return arr_mod.custo(a.phi, a.n_barras, pilar.secao, a.nx, a.ny, peso)
     inicio = max(arranjos, key=custo)
 
     # Erros de entrada (fck abaixo da CAA, λ fora da faixa
@@ -1261,11 +1581,12 @@ def _armadura_comum(pilar: Pilar, variantes: list[Pilar]):
     arm = _armadura_de(inicio, pilar)
     if passa_em_todas(arm):
         return arm, True
-    simetria = _exige_simetria(pilar)
+    simetria = any(_exige_simetria(v) for v in variantes)
     testados = 0
     for phi, nx, ny, n in arr_mod.candidatos(pilar.secao,
-                                             pilar.config.bitolas_permitidas):
-        if arr_mod.custo(phi, n, pilar.secao, nx, ny) <= custo(inicio):
+                                             pilar.config.bitolas_permitidas,
+                                             peso=peso):
+        if arr_mod.custo(phi, n, pilar.secao, nx, ny, peso) <= custo(inicio):
             continue
         phi_t = pilar.armadura.phi_estribo or est_mod.bitola_comercial(phi)
         a = arr_mod.montar(pilar.secao, pilar.cobrimento(phi, phi_t), phi_t,
@@ -1281,11 +1602,149 @@ def _armadura_comum(pilar: Pilar, variantes: list[Pilar]):
     return arm, False   # nenhuma passou em todas: fica a de partida, reprovada
 
 
+#: Rótulos curtos dos métodos de 2ª ordem, nas variantes do caso mais
+#: conservador.
+ROTULOS_METODO = {"curvatura": "curvatura aproximada",
+                  "rigidez": "rigidez κ aproximada",
+                  "diagrama": "M, N, 1/r",
+                  "geral": "método geral"}
+
+
+def metodos_aplicaveis(pilar: Pilar) -> list[str]:
+    """Os métodos de 2ª ordem que a norma admite para este lance -- os que o
+    critério "caso mais conservador" roda todos:
+
+    * curvatura (15.8.3.3.2) e rigidez κ (15.8.3.3.3): λ <= 90 e armadura
+      simétrica -- fora das seções L, T e U e da armadura imposta
+      assimétrica; a rigidez só na seção retangular;
+    * pilar-padrão com M, N, 1/r (15.8.3.3.4): λ <= 140;
+    * método geral (15.8.3.2): sempre.
+
+    O λ é o que governa os limites (o maior dos eixos principais na seção
+    sem simetria)."""
+    lam = max(esb_mod.analisar(pilar, d).lam_governante for d in ("x", "y"))
+    simetrica = pilar.secao.tipo not in ("L", "T", "U")
+    if simetrica and pilar.armadura.modo != "automatico":
+        simetrica = arr_mod.barras_simetricas(arranjo_imposto(pilar).barras)
+    metodos = []
+    if lam <= ESBELTEZ_FLUENCIA and simetrica:
+        metodos.append("curvatura")
+        if pilar.secao.tipo == "retangular":
+            metodos.append("rigidez")
+    if lam <= ESBELTEZ_METODO_EXATO:
+        metodos.append("diagrama")
+    metodos.append("geral")
+    return metodos
+
+
+def _dimensionar_pior(pilar: Pilar) -> ResultadoPilar:
+    """Critério "caso mais conservador": cada método aplicável em cada
+    combinação, todos com a mesma armadura; vale o pior -- a reprovada de
+    menor margem ou, sem reprovada, a de menor F.S. A tabela mostra todos."""
+    from dataclasses import replace
+    metodos = metodos_aplicaveis(pilar)
+    bases = ([pilar.com_esforcos(pilar.esforcos, pilar.nome_combinacao)]
+             + [pilar.com_combinacao(c) for c in pilar.combinacoes])
+    bases = _expandir_desaprumo(pilar, bases)
+    variantes = []
+    for b in bases:
+        for m in metodos:
+            nome = (ROTULOS_METODO[m] if len(bases) == 1
+                    else f"{b.nome_combinacao} · {ROTULOS_METODO[m]}")
+            variantes.append(replace(
+                b, nome_combinacao=nome,
+                config=replace(b.config, metodo_2a_ordem=m)))
+    res = _dimensionar_variantes(pilar, variantes, "verificações")
+    for r in (res.resultados_combinacoes or [res]):
+        r.metodos_pior = list(metodos)
+    res.avisos.append(av.construtivo(
+        "Critério de 2ª ordem \"caso mais conservador\": rodaram "
+        + ", ".join(ROTULOS_METODO[m] for m in metodos)
+        + f"; governa {res.combinacao_governante}."))
+    return res
+
+
+def _desaprumo_por_direcao(pilar: Pilar) -> bool:
+    """Balanço nas duas direções e a variante ainda sem o ângulo do
+    desaprumo: ele precisa ser buscado."""
+    return (pilar.desaprumo_angulo is None
+            and len(pilar.direcoes_desaprumo()) > 1)
+
+
+#: Passo final da busca do ângulo do desaprumo, graus (resolução ~1°).
+PASSO_ANGULO_DESAPRUMO = 2.0
+
+
+def angulo_critico_desaprumo(v: Pilar) -> float:
+    """O ângulo do desaprumo theta1 (inclinação do eixo, 11.3.3.4.1) que dá
+    o menor F.S. nas cotas do lance, em graus.
+
+    A norma não diz a direção do desaprumo em flexão oblíqua; vale a mais
+    desfavorável. No balanço o desaprumo soma à base um vetor de módulo
+    ``Nd theta1 l`` (um círculo no plano Mx-My); o F.S. varia suavemente
+    com o ângulo. Busca: oito direções a cada 45°, a partir da do momento
+    de base, e bissecção em torno da pior até :data:`PASSO_ANGULO_DESAPRUMO`.
+    Com armadura automática, a busca usa o arranjo dimensionado na direção
+    do momento de base."""
+    from dataclasses import replace
+    busca = v
+    if v.config.metodo_2a_ordem == "pior":
+        busca = replace(v, config=replace(
+            v.config, metodo_2a_ordem=metodos_aplicaveis(v)[0]))
+    bx, by = (busca.momento_base_sem_desaprumo(d) for d in ("x", "y"))
+    a0 = math.degrees(math.atan2(by, bx)) if (bx or by) else 0.0
+    if busca.armadura.modo == "automatico":
+        arm, _ = _armadura_comum(busca, [replace(busca, desaprumo_angulo=a0)])
+        if arm is not None:
+            busca = replace(busca, armadura=arm)
+    cache: dict[float, tuple] = {}
+
+    def chave(a: float) -> tuple:
+        a = round(a % 360.0, 6)
+        if a not in cache:
+            r = _dimensionar_lance(replace(busca, desaprumo_angulo=a))
+            fs = min((x.fs for x in r.verificacoes if math.isfinite(x.fs)),
+                     default=math.inf)
+            cache[a] = (r.ok, fs)
+        return cache[a]
+
+    pior = min(((a0 + 45.0 * k) % 360.0 for k in range(8)), key=chave)
+    passo = 22.5
+    while passo >= PASSO_ANGULO_DESAPRUMO:
+        pior = min((pior, (pior - passo) % 360.0, (pior + passo) % 360.0),
+                   key=chave)
+        passo /= 2.0
+    return round(pior % 360.0, 1)
+
+
+def _expandir_desaprumo(pilar: Pilar, variantes: list[Pilar]) -> list[Pilar]:
+    """Com balanço nas duas direções, cada variante recebe o ângulo crítico
+    do desaprumo (:func:`angulo_critico_desaprumo`)."""
+    from dataclasses import replace
+    if not _desaprumo_por_direcao(pilar):
+        return variantes
+    return [replace(v, desaprumo_angulo=angulo_critico_desaprumo(v))
+            for v in variantes]
+
+
 def _dimensionar_combinacoes(pilar: Pilar) -> ResultadoPilar:
     """Todas as combinações com a mesma armadura; vale a pior."""
+    variantes = ([pilar.com_esforcos(pilar.esforcos, pilar.nome_combinacao)]
+                 + [pilar.com_combinacao(c) for c in pilar.combinacoes])
+    variantes = _expandir_desaprumo(pilar, variantes)
+    return _dimensionar_variantes(pilar, variantes, "combinações")
+
+
+def _dimensionar_variantes(pilar: Pilar, variantes: list[Pilar],
+                           rotulo: str) -> ResultadoPilar:
+    """Variantes do lance (combinações, métodos) com a mesma armadura; vale
+    a pior."""
     from dataclasses import replace
-    variantes = [pilar.com_esforcos(e, nome)
-                 for nome, e in pilar.todas_combinacoes()]
+    if len(variantes) == 1:
+        with _contexto_compat(variantes[0]):                 # COMPAT-PCALC
+            res = _dimensionar_unico(variantes[0])
+        res.combinacao_governante = variantes[0].nome_combinacao
+        return res
     achou = True
     if pilar.armadura.modo == "automatico":
         arm, achou = _armadura_comum(pilar, variantes)
@@ -1311,7 +1770,7 @@ def _dimensionar_combinacoes(pilar: Pilar) -> ResultadoPilar:
             fs_minimo=(min(x for x in (mm.fs_x, mm.fs_y, mm.fs_elipse)
                            if x is not None) if mm else float("inf")),
             ok=r.ok, erro=r.erros[0] if r.erros else "",
-            governante=(i == i_gov)))
+            governante=(i == i_gov), descricao=v.descricao_combinacao))
         if i != i_gov and not r.ok:
             res.avisos.append(av.erro(
                 f"Combinação {v.nome_combinacao}: {r.erros[0]}"))
@@ -1344,7 +1803,7 @@ def _dimensionar_combinacoes(pilar: Pilar) -> ResultadoPilar:
     automatica = pilar.armadura.modo == "automatico"
     margem = _margem(res)
     res.avisos.append(av.construtivo(
-        f"{len(variantes)} combinações verificadas com a mesma armadura"
+        f"{len(variantes)} {rotulo} com a mesma armadura"
         + ((" (a mais barata que atende a todas)" if achou else
             " (nenhum arranjo testado atende a todas; ficou o de partida, "
             "o mais caro dos que cada combinação pediu sozinha)")
@@ -1419,8 +1878,7 @@ def _dimensionar_lance(pilar: Pilar) -> ResultadoPilar:
     else:
         minimo = None
         if pilar.config.momento_minimo_metodo == "envoltoria":
-            minimo = (_momento_total_minimo(pilar, res.esbeltez["x"]),
-                      _momento_total_minimo(pilar, res.esbeltez["y"]))
+            minimo = _semi_eixos_minimo(pilar, res.esbeltez)
         # a busca parte da armadura mínima: quem aprova é o motor seccional
         escolhido, avisos_busca = _escolher_arranjo(
             pilar, res.situacoes, res.nu, res.As_minima, {}, minimo,
@@ -1429,7 +1887,8 @@ def _dimensionar_lance(pilar: Pilar) -> ResultadoPilar:
             res.avisos.append(av.erro(
                 "Nenhum arranjo de barras atendeu a todas as verificações "
                 "com as bitolas permitidas. Aumente a seção, a classe do "
-                "concreto ou libere bitolas maiores nos critérios."))
+                "concreto ou libere bitolas maiores nos critérios."
+                + _causa_normal(pilar)))
             res.avisos.extend(avisos_busca)
             return res
         res.arranjo = escolhido
@@ -1523,7 +1982,15 @@ def _dimensionar_lance(pilar: Pilar) -> ResultadoPilar:
         res.governante = so_mod.governante(res.situacoes)
     res.verificacoes = [_verificar(secao, pilar, s, rigorosa=True)
                         for s in res.situacoes]
-    for v in res.verificacoes:
+    # Normal acima da resistente: um erro só, com a causa e a conta. As
+    # situações e o mínimo continuam calculados (F.S. = 0, envoltória
+    # inatingível), mas os erros deles -- "MRd = 0", interação infinita --
+    # são consequência deste e só confundiam a leitura.
+    res.normal = verificar_normal(secao, pilar.Nd)
+    normal_esgotada = not res.normal.ok
+    if normal_esgotada:
+        res.avisos.append(av.erro(mensagem_normal(res.normal)))
+    for v in (res.verificacoes if not normal_esgotada else ()):
         if not v.ok_interacao and not v.interacao_exigida and v.ok_envoltoria:
             res.avisos.append(av.construtivo(
                 f"{v.situacao.nome}: a expressão aproximada do item 17.2.5 dá "
@@ -1579,16 +2046,16 @@ def _dimensionar_lance(pilar: Pilar) -> ResultadoPilar:
     if pilar.config.momento_minimo_metodo == "envoltoria":
         mm = _verificar_momento_minimo(secao, pilar, res.esbeltez)
         res.momento_minimo = mm
-        if not mm.ok:
+        if not mm.ok and not normal_esgotada:
             lados = []
             if not mm.ok_x:
                 lados.append(
-                    f"x (Md,tot,min = {num(mm.Msd_x / 100, 1)} kN·m contra "
-                    f"MRd,xx = {num(mm.MRd_x / 100, 1)} kN·m)")
+                    f"{mm.rotulos[0]} (Md,tot,min = {num(mm.Msd_x / 100, 1)} kN·m contra "
+                    f"MRd = {num(mm.MRd_x / 100, 1)} kN·m)")
             if not mm.ok_y:
                 lados.append(
-                    f"y (Md,tot,min = {num(mm.Msd_y / 100, 1)} kN·m contra "
-                    f"MRd,yy = {num(mm.MRd_y / 100, 1)} kN·m)")
+                    f"{mm.rotulos[1]} (Md,tot,min = {num(mm.Msd_y / 100, 1)} kN·m contra "
+                    f"MRd = {num(mm.MRd_y / 100, 1)} kN·m)")
             if not mm.ok_elipse:
                 pior = max((p for p in mm.pontos_elipse if not p[3]),
                            key=lambda p: p[2])
@@ -1618,6 +2085,20 @@ def _dimensionar_lance(pilar: Pilar) -> ResultadoPilar:
     v_topo = _verificar(secao, pilar, topo, rigorosa=True)
     v_base = _verificar(secao, pilar, base, rigorosa=True)
     v_meio = max(meios, key=lambda v: v.razao_envoltoria)
+    # Método geral: as seções extremas da barra discretizada já trazem a 2ª
+    # ordem da cota delas -- no balanço, o engaste (z = 0) é onde ela é
+    # máxima. Entram na cota física correspondente, com a pior valendo.
+    # (13/11/2026, contraprova independente da 2ª ordem: no CIR-024 a "Base"
+    # do balanço saía com F.S. 1,426, a 1ª ordem com o desaprumo, enquanto a
+    # seção z = 0 do próprio método geral dava 1,334, o valor da contraprova.)
+    for v in res.verificacoes:
+        zr = v.situacao.z_rel
+        if zr is None:
+            continue
+        if zr <= 1e-9 and v.razao_envoltoria > v_base.razao_envoltoria:
+            v_base = v
+        elif zr >= 1.0 - 1e-9 and v.razao_envoltoria > v_topo.razao_envoltoria:
+            v_topo = v
     # As três cotas físicas, sempre -- é o que se compara com o topo, o meio
     # e a base do PCalc; a apresentação (``verificacoes_z``) é que junta o
     # meio à base no balanço.
@@ -1697,6 +2178,14 @@ def _dimensionar_lance(pilar: Pilar) -> ResultadoPilar:
     from . import fadiga as fad
     res.fadiga = fad.verificar(pilar, a)
     res.avisos.extend(res.fadiga.avisos)
+    # -- 7d. situação de incêndio (NBR 15200) ------------------------------
+    # Módulo interno, fora da interface e das saídas: os métodos de pilar da
+    # NBR 15200 dependem do gamma_z da estrutura, que este programa não
+    # conhece. Fica para quem conhece (o programa de pórticos): liga
+    # ``config.incendio`` e lê ``res.incendio`` -- os avisos ficam lá, e não
+    # nos do lance, para não reprovar nem aparecer aqui.
+    from . import incendio as inc
+    res.incendio = inc.verificar(pilar, res)
 
     # -- 8. conferência cruzada --------------------------------------------
     res.conferencias = _conferir(pilar, res, secao)
@@ -1732,3 +2221,104 @@ def _conferir(pilar: Pilar, res: ResultadoPilar,
         saida.append(Conferencia(grandeza=f"MRd,{direcao}{direcao} (kN·cm)",
                                  fechado=M, seccional=Mn, tolerancia=tol))
     return saida
+
+
+# ---------------------------------------------------------------------------
+# Outras opções de armação (a lista que o projetista escolhe)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class OpcaoArmadura:
+    """Um arranjo aprovado, com o resultado completo dele já calculado."""
+
+    descricao: str
+    As: float                    # cm²
+    taxa: float                  # As/Ac
+    n_barras: int
+    custo: float                 # relativo ao do arranjo escolhido (1,00)
+    fs: float                    # menor F.S. (inf sem momento)
+    armadura: object             # modelo.Armadura imposta deste arranjo
+    resultado: ResultadoPilar
+    escolhida: bool = False
+
+
+def _descricao_opcao(a) -> str:
+    """O arranjo, com a disposição nas faces na seção retangular."""
+    if a.nx and a.ny:
+        return f"{a.descricao()} — {a.nx} × {a.ny} por face"
+    return a.descricao()
+
+
+#: Teto de candidatos verificados ao montar a lista de opções.
+CANDIDATOS_OPCOES = 40
+
+
+def opcoes_armadura(pilar: Pilar, res: ResultadoPilar, n: int = 6,
+                    progresso=None) -> list[OpcaoArmadura]:
+    """O arranjo escolhido e os seguintes aprovados, em ordem de custo.
+
+    Parte do arranjo da busca automática (``res``) e percorre os candidatos
+    mais caros que ele, na mesma ordem de custo (``Config.peso_por_barra``),
+    com os mesmos filtros de detalhamento; cada um é **verificado por
+    inteiro** -- ``dimensionar`` com o arranjo imposto, em todas as
+    combinações e, no caso mais conservador, em todos os métodos --, e só os
+    aprovados entram. O resultado de cada opção fica guardado: escolher uma
+    não recalcula. Para em ``n`` opções ou em :data:`CANDIDATOS_OPCOES`
+    candidatos verificados. ``progresso(feitos, total, recado)`` é chamado a
+    cada candidato.
+    """
+    from dataclasses import replace
+    a0 = res.arranjo
+    if pilar.armadura.modo != "automatico" or a0 is None or not res.ok:
+        return []
+    peso = pilar.config.peso_por_barra
+    Ac = pilar.secao.area
+
+    def custo(phi, nb, nx, ny):
+        return arr_mod.custo(phi, nb, pilar.secao, nx, ny, peso)
+
+    c0 = custo(a0.phi, a0.n_barras, a0.nx, a0.ny)
+    opcoes = [OpcaoArmadura(
+        descricao=_descricao_opcao(a0), As=a0.As, taxa=a0.As / Ac,
+        n_barras=a0.n_barras, custo=1.0, fs=_margem(res),
+        armadura=_armadura_de(a0, pilar), resultado=res, escolhida=True)]
+    if pilar.config.metodo_2a_ordem == "pior":
+        simetria = any(m in METODOS_ARMADURA_SIMETRICA
+                       for m in metodos_aplicaveis(pilar)) and \
+            pilar.secao.tipo in SECOES_DUPLAMENTE_SIMETRICAS
+    else:
+        simetria = _exige_simetria(pilar)
+    testados = 0
+    # uma opção por (bitola, número de barras): a mesma armadura em outra
+    # disposição nas faces não é outra escolha de projeto, e a primeira na
+    # ordem de custo já é a de espaçamento mais uniforme (o desempate)
+    vistos = {(a0.phi, a0.n_barras)}
+    for phi, nx, ny, nb in arr_mod.candidatos(
+            pilar.secao, pilar.config.bitolas_permitidas, peso=peso):
+        if len(opcoes) >= n or testados >= CANDIDATOS_OPCOES:
+            break
+        if (phi, nb) in vistos:
+            continue
+        if custo(phi, nb, nx, ny) < c0 or nb * area_barra(phi) / Ac > \
+                RHO_MAXIMO + 1e-9:
+            continue
+        phi_t = pilar.armadura.phi_estribo or est_mod.bitola_comercial(phi)
+        a = arr_mod.montar(pilar.secao, pilar.cobrimento(phi, phi_t), phi_t,
+                           phi, nx, ny, nb, *_internas(pilar))
+        if not a.cabe or (simetria and not a.simetrico):
+            continue
+        testados += 1
+        vistos.add((phi, nb))
+        if progresso is not None:
+            progresso(testados, CANDIDATOS_OPCOES,
+                      f"{a.descricao()} -- {len(opcoes) - 1} opção(ões) "
+                      f"além da escolhida")
+        arm = _armadura_de(a, pilar)
+        r = dimensionar(replace(pilar, armadura=arm))
+        if r.ok and r.arranjo is not None:
+            opcoes.append(OpcaoArmadura(
+                descricao=_descricao_opcao(r.arranjo), As=r.arranjo.As,
+                taxa=r.arranjo.As / Ac, n_barras=r.arranjo.n_barras,
+                custo=custo(phi, nb, nx, ny)[0] / c0[0], fs=_margem(r),
+                armadura=arm, resultado=r))
+    return opcoes

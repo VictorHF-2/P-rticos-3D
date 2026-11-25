@@ -548,7 +548,7 @@ PESO_POR_BARRA = 0.02
 
 
 def custo(phi: float, n: int, secao: SecaoPilar, nx: int = 0,
-          ny: int = 0) -> tuple[float, float]:
+          ny: int = 0, peso: float | None = None) -> tuple[float, float]:
     """Custo comparativo de um arranjo, e o desempate.
 
     Ordenar só pela área de aço leva a detalhes que ninguém executa: numa
@@ -562,13 +562,18 @@ def custo(phi: float, n: int, secao: SecaoPilar, nx: int = 0,
     e para que 12 ø16 ganhe de 18 ø12,5 -- sem chegar a favorecer o extremo
     oposto, 4 ø40 em tudo.
 
+    ``peso`` troca os 2 % (``Config.peso_por_barra``): é o custo da armação
+    -- corte, dobra, posicionamento, amarração -- de uma barra, relativo ao
+    custo do aço do arranjo. Zero ordena só pela área de aço.
+
     O desempate premia o arranjo de espaçamento mais **uniforme** nas duas
     direções, ``|hx/(nx-1) - hy/(ny-1)|``: entre 8 barras dispostas 3x3 e as
     mesmas 8 dispostas 2x4 numa seção quadrada, a primeira distribui melhor a
     armadura e é a que se desenha.
     """
     area = n * area_barra(phi)
-    principal = area * (1.0 + PESO_POR_BARRA * n)
+    k = PESO_POR_BARRA if peso is None else peso
+    principal = area * (1.0 + k * n)
     if nx > 1 and ny > 1:
         desempate = abs(secao.hx / (nx - 1) - secao.hy / (ny - 1))
     else:
@@ -577,7 +582,8 @@ def custo(phi: float, n: int, secao: SecaoPilar, nx: int = 0,
 
 
 def candidatos(secao: SecaoPilar, bitolas: tuple[float, ...],
-               max_por_face: int = 12) -> list[tuple[float, int, int, int]]:
+               max_por_face: int = 12, peso: float | None = None
+               ) -> list[tuple[float, int, int, int]]:
     """Arranjos candidatos ``(phi, nx, ny, n)``, do mais barato ao mais caro.
 
     A ordem é a de :func:`custo`, de modo que o primeiro candidato que passa
@@ -600,5 +606,5 @@ def candidatos(secao: SecaoPilar, bitolas: tuple[float, ...],
             vertices = len(secao.contornos()[0])
             for n in range(vertices, 6 * max_por_face + 1):
                 saida.append((phi, 0, 0, n))
-    saida.sort(key=lambda t: custo(t[0], t[3], secao, t[1], t[2]))
+    saida.sort(key=lambda t: custo(t[0], t[3], secao, t[1], t[2], peso))
     return saida

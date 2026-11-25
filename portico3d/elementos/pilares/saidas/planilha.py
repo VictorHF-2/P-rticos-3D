@@ -591,6 +591,27 @@ def _aba_verificacao(wb: Workbook, res: ResultadoPilar) -> None:
             ("informativa" if not v.interacao_exigida else "não atende")],
             [None, NF["kNm"], NF["kNm"], NF["kNm"], NF["kNm"], NF["perc"],
              None])
+    nr = res.normal
+    if nr is not None:
+        linha = separador(ws, linha)
+        linha = secao(ws, linha, "Força normal resistente — esmagamento "
+                                 "(17.2.2 g), retas a e b)", col_fim=8)
+        linha = nota(ws, linha,
+                     f"Compressão uniforme a εc2 = {num(nr.eps_c2, 2)} ‰: "
+                     f"concreto a {num(nr.sigma_cd * 10, 2)} MPa (0,85·ηc·fcd) "
+                     f"em Ac, mais o aço a {num(nr.sigma_s * 10, 0)} MPa "
+                     f"descontado o concreto que ele ocupa. Tração: As·fyd.",
+                     col_fim=8)
+        linha = cabecalho(ws, linha, ["Nd (kN)", "Concreto (kN)",
+                                      "Aço (kN)", "NRd,máx (kN)",
+                                      "NRd,mín (kN)", "F.S.", "Veredito"])
+        linha = linha_tabela(ws, linha, [
+            nr.Nd, nr.N_concreto, nr.N_aco, nr.NRd_max, nr.NRd_min,
+            nr.fs if math.isfinite(nr.fs) else "∞",
+            "OK" if nr.ok else ("esmagamento" if nr.compressao
+                                else "não atende")],
+            [NF["kN"], NF["kN"], NF["kN"], NF["kN"], NF["kN"], NF["coef3"],
+             None])
     linha = separador(ws, linha)
     linha = secao(ws, linha, "Envoltória de momentos resistentes", col_fim=8)
     linha = nota(ws, linha,
@@ -651,8 +672,8 @@ def _aba_verificacao(wb: Workbook, res: ResultadoPilar) -> None:
                                       "MRd na direção (kN·m)", "F.S.",
                                       "Veredito"])
         for d, Msd, MRd, ok, valor in (
-                ("x", mm.Msd_x, mm.MRd_x, mm.ok_x, mm.fs_x),
-                ("y", mm.Msd_y, mm.MRd_y, mm.ok_y, mm.fs_y)):
+                (mm.rotulos[0], mm.Msd_x, mm.MRd_x, mm.ok_x, mm.fs_x),
+                (mm.rotulos[1], mm.Msd_y, mm.MRd_y, mm.ok_y, mm.fs_y)):
             linha = linha_tabela(ws, linha, [
                 d, Msd / 100.0, MRd / 100.0,
                 valor if math.isfinite(valor) else "∞",

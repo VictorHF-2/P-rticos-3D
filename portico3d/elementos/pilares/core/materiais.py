@@ -155,6 +155,16 @@ DIMENSAO_MINIMA = 19.0
 #: Dimensão abaixo da qual nem o coeficiente adicional salva (13.2.3).
 DIMENSAO_MINIMA_ABSOLUTA = 14.0
 
+#: Espessura mínima da parede de pilar vazado, cm: NBR 9062:2017, item
+#: 6.2.1, adotada como complemento normativo (a NBR 6118 não fixa a parede
+#: de seção vazada; o 13.2.3 trata de seções maciças). Decisão do projetista
+#: de 13/11/2026.
+ESPESSURA_MINIMA_PAREDE_VAZADA = 7.5
+
+#: Idem, com o vazio servindo de condutor de água pluvial em contato direto
+#: com o concreto: NBR 9062:2017, item 6.2.2.
+ESPESSURA_MINIMA_PAREDE_PLUVIAL = 12.5
+
 #: Área mínima da seção transversal de pilar, cm² (13.2.3).
 AREA_MINIMA = 360.0
 
@@ -608,17 +618,22 @@ def comprimento_traspasse_tracao(lb: float, lb_nec: float, phi_mm: float,
 # Coeficiente adicional gamma_n do item 13.2.3
 # ---------------------------------------------------------------------------
 
+#: O maior gamma_n da Tabela 13.1 (b = 14 cm).
+GAMMA_N_MAXIMO = 1.25
+
+
 def gamma_n(menor_dimensao: float) -> float:
     """Coeficiente adicional das seções entre 19 e 14 cm (Tabela 13.1).
 
     ``gamma_n = 1,95 - 0,05 b``, com ``b`` em cm. Abaixo de 14 cm a norma não
     admite a seção em hipótese alguma, e quem barra isso é a validação do
-    modelo -- aqui a função apenas devolve o valor que a tabela extrapola,
-    para que a mensagem de erro possa dizer quanto seria.
+    modelo. O coeficiente **não** é extrapolado: fica no 1,25 da tabela, para
+    que o F.S. da seção já reprovada não saia deformado por um gamma_n que a
+    norma não dá (parede de 7,5 cm daria 1,575 -- parecer de 11/11/2026).
     """
     if menor_dimensao >= DIMENSAO_MINIMA:
         return 1.0
-    return 1.95 - 0.05 * menor_dimensao
+    return min(1.95 - 0.05 * max(menor_dimensao, 0.0), GAMMA_N_MAXIMO)
 
 
 def gamma_n1(esbeltez: float) -> float:

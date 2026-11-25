@@ -23,6 +23,7 @@ constantes, com os esforços de primeira ordem conhecidos no topo e na base.
 from __future__ import annotations
 
 import json
+import re
 import math
 from dataclasses import asdict, dataclass, field, fields
 
@@ -30,7 +31,8 @@ from . import avisos as av
 from . import geometria as geo
 from .materiais import (AREA_MINIMA, COEFICIENTES_PONDERACAO,
                         DIMENSAO_MINIMA, DIMENSAO_MINIMA_ABSOLUTA,
-                        FCK_MAXIMO, FCK_MINIMO_CAA, Aco,
+                        ESPESSURA_MINIMA_PAREDE_PLUVIAL,
+                        ESPESSURA_MINIMA_PAREDE_VAZADA, FCK_MAXIMO, FCK_MINIMO_CAA, Aco,
                         Ambiente, Concreto, area_barra,
                         coeficiente_fluencia, coeficientes_ponderacao,
                         espessura_ficticia, gamma_n)
@@ -270,12 +272,21 @@ class SecaoPilar:
         return self.hx if direcao == "x" else self.hy
 
     @property
+    def eh_vazada(self) -> bool:
+        """Seção vazada (caixão retangular ou anel circular)."""
+        return self.tipo in ("retangular vazada", "circular vazada")
+
+    @property
     def menor_dimensao(self) -> float:
         """Menor dimensão da caixa envolvente, cm -- a do item 13.2.3.
 
         Nas seções L, T, U e retangular vazada o que a norma limita é a
         **espessura da parte**, não a caixa: um U de 60x60 com almas de
         12 cm tem paredes de 12 cm, e é isso que precisa passar nos 19 cm.
+        Nas vazadas o item 13.2.3 não se aplica direto (ele trata de seções
+        maciças): a espessura da parede só entra no gamma_n e nos pisos com
+        o critério ``Config.gamma_n_secao_vazada`` (ver ``Pilar.gamma_n``);
+        ela continua valendo para as regras de detalhamento (18.4).
         """
         if self.tipo in ("L", "T", "U", "retangular vazada"):
             return min(self.e1, self.e2)
@@ -298,6 +309,29 @@ class SecaoPilar:
     @property
     def maior_dimensao(self) -> float:
         return max(self.hx, self.hy)
+
+    def laminas_pilar_parede(self) -> list[tuple[str, float, float]]:
+        """As paredes que fazem da seção vazada um **pilar-parede composto**
+        (14.4.2.4: "compostos por uma ou mais superfícies associadas", com a
+        menor dimensão de alguma delas abaixo de 1/5 da maior, ambas na seção
+        transversal): ``(descrição, espessura, comprimento)``, cm.
+
+        Retangular vazada: as paredes perpendiculares a x têm espessura
+        ``e1`` e comprimento ``hy``; as perpendiculares a y, ``e2`` e ``hx``.
+        Circular vazada (casca cilíndrica): espessura ``(D - Di)/2`` contra o
+        diâmetro externo ``D`` -- critério adotado (13/11/2026), já que a
+        norma não diz qual é a "maior dimensão" de uma casca na seção."""
+        saida = []
+        if self.tipo == "retangular vazada":
+            for desc, t, L in (("paredes perpendiculares a x", self.e1, self.hy),
+                               ("paredes perpendiculares a y", self.e2, self.hx)):
+                if t < L / 5.0 - 1e-9:
+                    saida.append((desc, t, L))
+        elif self.tipo == "circular vazada":
+            t = (self.hx - self.Di) / 2.0
+            if t < self.hx / 5.0 - 1e-9:
+                saida.append(("parede do anel", t, self.hx))
+        return saida
 
     @property
     def eh_pilar_parede(self) -> bool:
@@ -355,7 +389,9 @@ class SecaoPilar:
                     "(2 e1 < hx e 2 e2 < hy); reduza a espessura ou aumente "
                     "hx/hy.")
         menor = self.menor_dimensao
-        if menor < DIMENSAO_MINIMA_ABSOLUTA - 1e-9:
+        if self.eh_vazada:
+            pass        # a parede da vazada: Pilar.validar (depende do critério)
+        elif menor < DIMENSAO_MINIMA_ABSOLUTA - 1e-9:
             saida.append(av.erro(
                 f"Menor dimensão da seção = {num(menor)} cm, abaixo dos "
                 f"{num(DIMENSAO_MINIMA_ABSOLUTA)} cm que o item 13.2.3 fixa como "
@@ -564,7 +600,8 @@ class Armadura:
 # Critérios de cálculo
 # ---------------------------------------------------------------------------
 
-METODOS_2A_ORDEM = ("menor", "curvatura", "rigidez", "diagrama", "geral")
+METODOS_2A_ORDEM = ("menor", "curvatura", "rigidez", "diagrama", "geral",
+                    "pior")
 RIGIDEZES_METODO_GERAL = ("curva", "secante")
 FLUENCIA_METODOS = ("ecc", "diagrama")
 #: Métodos cuja 2ª ordem depende da armadura: calculados de novo para cada
@@ -589,6 +626,10 @@ class Config:
     #: a norma admite qualquer um dos métodos, e nada obriga a escolher o
     #: mais desfavorável.
     metodo_2a_ordem: str = "menor"
+    #: Custo da armação de cada barra relativo ao do aço, na ordem dos
+    #: arranjos candidatos: custo = As (1 + peso n). 0,02 = 2 % por barra
+    #: (:func:`arranjo.custo`); zero ordena só pela área de aço.
+    peso_por_barra: float = 0.02
 
     #: Expoente ``alfa`` da expressão de interação do item 17.2.5. Deixado em
     #: **zero**, o programa adota o que a norma admite para a seção: 1,2 na
@@ -603,6 +644,26 @@ class Config:
     #: Aplica o coeficiente adicional gamma_n do item 13.2.3 quando a menor
     #: dimensão fica entre 14 e 19 cm.
     aplicar_gamma_n: bool = True
+
+    #: Estende o gamma_n e os pisos de 19 e 14 cm do item 13.2.3 à espessura
+    #: da parede das seções vazadas. Critério de projeto, desligado por
+    #: padrão (parecer técnico de 11/11/2026): o 13.2.3 trata de pilares
+    #: "maciços"; a única base para a parede é o 11.7.1 ("pilares e
+    #: pilares-paredes com espessura inferior a 19 cm"), que remete ao
+    #: 13.2.3. Desligado, a parede fina sai como aviso.
+    gamma_n_secao_vazada: bool = False
+
+    #: O vazio do pilar serve de condutor de água pluvial, com a água em
+    #: contato direto com o concreto: a parede mínima passa de 7,5 a 12,5 cm
+    #: (NBR 9062:2017, 6.2.2, complemento normativo para pilares vazados).
+    vazado_condutor_pluvial: bool = False
+
+    #: O projetista verificou a estabilidade local das paredes da seção
+    #: vazada que é pilar-parede composto (14.4.2.4; efeitos localizados de
+    #: 2ª ordem por lâmina, 15.9). Sem isso, a verificação sai com erro de
+    #: pendência; o dimensionamento automático dessas seções não é liberado
+    #: em caso algum (parecer de 13/11/2026).
+    estabilidade_local_verificada: bool = False
 
     #: Aplica gamma_n1 = 1 + (lambda-140)/140 aos efeitos locais de 2ª ordem
     #: quando a esbeltez passa de 140 (item 15.8.1).
@@ -620,7 +681,9 @@ class Config:
     #: envoltória decide e a expressão fica informativa -- é o critério do
     #: PCalc, e o que interessa em seção circular, onde alfa = 1 soma os dois
     #: momentos linearmente numa seção que resiste igual em toda direção.
-    exigir_interacao_17_2_5: bool = True
+    #: Desligado por padrão desde 11/11/2026 (parecer técnico): o 17.2.5 diz
+    #: "pode ser adotada"; ligá-lo é critério de projeto.
+    exigir_interacao_17_2_5: bool = False
 
     #: Modo compatível com o PCalc 1.4 (``pilares/compat_pcalc.py``): ""
     #: desligado, "parcial" (metodologia do PCalc, calibração da 2026) ou
@@ -634,6 +697,13 @@ class Config:
     #: própria tabela traz.
     ponderacao_automatica: bool = True
     combinacao: str = "normais"
+    #: Com ações informadas (``Pilar.acoes``): gera também as combinações
+    #: com as permanentes favoráveis (gamma_g = 1,0), que a nota a) da
+    #: Tabela 11.3 dispensa em edifícios usuais.
+    acoes_permanente_favoravel: bool = False
+    #: Com ações informadas: verifica o ELS-W com a combinação frequente de
+    #: cada combinação última (no lugar dos esforços de serviço da entrada).
+    acoes_servico: bool = False
     execucao_desfavoravel: bool = False    # gamma_c x 1,1
     ca25_sem_controle: bool = False        # gamma_s x 1,1
 
@@ -666,6 +736,16 @@ class Config:
     #: ou ``secante`` (a reta AB da Figura 15.1, rigidez constante, que a
     #: norma admite "a favor da segurança") --; e se as duas direções são
     #: resolvidas juntas (flexão oblíqua, padrão) ou uma de cada vez.
+    #: Pilar-padrão acoplado a diagramas M, N, 1/r (15.8.3.3.4): usar a
+    #: formulação de segurança do 15.3.1, que a norma admite ("pode ser
+    #: considerada"): a 2ª ordem calculada com Nd/γf3 e o resultado majorado
+    #: de γf3 = 1,1 -- a amplificação 1/(1 - N le²/(10 (EI)sec)) com Nd/γf3,
+    #: e o momento total γf3 . (Nd/γf3)(e1 + e2) = Nd (e1 + e2). Desligado
+    #: (padrão), a amplificação usa Nd inteiro, como o PCalc (P3): o lado
+    #: seguro. O método geral já usa a formulação do 15.3.1. Critério de
+    #: projeto de 13/11/2026 (contraprova independente da 2ª ordem).
+    alivio_gamma_f3_diagrama: bool = False
+
     metodo_geral_secoes: int = 11
     metodo_geral_rigidez: str = "curva"
     metodo_geral_acoplado: bool = True
@@ -798,6 +878,19 @@ class Config:
     alfa_e_servico: float = 15.0
     #: Obra de arte especial (NBR 7187): confere as dimensões mínimas de
     #: pilar de ponte dos itens 9.1.5 e 9.1.6.
+    #: Verificação em situação de incêndio (NBR 15200:2024, :mod:`incendio`).
+    incendio: bool = False
+    trrf: int = 60                       # min, TRRF (30, 60, 90, 120, 180)
+    #: ``uma`` face exposta (Tabela 12) ou ``mais`` (8.3.2 e Anexo E).
+    incendio_faces: str = "mais"
+    #: ``l_ef,fi / l_e`` (8.3.2): 1,0 em geral; 0,7 no pavimento mais alto
+    #: e 0,5 nos intermediários de edifício compartimentado com gamma_z <=
+    #: 1,10.
+    incendio_lef_fator: float = 1.0
+    #: Sd,fi/Sd sem as ações características (8.1: 0,70).
+    incendio_fator_sd: float = 0.70
+    #: mu_fi informado; zero = N_Sd,fi/Nd (N_Rd tomado igual a Nd).
+    incendio_mu_fi: float = 0.0
     obra_ponte: bool = False
     #: Fadiga (6118, 23.5; 8681, Tabela 7): "" não verifica; "rodoviaria"
     #: (pilar ligado por aparelhos, psi1,fad = 0), "rodoviaria_monolitica"
@@ -881,6 +974,84 @@ class Combinacao:
 
     nome: str = "Comb 2"
     esforcos: Esforcos = field(default_factory=Esforcos)
+    #: Gerada das ações (:mod:`acoes`): a fórmula, a frequente do mesmo
+    #: arranjo (ELS-W) e as parcelas quase permanentes (fluência). ``None``
+    #: = os da entrada.
+    descricao: str = ""
+    esforcos_servico: Esforcos | None = None
+    Nsg_sobre_Nd: float | None = None
+    Msg_sobre_Md: float | None = None
+
+
+#: Tabela 11.2 (psi0, psi1, psi2) e a descrição de cada categoria.
+CATEGORIAS_ACOES: dict[str, tuple[str, float, float, float]] = {
+    "G": ("Permanente", 0.0, 0.0, 0.0),
+    "Q1": ("Cargas de utilização sem predominância de equipamentos fixos nem "
+           "de elevadas concentrações de pessoas (residencial, hospedagem, "
+           "acesso restrito)", 0.5, 0.4, 0.3),
+    "Q2": ("Cargas de utilização com predominância de equipamentos fixos ou "
+           "de elevada concentração de pessoas (comercial, escritórios, "
+           "lojas, edifícios públicos)", 0.7, 0.6, 0.4),
+    "Q3": ("Biblioteca, arquivos, oficinas e garagens", 0.8, 0.7, 0.6),
+    "V": ("Vento — pressão dinâmica nas estruturas em geral", 0.6, 0.3, 0.0),
+    "T": ("Temperatura — variações uniformes em relação à média anual",
+          0.6, 0.5, 0.3),
+}
+
+@dataclass
+class Acao:
+    """Uma ação, com os esforços **característicos** dela no lance."""
+
+    nome: str = "G"
+    #: ``G``, ``Q1``, ``Q2``, ``Q3``, ``V``, ``T`` (Tabela 11.2) ou
+    #: ``Q(psi0/psi1/psi2)`` com os fatores informados; sufixo ``#grupo`` põe
+    #: a ação num grupo excludente.
+    categoria: str = "G"
+    esforcos: Esforcos = field(default_factory=Esforcos)
+
+    def _partes(self) -> tuple[str, str]:
+        cat, _, grupo = self.categoria.partition("#")
+        return cat.strip().upper(), grupo.strip()
+
+    @property
+    def codigo(self) -> str:
+        cat = self._partes()[0]
+        return "Q" if cat.startswith("Q(") else cat
+
+    @property
+    def permanente(self) -> bool:
+        return self.codigo == "G"
+
+    @property
+    def temperatura(self) -> bool:
+        return self.codigo == "T"
+
+    @property
+    def grupo(self) -> str:
+        """Grupo excludente ("" = independente). O vento é um grupo só."""
+        g = self._partes()[1]
+        if g:
+            return g
+        return "vento" if self.codigo == "V" else ""
+
+    @property
+    def psi(self) -> tuple[float, float, float]:
+        cat = self._partes()[0]
+        m = re.fullmatch(r"Q\(\s*([\d.,]+)\s*/\s*([\d.,]+)\s*/\s*([\d.,]+)\s*\)",
+                         cat)
+        if m:
+            return tuple(float(v.replace(",", ".")) for v in m.groups())
+        if cat not in CATEGORIAS_ACOES:
+            raise ValueError(
+                f"Ação {self.nome!r}: categoria {self.categoria!r} não é "
+                f"G, Q1, Q2, Q3, V, T nem Q(ψ0/ψ1/ψ2).")
+        _, p0, p1, p2 = CATEGORIAS_ACOES[cat]
+        return p0, p1, p2
+
+    def validar(self) -> None:
+        self.psi                            # levanta se a categoria é inválida
+
+
 
 
 @dataclass
@@ -901,8 +1072,26 @@ class Pilar:
     config: Config = field(default_factory=Config)
     #: Nome da combinação principal (``esforcos``) nas saídas.
     nome_combinacao: str = "Comb 1"
+    #: Fórmula da combinação, quando gerada das ações.
+    descricao_combinacao: str = ""
+    #: Ângulo, em graus, da inclinação theta1 do pilar em balanço no plano
+    #: dos momentos de base (convenção interna: Δx = D cos α, Δy = D sen α,
+    #: D = Nd theta1 l). ``None`` = sem ângulo escolhido. O item 11.3.3.4.1
+    #: define theta1 como inclinação do eixo, limitada a 1/200, e desenha a
+    #: Figura 11.1 num plano; não diz a direção em flexão oblíqua. Somar
+    #: theta1 em x e em y ao mesmo tempo daria sqrt(2) theta1, acima do
+    #: teto; uma direção de cada vez (x ou y), a leitura de 11/11/2026, não
+    #: é a pior (RET-016: 1,052 contra 1,019 a 217°). Vale a direção mais
+    #: desfavorável: com balanço nas duas direções ``dimensionar`` busca o
+    #: ângulo crítico de cada combinação (12/11/2026, réplica do revisor).
+    #: Interno, não vai para o arquivo.
+    desaprumo_angulo: float | None = None
     #: Combinações adicionais de esforços, verificadas com a mesma armadura.
     combinacoes: list[Combinacao] = field(default_factory=list)
+    #: Ações com os esforços característicos (:mod:`acoes`). Informadas,
+    #: substituem ``esforcos`` e ``combinacoes``: o programa gera as
+    #: combinações da Tabela 11.3 a partir delas.
+    acoes: list[Acao] = field(default_factory=list)
     #: Esforços de **serviço** da combinação frequente (kN, kN·cm, sem
     #: ponderação), para o ELS-W. Zerados = ELS não verificado.
     esforcos_servico: Esforcos = field(default_factory=Esforcos)
@@ -1012,6 +1201,8 @@ class Pilar:
         """Coeficiente adicional do item 13.2.3 aplicado a este pilar."""
         if not self.config.aplicar_gamma_n:
             return 1.0
+        if self.secao.eh_vazada and not self.config.gamma_n_secao_vazada:
+            return 1.0
         return gamma_n(self.secao.menor_dimensao)
 
     @property
@@ -1038,27 +1229,56 @@ class Pilar:
         aqui, de modo que a escolha do critério não precisa ser repetida em
         cada consumidor.
         """
+        base = self.momento_base_sem_desaprumo(direcao)
+        extra = self.desaprumo_balanco(direcao)
+        if extra:
+            if self.desaprumo_angulo is not None:
+                # componente com sinal da inclinação no ângulo escolhido
+                a = math.radians(self.desaprumo_angulo)
+                base += self._desaprumo_total() * (
+                    math.cos(a) if direcao == "x" else math.sin(a))
+            else:
+                # Balanço numa direção só: soma em módulo, no sentido do
+                # momento que já existe -- o caso desfavorável --; sem
+                # momento de base, o sentido é indiferente.
+                base += math.copysign(extra, base if base else 1.0)
+        return base
+
+    def momento_base_sem_desaprumo(self, direcao: str) -> float:
+        """Momento de base na convenção interna, kN·cm, sem ponderar e sem
+        o desaprumo do balanço."""
         base = self.esforcos.base(direcao)
         if self.config.convencao_momento_base == "vetorial":
             base = -base
-        extra = self.desaprumo_balanco(direcao)
-        if extra:
-            # Soma em módulo, no sentido do momento que já existe -- o caso
-            # desfavorável --; sem momento de base, o sentido é indiferente.
-            base += math.copysign(extra, base if base else 1.0)
         return base
 
-    def desaprumo_balanco(self, direcao: str) -> float:
-        """Momento de desaprumo na base de um pilar isolado em balanço,
-        kN·cm, sem ponderar (item 11.3.3.4.1: ``theta1 = 1/200``).
+    def _desaprumo_total(self) -> float:
+        return abs(self.esforcos.Nd) * THETA1_BALANCO * self.lance.altura
 
-        ``Nd . theta1 . l``, com ``l`` o comprimento do lance. Zero fora do
-        balanço, ou com ``config.desaprumo_balanco`` desligado.
+    def desaprumo_balanco(self, direcao: str) -> float:
+        """Módulo do momento de desaprumo na base de um pilar isolado em
+        balanço nesta direção, kN·cm, sem ponderar (item 11.3.3.4.1:
+        ``theta1 = 1/200``).
+
+        ``Nd . theta1 . l``, com ``l`` o comprimento do lance; com ângulo
+        escolhido (:attr:`desaprumo_angulo`), a componente da direção. Zero
+        fora do balanço, ou com ``config.desaprumo_balanco`` desligado.
         """
         if (not self.config.desaprumo_balanco
                 or self.lance.vinculo(direcao) != 3):
             return 0.0
-        return abs(self.esforcos.Nd) * THETA1_BALANCO * self.lance.altura
+        D = self._desaprumo_total()
+        if self.desaprumo_angulo is not None:
+            a = math.radians(self.desaprumo_angulo)
+            return abs(D * (math.cos(a) if direcao == "x" else math.sin(a)))
+        return D
+
+    def direcoes_desaprumo(self) -> list[str]:
+        """As direções em balanço em que o desaprumo atua; com as duas, ele
+        é uma inclinação theta1 na direção mais desfavorável do plano."""
+        if not self.config.desaprumo_balanco or self.esforcos.Nd == 0.0:
+            return []
+        return [d for d in ("x", "y") if self.lance.vinculo(d) == 3]
 
     def M1d_A(self, direcao: str) -> float:
         """Maior momento de primeira ordem em módulo, kN·cm (item 15.8.2)."""
@@ -1124,6 +1344,100 @@ class Pilar:
                 >= self.FATOR_ELEMENTO_LINEAR * self.secao.maior_dimensao
                 - 1e-9)
 
+    def _avisos_pilar_parede_composto(self) -> list[str]:
+        """Seção vazada que é pilar-parede composto (14.4.2.4): a
+        estabilidade local das paredes (efeitos localizados de 2ª ordem por
+        lâmina, 15.9) não é verificada pelo programa. Decisão de 13/11/2026,
+        após o parecer sobre o relatório de validação: essas seções não são
+        dimensionadas automaticamente, e a verificação de armadura imposta
+        fica com erro de pendência até o projetista declarar a estabilidade
+        local verificada."""
+        laminas = self.secao.laminas_pilar_parede()
+        if not laminas:
+            return []
+        quais = "; ".join(f"{d}: {num(t)} cm em {num(L)} cm"
+                          for d, t, L in laminas)
+        base = (f"Seção vazada com parede de espessura abaixo de 1/5 do "
+                f"comprimento ({quais}): é pilar-parede composto (14.4.2.4). "
+                f"O programa verifica a seção como barra, mas não verifica a "
+                f"estabilidade local das paredes (efeitos localizados de 2ª "
+                f"ordem por lâmina, 15.9, e armadura transversal do 18.5).")
+        saida = []
+        if self.armadura.modo == "automatico":
+            saida.append(av.erro(
+                base + " O dimensionamento automático não é liberado para "
+                "essa seção: a armadura encontrada é só ponto de partida. "
+                "Imponha a armadura e verifique a estabilidade local."))
+        elif self.config.estabilidade_local_verificada:
+            saida.append(av.construtivo(
+                base + " O projetista declarou a estabilidade local "
+                "verificada (critério \"Estabilidade local das paredes "
+                "verificada\")."))
+        else:
+            saida.append(av.erro(
+                base + " Requer a verificação da estabilidade local pelo "
+                "projetista; feita, marque o critério \"Estabilidade local "
+                "das paredes verificada\"."))
+        return saida
+
+    def _avisos_parede_vazada(self) -> list[str]:
+        """A parede da seção vazada.
+
+        * Espessura mínima: a NBR 6118 não fixa a da parede (o 13.2.3 trata
+          de seções maciças); vale a da NBR 9062:2017, adotada como
+          complemento normativo -- 7,5 cm (6.2.1) ou 12,5 cm com o vazio
+          servindo de condutor de água pluvial em contato direto com o
+          concreto (6.2.2). O cobrimento nas faces interna e externa, que o
+          6.2.1 também pede, já é conferido barra a barra contra todos os
+          contornos, o furo inclusive (``arranjo``).
+        * Com o critério ``gamma_n_secao_vazada`` a parede faz o papel da
+          menor dimensão (pisos de 14 e 19 cm e gamma_n); sem ele, a parede
+          abaixo de 19 cm só é anunciada."""
+        e = self.secao.menor_dimensao
+        if e >= DIMENSAO_MINIMA - 1e-9:
+            return []
+        criterio = "\"γn na parede de seção vazada\""
+        pluvial = self.config.vazado_condutor_pluvial
+        minimo = (ESPESSURA_MINIMA_PAREDE_PLUVIAL if pluvial
+                  else ESPESSURA_MINIMA_PAREDE_VAZADA)
+        if e < minimo - 1e-9 and not (
+                self.config.gamma_n_secao_vazada
+                and e < DIMENSAO_MINIMA_ABSOLUTA - 1e-9):
+            return [av.erro(
+                f"Parede da seção vazada de {num(e)} cm, abaixo do mínimo de "
+                f"{num(minimo)} cm da NBR 9062:2017, item "
+                + ("6.2.2 (vazio como condutor de água pluvial em contato "
+                   "direto com o concreto)" if pluvial else "6.2.1")
+                + ", adotada como complemento normativo para pilares "
+                  "vazados: a NBR 6118 não fixa a espessura da parede (o "
+                  "13.2.3 trata de seções maciças).")]
+        if self.config.gamma_n_secao_vazada:
+            if e < DIMENSAO_MINIMA_ABSOLUTA - 1e-9:
+                return [av.erro(
+                    f"Parede da seção vazada de {num(e)} cm, abaixo de "
+                    f"{num(DIMENSAO_MINIMA_ABSOLUTA)} cm. Com o critério "
+                    f"{criterio} ligado, a parede segue o item 13.2.3 como a "
+                    f"menor dimensão de uma seção maciça, e nenhum "
+                    f"coeficiente adicional a autoriza (critério de projeto; "
+                    f"o 13.2.3 trata de seções maciças).")]
+            return [av.construtivo(
+                f"Parede da seção vazada de {num(e)} cm, entre 14 e 19 cm: com "
+                f"o critério {criterio} ligado, os esforços são majorados por "
+                f"γn = {num(gamma_n(e), 2)} (Tabela 13.1), como numa seção "
+                f"maciça dessa espessura (critério de projeto, apoiado no "
+                f"11.7.1).")]
+        return [av.construtivo(
+            f"Parede da seção vazada de {num(e)} cm, abaixo de "
+            f"{num(DIMENSAO_MINIMA)} cm. O item 13.2.3 (pisos de 19 e 14 cm e "
+            f"γn) trata de pilares maciços, e o programa não o estende à "
+            f"parede: os esforços não levam γn. A espessura atende ao mínimo "
+            f"de {num(minimo)} cm da NBR 9062:2017 ("
+            + ("6.2.2" if pluvial else "6.2.1")
+            + f"), adotada como complemento normativo. A estabilidade local "
+            f"da parede fica a cargo do projetista; o critério {criterio} "
+            f"aplica a Tabela 13.1 à parede (11.7.1: \"espessura inferior a "
+            f"19 cm\").")]
+
     def validar(self) -> list[str]:
         """Avisos e erros de consistência dos dados de entrada."""
         saida = list(self.config.validar())
@@ -1175,7 +1489,13 @@ class Pilar:
                     f"a distância entre os eixos delas (l = "
                     f"{num(self.lance.l)} cm), e a distância livre l0 sai "
                     f"negativa. Confira as alturas informadas."))
+        parede_livre = (self.secao.eh_vazada
+                        and not self.config.gamma_n_secao_vazada)
+        if self.secao.eh_vazada:
+            saida += self._avisos_parede_vazada()
+            saida += self._avisos_pilar_parede_composto()
         if (self.secao.menor_dimensao < DIMENSAO_MINIMA - 1e-9
+                and not parede_livre
                 and not self.config.dimensao_reduzida_aceita):
             saida.append(av.erro(
                 f"Menor dimensão de {num(self.secao.menor_dimensao)} cm abaixo "
@@ -1242,6 +1562,7 @@ class Pilar:
     # -- persistência -------------------------------------------------------
     def para_dict(self) -> dict:
         d = asdict(self)
+        d.pop("desaprumo_angulo", None)
         d["config"]["bitolas_permitidas"] = list(
             self.config.bitolas_permitidas)
         d["_formato"] = FORMATO_PILAR
@@ -1284,12 +1605,20 @@ class Pilar:
             ambiente=Ambiente(**bloco["ambiente"]),
             config=Config(**cfg),
             nome_combinacao=d.get("nome_combinacao", "Comb 1"),
+            descricao_combinacao=d.get("descricao_combinacao", ""),
             combinacoes=[
                 Combinacao(nome=c.get("nome", f"Comb {i + 2}"),
                            esforcos=Esforcos(**campos_conhecidos(
                                Esforcos, c.get("esforcos", {}),
                                f"combinacoes[{i}].esforcos")))
                 for i, c in enumerate(d.get("combinacoes", []))],
+            acoes=[
+                Acao(nome=a.get("nome", f"A{i + 1}"),
+                     categoria=a.get("categoria", "G"),
+                     esforcos=Esforcos(**campos_conhecidos(
+                         Esforcos, a.get("esforcos", {}),
+                         f"acoes[{i}].esforcos")))
+                for i, a in enumerate(d.get("acoes", []))],
             esforcos_servico=Esforcos(**campos_conhecidos(
                 Esforcos, d.get("esforcos_servico", {}), "esforcos_servico")),
             **{nome: Esforcos(**campos_conhecidos(Esforcos, d.get(nome, {}),
@@ -1304,6 +1633,26 @@ class Pilar:
         from dataclasses import replace
         return replace(self, esforcos=esforcos, nome_combinacao=nome,
                        combinacoes=[])
+
+    def com_combinacao(self, c: Combinacao,
+                       manter_demais: bool = False) -> "Pilar":
+        """O lance com a combinação ``c``: os esforços e, quando ela os
+        traz (gerada das ações), a frequente do ELS-W e as parcelas quase
+        permanentes da fluência."""
+        from dataclasses import replace
+        cfg = self.config
+        trocas = {}
+        if c.Nsg_sobre_Nd is not None:
+            trocas["Nsg_sobre_Nd"] = c.Nsg_sobre_Nd
+        if c.Msg_sobre_Md is not None:
+            trocas["Msg_sobre_Md"] = c.Msg_sobre_Md
+        novo = replace(self, esforcos=c.esforcos, nome_combinacao=c.nome,
+                       config=replace(cfg, **trocas) if trocas else cfg,
+                       combinacoes=(self.combinacoes if manter_demais
+                                    else []))
+        if c.esforcos_servico is not None:
+            novo = replace(novo, esforcos_servico=c.esforcos_servico)
+        return replace(novo, descricao_combinacao=c.descricao)
 
     def todas_combinacoes(self) -> list[tuple[str, Esforcos]]:
         return ([(self.nome_combinacao, self.esforcos)]

@@ -59,7 +59,7 @@ FATIAS = 160
 #: Deformação máxima de tração no aço no ELU, ‰ (item 17.2.2).
 EPS_S_MAXIMA = 10.0
 
-#: Tolerância relativa das buscas por bisseção.
+#: Tolerância relativa das buscas de raiz.
 TOL = 1e-9
 
 
@@ -111,6 +111,8 @@ class SecaoDiscreta:
         self.n_fatias = fatias
         self._cache: dict[int, list[Faixa]] = {}
         self._arrays: dict[int, tuple] = {}
+        self._arrays_barras: dict[int, tuple] = {}
+        self._barras_xy: tuple | None = None
         #: Varredura grossa de ângulos de linha neutra por normal, para
         #: :func:`estados_na_direcao`: ela **não** depende da direção de
         #: momento procurada, só de ``N_alvo``. Ver a nota lá.
@@ -128,7 +130,49 @@ class SecaoDiscreta:
         #: cada exportação da memória; sem este cache, cada uma delas paga a
         #: conta inteira de novo.
         self._diagramas: dict[tuple, list["PontoMN"]] = {}
+        #: Geometria por direção ``theta`` -- ``(cos, sin, u_min, u_max,
+        #: u da barra mais tracionada)`` --, que :func:`plano_uls` e
+        #: :func:`resultantes_de_plano` liam do contorno a cada avaliação
+        #: (dez por busca de ``x``, todas na mesma direção). Chave: o próprio
+        #: ``theta``, sem arredondar, para o valor ser o mesmo, bit a bit, que
+        #: a conta refeita daria.
+        self._geo: dict[float, tuple] = {}
+        #: ``N`` da tração uniforme a 10 ‰ (a ponta ``x = 0`` de
+        #: :func:`resolver_x`): com ``k = 0`` toda barra fica em -10 ‰ em
+        #: qualquer direção, e a resultante não depende de ``theta``.
+        self._N_tracao: float | None = None
+        #: Constantes dos materiais lidas a cada avaliação (propriedades que
+        #: refazem a conta a cada acesso). A seção já supõe materiais fixos:
+        #: os caches de resultado acima valeriam errado se mudassem.
+        self._consts: tuple | None = None
         self.propriedades = geo.propriedades(contornos)
+
+    def geometria_theta(self, theta: float) -> tuple:
+        """``(cos, sin, u_min, u_max, u_traz)`` na direção ``theta``, em
+        cache; ``u_traz`` é ``None`` sem barras. As mesmas contas de
+        :meth:`extremos` e :meth:`u_barras`, na mesma ordem."""
+        g = self._geo.get(theta)
+        if g is None:
+            cos_t, sin_t = math.cos(theta), math.sin(theta)
+            us = [x * cos_t + y * sin_t
+                  for pol in self.contornos for x, y in pol]
+            ub = [b.x * cos_t + b.y * sin_t for b in self.barras]
+            g = (cos_t, sin_t, min(us) if us else None,
+                 max(us) if us else None, min(ub) if ub else None)
+            if len(self._geo) > 20000:
+                self._geo.clear()
+            self._geo[theta] = g
+        return g
+
+    def constantes(self) -> tuple:
+        """``(fcd_ac, eps_c2, eps_cu, n, Es, fyd)`` dos materiais, com a
+        mesma expressão das propriedades de :mod:`materiais`."""
+        if self._consts is None:
+            c, a = self.concreto, self.aco
+            self._consts = (c.fator_pico * c.fcd_kNcm2, c.eps_c2_mil,
+                            c.eps_cu_mil, c.expoente_n, a.Es_kNcm2,
+                            a.fyd_kNcm2)
+        return self._consts
 
     # -- geometria ----------------------------------------------------------
     @property
@@ -185,39 +229,62 @@ class SecaoDiscreta:
     def arrays(self, theta: float):
         """Faixas e barras como vetores ``numpy``, prontos para o equilíbrio.
 
-        O equilíbrio é avaliado dezenas de vezes por bisseção e centenas por
+        O equilíbrio é avaliado dezenas de vezes por busca de raiz e centenas por
         varredura de arranjo; em laço Python o custo aparece na interface. Os
         vetores dependem só da direção da linha neutra, e ficam em cache junto
         com as faixas.
+        """
+        return self.arrays_faixas(theta) + self.arrays_barras(theta)
+
+    def arrays_faixas(self, theta: float):
+        """Só as faixas, ``(fa, fx, fy, fu)``, em cache por ângulo.
+
+        Separadas das barras porque o equilíbrio por Green não as usa: elas
+        servem ao caso degenerado de deformação quase uniforme e às
+        conferências cruzadas. Fatiar a seção a cada direção nova da linha
+        neutra custava ~20 % do dimensionamento sem que o resultado usasse
+        as faixas.
         """
         chave = int(round(theta * 1e9))
         pronto = self._arrays.get(chave)
         if pronto is not None:
             return pronto
         f = self.faixas(theta)
-        cos_t, sin_t = math.cos(theta), math.sin(theta)
         vazio = np.zeros(0)
         fa = np.array([x.area for x in f]) if f else vazio
         fx = np.array([x.x for x in f]) if f else vazio
         fy = np.array([x.y for x in f]) if f else vazio
         fu = np.array([x.u for x in f]) if f else vazio
-        if self.barras:
-            ba = np.array([b.area for b in self.barras])
-            bx = np.array([b.x for b in self.barras])
-            by = np.array([b.y for b in self.barras])
-            bu = bx * cos_t + by * sin_t
-        else:
-            ba = bx = by = bu = vazio
-        pronto = (fa, fx, fy, fu, ba, bx, by, bu)
+        pronto = (fa, fx, fy, fu)
         self._arrays[chave] = pronto
+        return pronto
+
+    def arrays_barras(self, theta: float):
+        """Só as barras, ``(ba, bx, by, bu)``; ``bu`` depende do ângulo."""
+        chave = int(round(theta * 1e9))
+        pronto = self._arrays_barras.get(chave)
+        if pronto is not None:
+            return pronto
+        if self.barras:
+            if self._barras_xy is None:
+                self._barras_xy = (
+                    np.array([b.area for b in self.barras]),
+                    np.array([b.x for b in self.barras]),
+                    np.array([b.y for b in self.barras]))
+            ba, bx, by = self._barras_xy
+            bu = bx * math.cos(theta) + by * math.sin(theta)
+        else:
+            ba = bx = by = bu = np.zeros(0)
+        pronto = (ba, bx, by, bu)
+        self._arrays_barras[chave] = pronto
         return pronto
 
     def extremos(self, theta: float) -> tuple[float, float]:
         """Coordenadas ``u`` mínima e máxima do contorno de concreto."""
-        cos_t, sin_t = math.cos(theta), math.sin(theta)
-        us = [x * cos_t + y * sin_t
-              for pol in self.contornos for x, y in pol]
-        return min(us), max(us)
+        g = self.geometria_theta(theta)
+        if g[2] is None:
+            raise ValueError("seção sem contorno")
+        return g[2], g[3]
 
     def u_barras(self, theta: float) -> list[float]:
         cos_t, sin_t = math.cos(theta), math.sin(theta)
@@ -264,14 +331,13 @@ def plano_uls(secao: SecaoDiscreta, theta: float, x: float) -> Plano:
     Com ``x <= 0`` a seção está toda tracionada -- domínio 1 --, e o plano é
     o de tração uniforme a 10 ‰, que é o limite que interessa.
     """
-    c = secao.concreto
-    u_min, u_max = secao.extremos(theta)
+    _, eps_c2, eps_cu, _, _, _ = secao.constantes()
+    _, _, u_min, u_max, u_traz = secao.geometria_theta(theta)
+    if u_min is None:
+        raise ValueError("seção sem contorno")
     h = u_max - u_min
-    eps_cu = c.eps_cu_mil
-    eps_c2 = c.eps_c2_mil
-
-    ub = secao.u_barras(theta)
-    u_traz = min(ub) if ub else u_min          # barra mais tracionada
+    if u_traz is None:
+        u_traz = u_min                          # barra mais tracionada
     d = u_max - u_traz                          # altura útil na direção theta
 
     if x <= 1e-9:
@@ -347,6 +413,22 @@ def _sigma_s_vetorial(aco: Aco, eps) -> "np.ndarray":
                                      aco.fyd_kNcm2)
 
 
+def _sigma_c_consts(consts: tuple, eps) -> "np.ndarray":
+    """:func:`_sigma_c_vetorial` com as constantes de
+    :meth:`SecaoDiscreta.constantes` -- as mesmas operações, na mesma ordem,
+    sem reler as propriedades do concreto a cada chamada."""
+    fcd, eps_c2, _, n, _, _ = consts
+    e = np.maximum(eps, 0.0)
+    r = np.minimum(np.maximum(1.0 - e / eps_c2, 0.0), 1.0)
+    return np.where(e >= eps_c2, fcd, fcd * (1.0 - r ** n))
+
+
+def _sigma_s_consts(consts: tuple, eps) -> "np.ndarray":
+    """:func:`_sigma_s_vetorial` com as constantes da seção."""
+    _, _, _, _, Es, fyd = consts
+    return np.sign(eps) * np.minimum(np.abs(eps) * Es / 1000.0, fyd)
+
+
 # ---------------------------------------------------------------------------
 # Casca pública das duas leis constitutivas, para quem -- como a vista 3D de
 # fibras (:mod:`pilares.core.fibras`) -- precisa da tensão num ponto ou numa
@@ -401,7 +483,7 @@ def resultantes_de_plano(secao: SecaoDiscreta, theta: float,
     Perto da deformação uniforme (``|k|`` muito pequeno) a substituição que a
     integração de Green faz degenera, e o módulo cai de volta ao fatiamento
     em faixas -- convergente e correto, só que mais lento; esse regime não é
-    alcançado pela bisseção de :func:`resolver_x` nem de
+    alcançado pela busca de :func:`resolver_x` nem de
     :func:`resolver_estado` em uso normal.
 
     Esta função não sabe se ``plano`` respeita o ELU: serve tanto para
@@ -410,20 +492,38 @@ def resultantes_de_plano(secao: SecaoDiscreta, theta: float,
     forças dos dois lados, muda só de onde o plano de deformações veio.
     """
     c, aco = secao.concreto, secao.aco
-    fa, fx, fy, fu, ba, bx, by, bu = secao.arrays(theta)
+    ba, bx, by, bu = secao.arrays_barras(theta)
+    consts = secao.constantes()
 
     if abs(plano.k) >= green.K_MINIMO:
+        g = secao.geometria_theta(theta)
         N, Mx, My = green.resultantes_concreto(
-            secao.contornos, c, theta, plano.eps_ref, plano.k, plano.u_ref)
+            secao.contornos, c, theta, plano.eps_ref, plano.k, plano.u_ref,
+            cos_sin=(g[0], g[1]), consts=consts)
         eps_max, eps_min = _extremos_eps(secao, theta, plano)
+    elif plano.k == 0.0 and plano.eps_ref <= 0.0:
+        # Tração uniforme (o limite do domínio 1, que a busca de
+        # resolver_x consulta em toda direção): o concreto não tem tensão
+        # nenhuma, e a resultante dele é zero -- exatamente o 0,0 que o
+        # fatiamento somaria, sem fatiar a seção a cada direção nova (~20 %
+        # do dimensionamento).
+        #
+        # Só a tração. Com compressão uniforme a forma fechada (sigma·Ac no
+        # centroide) seria exata, mas diferiria do fatiamento no erro de
+        # discretização dele (~1e-5), e o Newton do método geral compara
+        # k = 0 com k minúsculo, que continua fatiado: a diferença entre os
+        # dois métodos entra na derivada e o Newton se perde.
+        N = Mx = My = 0.0
+        eps_max = eps_min = plano.eps_ref
     else:
         N = Mx = My = 0.0
         eps_max, eps_min = -1e9, 1e9
+        fa, fx, fy, fu = secao.arrays_faixas(theta)
         if fa.size:
             e = plano.eps_ref + plano.k * (fu - plano.u_ref)
             eps_max = max(eps_max, float(e.max()))
             eps_min = min(eps_min, float(e.min()))
-            forca = _sigma_c_vetorial(c, e) * fa
+            forca = _sigma_c_consts(consts, e) * fa
             N += float(forca.sum())
             Mx += float((forca * fx).sum())
             My += float((forca * fy).sum())
@@ -432,7 +532,7 @@ def resultantes_de_plano(secao: SecaoDiscreta, theta: float,
         e = plano.eps_ref + plano.k * (bu - plano.u_ref)
         eps_max = max(eps_max, float(e.max()))
         eps_min = min(eps_min, float(e.min()))
-        forca = (_sigma_s_vetorial(aco, e) - _sigma_c_vetorial(c, e)) * ba
+        forca = (_sigma_s_consts(consts, e) - _sigma_c_consts(consts, e)) * ba
         N += float(forca.sum())
         Mx += float((forca * bx).sum())
         My += float((forca * by).sum())
@@ -450,12 +550,11 @@ def _extremos_eps(secao: SecaoDiscreta, theta: float,
     deformação, que servem só de informação auxiliar, são lidos direto dos
     vértices em vez de saírem de graça da soma.
     """
-    cos_t, sin_t = math.cos(theta), math.sin(theta)
-    us = [x * cos_t + y * sin_t for pol in secao.contornos for x, y in pol]
-    if not us:
+    _, _, u_min, u_max, _ = secao.geometria_theta(theta)
+    if u_min is None:
         return -1e9, 1e9
-    e1 = plano.eps(min(us))
-    e2 = plano.eps(max(us))
+    e1 = plano.eps(u_min)
+    e2 = plano.eps(u_max)
     return max(e1, e2), min(e1, e2)
 
 
@@ -465,14 +564,167 @@ def _limite_x(secao: SecaoDiscreta, theta: float) -> float:
     return 20.0 * (u_max - u_min) + 1.0
 
 
+def _falsa_posicao(avaliar: Callable[[float], "tuple[float, object] | None"],
+                   a: float, b: float, fa: float, fb: float, tol: float,
+                   largura_minima: float, crescente: bool = False
+                   ) -> tuple[object, float, bool]:
+    """Raiz de ``f(t) = 0`` num intervalo ``[a, b]`` que a contém.
+
+    Falsa posição com a correção de Illinois: o ponto novo sai da secante
+    entre as pontas, e a ponta que fica parada dois passos seguidos tem o
+    resíduo dividido por dois, o que impede a convergência de um lado só.
+    Perto da raiz converge quase como a secante (ordem ~1,44), em 6 a 10
+    avaliações contra as ~35 da bisseção, com as mesmas garantias dela: o
+    intervalo sempre contém a raiz, e a parada usa a mesma tolerância.
+    Longe da raiz, numa curva muito torta (o patamar de ``N(x)`` além do
+    domínio 5), a secante pode andar pouco: quando o resíduo deixa de cair
+    à metade por três passos seguidos entra um passo de bisseção.
+
+    ``avaliar(t)`` devolve ``(f, carga)`` -- ``carga`` é o que quem chama
+    quer de volta (o :class:`Estado`) -- ou ``None`` se não há valor em
+    ``t``, o que encerra a busca. ``crescente`` diz que ``f`` cresce com
+    ``t``: o lado de cada ponto sai do sinal de ``f`` (ponto com ``f < 0``
+    substitui ``a``), como na bisseção antiga, e não da comparação com o
+    sinal de ``fa`` -- é o que vale quando ``N_alvo`` fica rente a uma ponta
+    e as duas têm o mesmo sinal por arredondamento.
+
+    Devolve ``(carga, t, fechou)``: a carga do último ponto avaliado, o
+    ponto, e se o resíduo caiu abaixo de ``tol``. Sem fechar, ``t`` é o meio
+    do intervalo final e ``carga`` a do último ponto (``None`` se nenhum).
+    """
+    lado = 0
+    f_ant = math.inf
+    lentos = 0
+    carga = None
+    for _ in range(200):
+        largura = b - a
+        if largura < largura_minima:
+            break
+        if lentos >= 3 or fb == fa:
+            t = (a + b) / 2.0
+            lentos = 0
+        else:
+            t = (a * fb - b * fa) / (fb - fa)
+            if not (a < t < b):
+                t = (a + b) / 2.0
+        r = avaliar(t)
+        if r is None:
+            return carga, t, False
+        f, carga = r
+        if abs(f) <= tol:
+            return carga, t, True
+        lentos = lentos + 1 if abs(f) > 0.5 * f_ant else 0
+        f_ant = abs(f)
+        if (f < 0.0) if crescente else ((f < 0.0) == (fa < 0.0)):
+            a, fa = t, f
+            if lado == -1:
+                fb /= 2.0
+            lado = -1
+        else:
+            b, fb = t, f
+            if lado == 1:
+                fa /= 2.0
+            lado = 1
+    return carga, (a + b) / 2.0, False
+
+
+def _raiz_crescente(avaliar: Callable[[float], "Estado"], N_alvo: float,
+                    lo: float, hi: float, N_lo: float, N_hi: float,
+                    largura_minima: float) -> tuple["Estado | None", float]:
+    """Raiz de ``N(t) = N_alvo`` com ``N`` crescente em ``[lo, hi]``, por
+    :func:`_falsa_posicao`, na tolerância ``max(1e-8, |N_alvo| 1e-10)`` da
+    bisseção que ela substituiu.
+
+    Devolve ``(estado, t)`` quando o equilíbrio fecha, ou ``(None, meio)``
+    quando o intervalo ficou menor que ``largura_minima`` sem fechar --
+    quem chama decide o que fazer com o ponto médio, como antes.
+    """
+    def f(t: float):
+        est = avaliar(t)
+        return est.N - N_alvo, est
+    est, t, fechou = _falsa_posicao(f, lo, hi, N_lo - N_alvo, N_hi - N_alvo,
+                                    max(1e-8, abs(N_alvo) * 1e-10),
+                                    largura_minima, crescente=True)
+    return (est, t) if fechou else (None, t)
+
+
 def resolver_x(secao: SecaoDiscreta, theta: float, N_alvo: float
                ) -> Estado | None:
-    """Profundidade da linha neutra que equilibra ``N_alvo``, por bisseção.
+    """Profundidade da linha neutra que equilibra ``N_alvo``.
 
     ``N(x)`` é monótona crescente: aprofundar a linha neutra só acrescenta
-    área comprimida e alivia tração. É essa monotonia que autoriza a bisseção
-    e dispensa chute inicial.
+    área comprimida e alivia tração. É essa monotonia que garante o
+    intervalo com a raiz e dispensa chute inicial; a raiz sai por falsa
+    posição (:func:`_raiz_crescente`), com a tolerância da bisseção antiga.
+
+    Ordem das avaliações (25/11/2026). A busca antiga avaliava sempre as
+    quatro referências -- ``x = 0``, ``x = x_max``, ``x = 0+`` e ``x = h`` --
+    antes de iterar. Pela mesma monotonia de ``N(x)``, cada teste só precisa
+    da ponta que pode mudar a decisão:
+
+    * ``x = 0`` (tração uniforme a 10 ‰) tem a mesma ``N`` em qualquer
+      direção: com ``k = 0`` toda barra está em -10 ‰ (``-10 + 0·(u -
+      u_max)`` é -10 exato). Fica guardada na seção;
+    * ``x = x_max`` só decide o teto (``N_alvo > N(x_max)``) quando
+      ``N_alvo`` passa de ``N(h)``, e só serve de ponta do intervalo nesse
+      caso;
+    * ``x = 0+`` só decide o domínio 1 (``N_alvo < N(0+)``) quando
+      ``N_alvo`` fica abaixo de ``N(h)``, e só é ponta do intervalo nesse
+      caso.
+
+    Os testes e o intervalo da falsa posição são os mesmos de antes, e o
+    resultado é o mesmo, bit a bit: as avaliações não têm efeito colateral,
+    e a ordem delas não muda nenhum número. Ficam de fora uma ou duas
+    avaliações de dez.
     """
+    x_max = _limite_x(secao, theta)
+    x_0mais = 1e-9 * max(1.0, x_max)
+    u_min, u_max = secao.extremos(theta)
+    h = u_max - u_min
+    if not (x_0mais < h < x_max):
+        return _resolver_x_direto(secao, theta, N_alvo)
+    if secao._N_tracao is None:
+        secao._N_tracao = resultantes(secao, theta, 0.0).N
+    if N_alvo < secao._N_tracao - 1e-6:
+        return None
+    e_h = resultantes(secao, theta, h)
+    N_h = e_h.N
+    e_hi = None
+    if N_alvo > N_h + 1e-6:
+        # só aqui o teto pode reprovar: N(x_max) >= N(h)
+        e_hi = resultantes(secao, theta, x_max)
+        if N_alvo > e_hi.N + 1e-6:
+            return None
+    e_0mais = None
+    if N_h > N_alvo:
+        # só aqui o domínio 1 pode valer: N(0+) <= N(h)
+        e_0mais = resultantes(secao, theta, x_0mais)
+        if N_alvo < e_0mais.N - 1e-6:
+            return _resolver_dominio_1(secao, theta, N_alvo)
+    if abs(N_h - N_alvo) <= max(1e-8, abs(N_alvo) * 1e-10):
+        return e_h
+    if N_h > N_alvo:
+        lo, hi, N_lo, N_hi = x_0mais, h, e_0mais.N, N_h
+    else:
+        if e_hi is None:
+            e_hi = resultantes(secao, theta, x_max)
+        lo, hi, N_lo, N_hi = h, x_max, N_h, e_hi.N
+    est, meio = _raiz_crescente(lambda x: resultantes(secao, theta, x),
+                                N_alvo, lo, hi, N_lo, N_hi,
+                                1e-10 * max(1.0, x_max))
+    if est is not None:
+        return est
+    est = resultantes(secao, theta, meio)
+    if abs(est.N - N_alvo) > max(1e-3, abs(N_alvo) * 1e-5):
+        return None
+    return est
+
+
+def _resolver_x_direto(secao: SecaoDiscreta, theta: float, N_alvo: float
+                       ) -> Estado | None:
+    """:func:`resolver_x` na ordem antiga, com as quatro referências
+    avaliadas de saída -- para a seção degenerada em que ``h`` não fica
+    entre ``0+`` e ``x_max``."""
     x_max = _limite_x(secao, theta)
     lo, hi = 0.0, x_max
     e_lo = resultantes(secao, theta, lo)
@@ -484,22 +736,32 @@ def resolver_x(secao: SecaoDiscreta, theta: float, N_alvo: float
     # polo A -- que o parâmetro x não descreve. Sem ela, um N_alvo nessa faixa
     # convergia para x -> 0+ e devolvia um estado que não o equilibra, com
     # MRd superestimado (até 2,5 vezes, numa 30x50 sob tração alta).
-    e_0mais = resultantes(secao, theta, 1e-9 * max(1.0, x_max))
+    x_0mais = 1e-9 * max(1.0, x_max)
+    e_0mais = resultantes(secao, theta, x_0mais)
     if N_alvo < e_0mais.N - 1e-6:
         return _resolver_dominio_1(secao, theta, N_alvo)
-    for _ in range(200):
-        meio = (lo + hi) / 2.0
-        est = resultantes(secao, theta, meio)
-        if abs(est.N - N_alvo) <= max(1e-8, abs(N_alvo) * 1e-10):
-            return est
-        if est.N < N_alvo:
-            lo = meio
+    # Quase toda raiz cai antes do domínio 5 (x <= h), e além dele N(x) é
+    # um patamar onde a secante anda pouco: uma avaliação em x = h estreita
+    # o intervalo de 20 h para h e poupa ~4 passos. Pela monotonia de N(x),
+    # o intervalo estreitado continua contendo a raiz.
+    lo, N_lo, N_hi = x_0mais, e_0mais.N, e_hi.N
+    u_min, u_max = secao.extremos(theta)
+    h = u_max - u_min
+    if lo < h < hi:
+        e_h = resultantes(secao, theta, h)
+        if abs(e_h.N - N_alvo) <= max(1e-8, abs(N_alvo) * 1e-10):
+            return e_h
+        if e_h.N > N_alvo:
+            hi, N_hi = h, e_h.N
         else:
-            hi = meio
-        if hi - lo < 1e-10 * max(1.0, x_max):
-            break
-    est = resultantes(secao, theta, (lo + hi) / 2.0)
-    # a bisseção terminou sem fechar o equilíbrio: não há estado, e dizer
+            lo, N_lo = h, e_h.N
+    est, meio = _raiz_crescente(lambda x: resultantes(secao, theta, x),
+                                N_alvo, lo, hi, N_lo, N_hi,
+                                1e-10 * max(1.0, x_max))
+    if est is not None:
+        return est
+    est = resultantes(secao, theta, meio)
+    # a busca terminou sem fechar o equilíbrio: não há estado, e dizer
     # que há daria um MRd de um plano que não equilibra N_alvo
     if abs(est.N - N_alvo) > max(1e-3, abs(N_alvo) * 1e-5):
         return None
@@ -522,18 +784,11 @@ def _resolver_dominio_1(secao: SecaoDiscreta, theta: float, N_alvo: float
         return resultantes_de_plano(secao, theta, Plano(
             eps_ref=-EPS_S_MAXIMA, k=k, u_ref=u_traz, dominio="1", x=0.0))
     lo, hi = 0.0, EPS_S_MAXIMA / d
-    for _ in range(200):
-        meio = (lo + hi) / 2.0
-        est = estado(meio)
-        if abs(est.N - N_alvo) <= max(1e-8, abs(N_alvo) * 1e-10):
-            return est
-        if est.N < N_alvo:
-            lo = meio
-        else:
-            hi = meio
-        if hi - lo < 1e-14:
-            break
-    est = estado((lo + hi) / 2.0)
+    est, meio = _raiz_crescente(estado, N_alvo, lo, hi, estado(lo).N,
+                                estado(hi).N, 1e-14)
+    if est is not None:
+        return est
+    est = estado(meio)
     return est if abs(est.N - N_alvo) <= max(1e-3, abs(N_alvo) * 1e-5) else None
 
 
@@ -576,7 +831,7 @@ def resolver_estado(secao: SecaoDiscreta, theta: float, k: float,
     Generaliza :func:`resolver_x` para uma curvatura que não precisa ser a do
     ELU: ``N`` cresce monotonicamente com ``eps_topo`` para ``k`` fixo -- vale
     a mesma razão física de lá, deslocar todo o perfil de deformação para
-    mais compressão só aumenta a força normal --, e a bisseção dispensa chute
+    mais compressão só aumenta a força normal --, e a busca dispensa chute
     inicial do mesmo jeito. É o item 5.4 de CADAMURO JÚNIOR (1997)
     ("PROCURA_e_CG"), com a referência na fibra extrema em vez do CG.
     """
@@ -585,20 +840,14 @@ def resolver_estado(secao: SecaoDiscreta, theta: float, k: float,
     e_hi = resultantes_de_plano(secao, theta, plano_geral(secao, theta, hi, k))
     if N_alvo < e_lo.N - 1e-6 or N_alvo > e_hi.N + 1e-6:
         return None
-    for _ in range(200):
-        meio = (lo + hi) / 2.0
-        est = resultantes_de_plano(secao, theta,
-                                   plano_geral(secao, theta, meio, k))
-        if abs(est.N - N_alvo) <= max(1e-8, abs(N_alvo) * 1e-10):
-            return est
-        if est.N < N_alvo:
-            lo = meio
-        else:
-            hi = meio
-        if hi - lo < 1e-10 * EPS_TOPO_LIMITE:
-            break
+    est, meio = _raiz_crescente(
+        lambda e: resultantes_de_plano(secao, theta,
+                                       plano_geral(secao, theta, e, k)),
+        N_alvo, lo, hi, e_lo.N, e_hi.N, 1e-10 * EPS_TOPO_LIMITE)
+    if est is not None:
+        return est
     return resultantes_de_plano(
-        secao, theta, plano_geral(secao, theta, (lo + hi) / 2.0, k))
+        secao, theta, plano_geral(secao, theta, meio, k))
 
 
 def _dif_angular(a: float, b: float) -> float:
@@ -654,7 +903,7 @@ def estados_na_direcao(secao: SecaoDiscreta, N_alvo: float, alfa: float,
 
     A varredura grosseira de ``passos`` ângulos localiza **todas** as trocas
     de sinal do desvio angular ao longo da volta completa; cada uma é
-    refinada por bisseção. Devolve os estados achados, em ordem crescente de
+    refinada por falsa posição. Devolve os estados achados, em ordem crescente de
     ``|M|`` -- vazia quando nenhum existe.
     """
     achar = resolver if resolver is not None else resolver_x
@@ -683,7 +932,7 @@ def estados_na_direcao(secao: SecaoDiscreta, N_alvo: float, alfa: float,
     # A varredura grossa custa ``passos`` resoluções de equilíbrio e **não
     # depende de** ``alfa``: para uma normal fixa, os estados equilibrados em
     # cada direção de linha neutra são os mesmos qualquer que seja a direção
-    # de momento procurada. Só o desvio angular -- aritmética -- e a bisseção
+    # de momento procurada. Só o desvio angular -- aritmética -- e a busca
     # de refino é que dependem dela. Guardar as amostras por normal é o que
     # torna a varredura contínua da altura viável: 21 pontos com o mesmo Nd
     # pagam uma varredura grossa, não 21.
@@ -716,21 +965,12 @@ def estados_na_direcao(secao: SecaoDiscreta, N_alvo: float, alfa: float,
         if d0 * d1 >= 0.0 or abs(d0) > math.pi / 2.0 or abs(d1) > math.pi / 2.0:
             continue                    # sem troca de sinal, ou salto do wrap
         a, b = th0, (th1 if th1 > th0 else th1 + 2.0 * math.pi)
-        da = d0
-        raiz: Estado | None = None
-        for _ in range(80):
-            m = (a + b) / 2.0
-            r = desvio(m)
-            if r is None:
-                break
-            dm, est = r
-            raiz = est
-            if dm == 0.0 or b - a < 1e-10:
-                break
-            if da * dm < 0.0:
-                b = m
-            else:
-                a, da = m, dm
+        # Falsa posição (:func:`_falsa_posicao`): o desvio angular é suave
+        # dentro do intervalo de uma amostra, e a secante acha a raiz em
+        # poucas resoluções de equilíbrio -- cada uma um resolver_x inteiro.
+        # Para quando o desvio cai a 1e-12 rad ou o intervalo a 1e-10 rad;
+        # a raiz é o estado do último ponto avaliado, como na bisseção antiga.
+        raiz, _, _ = _falsa_posicao(desvio, a, b, d0, d1, 1e-12, 1e-10)
         if raiz is not None:
             achados.append(raiz)
 
@@ -760,11 +1000,22 @@ def momento_resistente_uniaxial(secao: SecaoDiscreta, N_alvo: float,
     guardado = secao._uniaxial.get(chave)
     if guardado is not None:
         return guardado
-    theta = 0.0 if direcao == "x" else math.pi / 2.0
+    if isinstance(direcao, str):
+        theta = 0.0 if direcao == "x" else math.pi / 2.0
+    else:
+        # direção qualquer, em radianos (eixos principais da seção sem
+        # simetria): linha neutra perpendicular a ela, e o momento é a
+        # componente ao longo dela
+        theta = float(direcao)
     if sentido < 0:
         theta += math.pi
     est = resolver_x(secao, theta, N_alvo)
-    valor = 0.0 if est is None else abs(est.Mx if direcao == "x" else est.My)
+    if est is None:
+        valor = 0.0
+    elif isinstance(direcao, str):
+        valor = abs(est.Mx if direcao == "x" else est.My)
+    else:
+        valor = abs(est.Mx * math.cos(direcao) + est.My * math.sin(direcao))
     secao._uniaxial[chave] = valor
     return valor
 
@@ -881,7 +1132,7 @@ def envoltoria_momentos(secao: SecaoDiscreta, N_alvo: float,
     reentrante numa seção L, coisa que nenhum expoente reproduz.
 
     O traçado varre a **direção da linha neutra**, não a do momento: para
-    cada ``theta`` basta uma bisseção em ``x`` para equilibrar ``N``, e o par
+    cada ``theta`` basta uma busca em ``x`` para equilibrar ``N``, e o par
     ``(Mx, My)`` que sai já é um ponto da fronteira. Procurar ponto a ponto a
     linha neutra que aponta o momento numa direção pedida daria a mesma curva
     com uma busca aninhada a mais em cada ponto -- e cem vezes o tempo.

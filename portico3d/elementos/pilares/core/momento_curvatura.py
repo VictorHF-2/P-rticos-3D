@@ -96,7 +96,10 @@ def secao_deformabilidade(secao: sc.SecaoDiscreta,
 def theta_da_direcao(direcao: str, sentido: float = 1.0) -> float:
     """Direção da linha neutra da flexão composta normal em ``direcao`` --
     a mesma convenção de :func:`seccional.momento_resistente_uniaxial`."""
-    theta = 0.0 if direcao == "x" else math.pi / 2.0
+    if isinstance(direcao, str):
+        theta = 0.0 if direcao == "x" else math.pi / 2.0
+    else:
+        theta = float(direcao)       # direção principal, em radianos
     return theta + (math.pi if sentido < 0 else 0.0)
 
 
