@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+
+# executável: construir.py gera em dist/ e publica em ../Exe atual (fora do git)
+build/
+dist/
+*.exe
+*.zip
+
+# saídas do autoteste e do programa (regeneráveis)
+autoteste/
+autoteste-exe/
+autoteste.txt
+*.log
+
+# referências de terceiros ficam em ../Fontes (fora do git)
+*.pdf
+*.docx
+
+# temporários do sistema e do Office
+~$*
+*.tmp
+*.bak
+Thumbs.db
+desktop.ini

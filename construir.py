@@ -7,7 +7,7 @@ O que faz, em ordem:
 3. roda o PyInstaller com ``Porticos.spec``;
 4. verifica os dois executáveis com ``--autoteste``;
 5. **publica** a versão em pasta e a portátil em ``Pórticos 3D/Exe atual``;
-6. compacta a versão em pasta em ``dist/Porticos-R02-windows.zip``.
+6. compacta a versão em pasta em ``dist/Porticos-<revisão>-windows.zip``.
 
 O passo 5 é o que difere do ``construir.py`` do Hidra, onde o executável era
 levado à mão para a raiz. "Exe atual" quer dizer o que está escrito: a pasta
@@ -16,8 +16,9 @@ ele saiu nem procurar dentro de ``dist``. Ela é limpa e reescrita a cada
 construção, de propósito — duas versões convivendo ali seria justamente o que
 o nome promete que não acontece.
 
-A verificação do passo 4 não é rápida: são as 418 conferências mais o
-autoteste da janela, umas quatro minutos por executável. É o preço de saber
+A verificação do passo 4 não é rápida: são as 740 conferências mais o
+autoteste da janela, cerca de 45 minutos por executável (o motor de
+Pilares é a parte lenta). É o preço de saber
 que o que foi empacotado calcula igual ao que roda em Python — que é a única
 pergunta que interessa num executável.
 
@@ -39,8 +40,9 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent
 DIST = RAIZ / "dist"
-#: ``Pórticos 3D/Exe atual`` — irmã das pastas de revisão.
-PUBLICACAO = RAIZ.parent.parent / "Exe atual"
+#: ``Pórticos 3D/Exe atual`` — irmã desta pasta ``Programa`` (o repositório
+#: git); fica fora do git, como ``Fontes``.
+PUBLICACAO = RAIZ.parent / "Exe atual"
 
 
 def executar(descricao: str, comando: list[str], tempo: int | None = None
@@ -94,8 +96,8 @@ def verificar(executavel: Path) -> None:
         raise SystemExit(f"não encontrei {executavel}")
     destino = RAIZ / "autoteste-exe" / executavel.stem
     destino.mkdir(parents=True, exist_ok=True)
-    executar(f"verificando {executavel.name} (418 conferências, demora)",
-             [str(executavel), "--autoteste", str(destino)], tempo=1800)
+    executar(f"verificando {executavel.name} (740 conferências, demora)",
+             [str(executavel), "--autoteste", str(destino)], tempo=4 * 3600)
 
 
 def publicar() -> Path:
