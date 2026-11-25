@@ -22,7 +22,7 @@ ou, direto no Python:
 ```
 py main.py                             abre a janela
 py main.py modelo.json --janela        abre a janela já com um modelo
-py main.py --autoteste                 roda as 773 conferências de referência
+py main.py --autoteste                 roda as 785 conferências de referência
 py main.py modelo.json [caso]          resolve um caso e imprime o resumo
 py main.py modelo.json --envoltoria    gera as combinações da NBR 6118,
                                        resolve todas e imprime a envoltória
@@ -43,7 +43,7 @@ subia e quebrava na primeira exportação.
 Tabelas à esquerda, desenho à direita, relatório embaixo. O caminho é montar,
 analisar e ler o resultado, e a interface existe só para encurtá-lo: não há
 uma linha de mecânica nela, e é de propósito — tudo continua no `core`, que é
-o que as 773 conferências cobrem.
+o que as 785 conferências cobrem.
 
 **A janela cabe em qualquer tela.** O tamanho de abertura sai da área útil
 da tela desta máquina — já sem a barra de tarefas —, a janela é centrada nela,
@@ -2293,9 +2293,53 @@ para a A0 na mesma escala, o empacotamento de cinco vistas em 2 + 2 + 1;
 no projeto ponta a ponta, uma forma por pavimento, toda viga e todo lance
 numa folha, nenhuma sobreposição e o AUDIT sem erro nem correção.
 
-**Pendente.** Cortes e detalhes típicos; numeração única das posições no
-edifício; folha da laje treliçada (o programa de Lajes não a desenha em
-DXF); agrupar pilares iguais numa só vista.
+### R05 (2026-11-25): pranchas completas
+
+* **Pilares iguais numa vista.** Cada lance é exportado pelo motor e
+  ganha uma assinatura do desenho sem o nome da peça (tipo, camada e caixa
+  de cada entidade; texto e ponto de inserção dos textos, com o nome
+  trocado por `#`). Lances com a mesma assinatura saem desenhados iguais e
+  vão numa vista só, com todos os nomes no título (que quebra em até quatro
+  linhas) e o aço multiplicado. P2 (50x20) e P5 (20x50) juntam: é a mesma
+  peça girada em planta, e o motor de Pilares a desenha igual. No edifício
+  de 3 pavimentos, 36 lances viram 6 vistas, e as folhas de pilar caem de
+  18 para 3.
+* **Numeração por folha.** Cada motor numera as posições a partir de N1;
+  depois de montadas as folhas, todo texto das vistas de uma folha
+  (rótulos, chamadas, tabela de posições) é renumerado na ordem das vistas
+  e, dentro de cada uma, na ordem do motor (`numerar`, padrão
+  `(?<![A-Za-z0-9])N(\d+)(?![0-9])`). O desenho e a tabela de cada peça
+  continuam batendo; a folha não tem dois N1.
+* **Resumo do aço da folha.** Por bitola, comprimento e massa, total e
+  total com 10 % de perdas, logo acima do carimbo (as notas sobem). O aço
+  de cada vista vem do motor: `quantitativo["por_bitola"]` na viga e no
+  pavimento de lajes, `quantitativos.calcular(...).aco` no pilar (barra
+  longitudinal com a espera, e os estribos), vezes os lances iguais. A
+  reserva acima do carimbo é calculada por grupo, com todas as bitolas dele.
+* **Cortes esquemáticos.** A-A (plano y = constante, olhando para +Y) e B-B
+  (x = constante, olhando para +X), no meio do maior intervalo central entre
+  linhas de nó (pilares e vigas): o plano nunca cai sobre um eixo de viga —
+  caía, na primeira versão, sobre a secundária do exemplo residencial, e
+  cortava as duas barras que terminam no nó. Lajes e vigas atravessadas
+  pelo plano em traço grosso e hachuradas, com o topo no nível do
+  pavimento; além do plano, a primeira linha de vigas paralelas e a primeira
+  linha de pilares, em traço fino, recortadas pelo que está na frente;
+  níveis em metros à esquerda (base e topo de cada pavimento). A linha de
+  cada corte, com as letras, vai nas plantas de forma.
+* **Folhas** do edifício de 3 pavimentos: 3 formas, 3 lajes, 18 de vigas, 1
+  de cortes, 3 de pilares e o quadro — 29, em 10 s.
+
+**Conferências** (`cortes_esquematicos` e o fim de
+`lancamento_dimensiona_ponta_a_ponta`): vigas e lajes cortadas e lances
+vistos contados contra o modelo, um nível por pavimento; todo lance de pilar
+numa vista e uma vez só, os lances de uma vista iguais pelo resultado do
+motor (seção, barras, bitola, estribos, comprimento, espera — e não pelo
+desenho que os agrupou), menos vistas que lances; numeração por folha sem
+repetir entre vistas e sem buraco; o resumo do aço de todas as folhas igual
+à soma do aço que os motores calcularam.
+
+**Pendente.** Cortes cotados e detalhes típicos; folha da laje treliçada
+(pedido à janela do Lajes para desenhá-la em DXF).
 
 ## A ponte com o dimensionamento
 

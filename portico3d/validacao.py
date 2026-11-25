@@ -7018,17 +7018,73 @@ def _pranchas_ponta_a_ponta(m, vig, pil, laj) -> list[Conferencia]:
     titulos = {v.titulo for f in folhas for v, _, _ in f.itens}
     formas = [f for f in folhas if f.conteudo.startswith("PLANTA DE FORMA")]
     vigas = {f"VIGA {v.nome}" for v in vig if v.passou}
-    lances = {f"PILAR {v.barra}" for v in pil if v.passou}
     auditoria = doc.audit()
     layouts = [l for l in doc.layouts if l.name != "Model"]
     com_janela = sum(1 for l in layouts if len(l.query("VIEWPORT")) > 1)
+
+    # pilares iguais: cada lance numa vista; os de uma vista com a mesma
+    # seção, armação, estribos, espera e comprimento (pelo resultado do
+    # motor, e não pelo desenho que serviu para agrupá-los)
+    from .compatibilizacao import _arranjo_adotado
+    por_barra: dict = {}
+    for v in pil:
+        por_barra.setdefault(v.barra, []).append(v)
+
+    def ficha(barra):
+        r = _arranjo_adotado(por_barra[barra])[0].resultado
+        arr, est, anc = r.arranjo, r.estribos, r.ancoragem
+        return (r.pilar.secao.descricao(), arr.n_barras, arr.phi,
+                getattr(est, "phi", None), getattr(est, "s", None),
+                round(r.pilar.lance.altura, 3),
+                round(getattr(anc, "l0c", 0.0) or 0.0, 3))
+
+    vistas_p = [v for f in folhas for v, _, _ in f.itens
+                if v.titulo.startswith("PILAR")]
+    membros = [m for v in vistas_p for m in v.membros]
+    iguais_de_fato = all(len({ficha(m) for m in v.membros}) == 1
+                         for v in vistas_p)
+
+    # numeração por folha: sem repetir entre vistas, de N1 sem buracos
+    numeracao_ok = True
+    for f in folhas:
+        vistos: set = set()
+        for v, _, _ in f.itens:
+            nums = {int(m.group(1)) for e in v.entidades
+                    if e.dxftype() in ("TEXT", "MTEXT")
+                    for m in pr.POSICAO.finditer(pr._conteudo(e))}
+            if nums & vistos:
+                numeracao_ok = False
+            vistos |= nums
+        if vistos and vistos != set(range(1, max(vistos) + 1)):
+            numeracao_ok = False
+
+    # o resumo do aço das folhas soma o aço que os motores calcularam
+    from .elementos.pilares.core import quantitativos as qp
+    esperado = sum(float((v.resultado.quantitativo or {}).get(
+        "massa_total", 0.0)) for v in vig if v.passou)
+    esperado += sum(float((v.resultado.quantitativo or {}).get(
+        "massa_total", 0.0)) for v in laj
+        if v.passou and v.resultado is not None)
+    esperado += sum(qp.calcular(_arranjo_adotado(por_barra[b])[0].resultado
+                                ).massa_aco for b in membros)
+    nas_folhas = sum(m for f in folhas if f.com_aco
+                     for _, m in f.aco.values())
     return [
+        Conferencia("pranchas: todo lance de pilar numa vista, uma vez só",
+                    float(sorted(membros) == sorted(por_barra)
+                          and len(membros) == len(set(membros))), 1.0),
+        Conferencia("pranchas: os lances de uma vista são iguais pelo "
+                    "resultado do motor", float(iguais_de_fato), 1.0),
+        Conferencia("pranchas: os iguais juntaram (menos vistas que lances)",
+                    float(len(vistas_p) < len(membros)), 1.0),
+        Conferencia("pranchas: posições numeradas por folha, sem repetir "
+                    "entre vistas e sem buraco", float(numeracao_ok), 1.0),
+        Conferencia("pranchas: o resumo do aço das folhas soma o aço dos "
+                    "motores (kg)", nas_folhas, esperado, 1e-6, esperado),
         Conferencia("pranchas: uma planta de forma por pavimento",
                     float(len(formas)), float(len(pr.cotas_dos_pavimentos(m)))),
         Conferencia("pranchas: toda viga dimensionada está numa folha",
                     float(vigas <= titulos), 1.0),
-        Conferencia("pranchas: todo lance de pilar está numa folha",
-                    float(lances <= titulos), 1.0),
         # a treliçada é verificada por faixa, e o programa de Lajes não a
         # desenha em DXF: só o pavimento de lajes maciças tem folha
         Conferencia("pranchas: uma folha de lajes por pavimento de laje "
@@ -7131,6 +7187,58 @@ def planta_de_forma_do_pavimento() -> list[Conferencia]:
         Conferencia("forma: as cotas parciais são os vãos entre pilares",
                     float(vaos <= cotas), 1.0),
     ]
+
+
+def cortes_esquematicos() -> list[Conferencia]:
+    """Os dois cortes do exemplo residencial, contados contra o modelo: as
+    vigas que atravessam o plano, as lajes que ele corta, um nível por
+    pavimento e a linha de pilares logo além do plano."""
+    from .continuidade import _eh_horizontal, _eh_vertical
+    from .core.lajes import retangulo
+    from .lancamento import gerar
+    from .saidas import pranchas as pr
+
+    m = gerar(_lancamento_exemplo()).modelo
+    px, py = pr.posicoes_de_corte(m)
+    saida = []
+    for letra, eixo, pos in (("A", "x", py), ("B", "y", px)):
+        c = pr.corte(m, letra, eixo, pos)
+        sx, tr = (0, 1) if eixo == "x" else (1, 0)
+        vigas = 0
+        for b in m.barras.values():
+            if not _eh_horizontal(m, b):
+                continue
+            a, d = (np.asarray(m.ponto(n), float) * 100.0
+                    for n in (b.no_i, b.no_j))
+            if abs(a[sx] - d[sx]) < 1e-6 and \
+                    min(a[tr], d[tr]) < pos < max(a[tr], d[tr]):
+                vigas += 1
+        lajes = 0
+        for laje in m.lajes.values():
+            x0, y0, x1, y1, _ = (v * 100.0 for v in retangulo(m, laje))
+            lo, hi = ((y0, y1) if eixo == "x" else (x0, x1))
+            lajes += lo < pos < hi
+        linhas = sorted({round(float(m.ponto(b.no_i)[tr]) * 100.0, 1)
+                         for b in m.barras.values() if _eh_vertical(m, b)})
+        alem = min(t for t in linhas if t > pos)
+        pilares = sum(1 for b in m.barras.values() if _eh_vertical(m, b)
+                      and abs(float(m.ponto(b.no_i)[tr]) * 100.0 - alem) < 1)
+        saida += [
+            Conferencia(f"corte {letra}-{letra}: as vigas que atravessam o "
+                        "plano", float(sum(t == "viga" for t, _ in c.cortados)),
+                        float(vigas)),
+            Conferencia(f"corte {letra}-{letra}: as lajes cortadas",
+                        float(sum(t == "laje" for t, _ in c.cortados)),
+                        float(lajes)),
+            Conferencia(f"corte {letra}-{letra}: um nível por pavimento",
+                        float(len(c.niveis)),
+                        float(len(pr.cotas_dos_pavimentos(m)))),
+            Conferencia(f"corte {letra}-{letra}: os lances da linha de "
+                        "pilares além do plano",
+                        float(sum(t == "pilar" for t, _ in c.vistos)),
+                        float(pilares)),
+        ]
+    return saida
 
 
 def diagramacao_das_folhas() -> list[Conferencia]:
@@ -7715,7 +7823,8 @@ def conferir(pasta=None) -> list[Conferencia]:
                   pilar_girado_e_apoios_das_lajes,
                   topo_das_vigas_nivelado,
                   secao_l_e_barra_pela_minima,
-                  planta_de_forma_do_pavimento, diagramacao_das_folhas):
+                  planta_de_forma_do_pavimento, diagramacao_das_folhas,
+                  cortes_esquematicos):
         conferencias.extend(prova())
     if pasta is not None:
         conferencias.extend(ida_e_volta_json(pasta))

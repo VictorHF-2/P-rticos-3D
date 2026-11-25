@@ -84,10 +84,14 @@ FOLGA_MODELO = 500.0
 LARG_CHAR = 0.62
 
 CAMADAS_PAPEL = (("PR-MOLDURA", 7), ("PR-CARIMBO", 7), ("PR-TEXTO", 7),
-                 ("PR-JANELA", 8))
+                 ("PR-JANELA", 8), ("PR-TABELA", 7))
 CAMADAS_FORMA = (("FORMA-CONTORNO", 7), ("FORMA-PILAR", 7),
                  ("FORMA-HACHURA", 8), ("FORMA-TEXTO", 2),
-                 ("FORMA-COTA", 3))
+                 ("FORMA-COTA", 3), ("FORMA-CORTE", 1),
+                 ("CORTE-CORTADO", 7), ("CORTE-VISTA", 8),
+                 ("CORTE-NIVEL", 3))
+#: Posição de armadura nos textos dos motores: ``N1``, ``(N12)``, ``3 N4``.
+POSICAO = re.compile(r"(?<![A-Za-z0-9])N(\d+)(?![0-9])")
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +172,15 @@ class Vista:
     caixa: tuple[float, float, float, float]       # cm, modelo
     escala: int
     formato: str = "A1"
+    #: As entidades do desenho no modelo (para renumerar as posições).
+    entidades: list = field(default_factory=list, repr=False)
+    #: Aço da vista por bitola, mm: ``[comprimento m, massa kg]`` — já com
+    #: os elementos iguais que ela representa.
+    aco: dict = field(default_factory=dict)
+    #: ``(primeira, última)`` posição da vista depois da numeração da folha.
+    posicoes: tuple[int, int] = (0, 0)
+    #: As peças que a vista representa (os lances iguais de pilar).
+    membros: list[str] = field(default_factory=list)
 
     @property
     def largura(self) -> float:                    # mm de papel, com a margem
@@ -177,6 +190,16 @@ class Vista:
     def altura(self) -> float:
         return (self.caixa[3] - self.caixa[1]) * 10.0 / self.escala + 2 * PAD
 
+    def linhas_titulo(self) -> list[str]:
+        """O título com a escala, quebrado na largura da vista."""
+        return _quebrar(f"{self.titulo} — ESC. 1:{self.escala}",
+                        max(self.largura, 80.0), H_TITULO)[:4]
+
+    @property
+    def faixa(self) -> float:
+        """A faixa do título abaixo da vista, mm."""
+        return FAIXA_TITULO + (len(self.linhas_titulo()) - 1) * H_TITULO * 1.5
+
 
 @dataclass
 class Grupo:
@@ -185,6 +208,17 @@ class Grupo:
     conteudo: str
     vistas: list[Vista] = field(default_factory=list)
     notas: list[str] = field(default_factory=list)
+    #: Folhas de armação: levam o resumo do aço da folha acima do carimbo.
+    com_aco: bool = False
+
+    @property
+    def reserva(self) -> float:
+        """Altura, mm, ocupada acima do carimbo pelas notas e pelo resumo do
+        aço (este com as bitolas de todas as vistas do grupo, que é o maior
+        que uma folha dele pode precisar)."""
+        bitolas = {phi for v in self.vistas for phi in v.aco}
+        return _altura_notas(self.notas) + (
+            altura_resumo(len(bitolas)) if self.com_aco else 0.0)
 
 
 @dataclass
@@ -196,6 +230,8 @@ class Folha:
     notas: list[str] = field(default_factory=list)
     numero: int = 0
     total: int = 0
+    reserva: float = 0.0
+    com_aco: bool = False
     #: Caixas de texto do papel: (x0, y0, x1, y1, texto).
     textos: list[tuple] = field(default_factory=list)
     nome_layout: str = ""
@@ -207,11 +243,29 @@ class Folha:
             return f"1:{es[0]}"
         return "INDICADAS" if es else "—"
 
+    @property
+    def aco(self) -> dict[float, list[float]]:
+        """O aço da folha por bitola: ``{phi: [comprimento m, massa kg]}``."""
+        soma: dict[float, list[float]] = {}
+        for v, _, _ in self.itens:
+            for phi, (c, m) in v.aco.items():
+                d = soma.setdefault(float(phi), [0.0, 0.0])
+                d[0] += c
+                d[1] += m
+        return dict(sorted(soma.items()))
+
+
+def altura_resumo(n_bitolas: int) -> float:
+    """Altura, mm, do resumo do aço da folha com ``n_bitolas`` linhas."""
+    if n_bitolas <= 0:
+        return 0.0
+    return 6.0 + (n_bitolas + 4) * H_TEXTO * 1.7
+
 
 def _altura_notas(notas: list[str]) -> float:
     if not notas:
         return 0.0
-    linhas = sum(len(_quebrar(n, CARIMBO_L - 6.0, H_TEXTO)) for n in notas)
+    linhas = sum(len(_quebrar(n, CARIMBO_L - 16.0, H_TEXTO)) for n in notas)
     return 8.0 + (linhas + 1) * H_TEXTO * 1.6
 
 
@@ -231,11 +285,11 @@ def _quebrar(texto: str, largura: float, altura: float) -> list[str]:
 
 def cabe(largura: float, altura: float, formato: str,
          altura_notas: float = 0.0) -> bool:
-    """Uma vista (com a faixa do título) cabe sozinha na folha, desviando do
-    carimbo — ao lado dele ou acima dele."""
+    """Uma vista de ``largura`` × ``altura`` (já com a faixa do título)
+    cabe sozinha na folha, desviando do carimbo — ao lado dele ou acima."""
     x0, y0, x1, y1 = area_util(formato)
     ox0, _, _, oy1 = obstaculo(formato, altura_notas)
-    h = altura + FAIXA_TITULO
+    h = altura
     ao_lado = largura <= ox0 - FOLGA - x0 and h <= y1 - y0
     acima = largura <= x1 - x0 and h <= y1 - (oy1 + FOLGA)
     return ao_lado or acima
@@ -248,7 +302,8 @@ def escolher_escala(vista: Vista, altura_notas: float = 0.0) -> Vista:
     for e in [e for e in ESCALAS if e >= inicial]:
         vista.escala = e
         for formato in FORMATOS:
-            if cabe(vista.largura, vista.altura, formato, altura_notas):
+            if cabe(vista.largura, vista.altura + vista.faixa, formato,
+                    altura_notas):
                 vista.formato = formato
                 return vista
     vista.escala, vista.formato = ESCALAS[-1], "A0"
@@ -266,18 +321,22 @@ def empacotar(grupo: Grupo) -> list[Folha]:
         return []
     formato = "A0" if any(v.formato == "A0" for v in grupo.vistas) else "A1"
     x0, y0, x1, y1 = area_util(formato)
-    altura_notas = _altura_notas(grupo.notas)
+    altura_notas = grupo.reserva
     ox0, _, _, oy1 = obstaculo(formato, altura_notas)
 
-    folhas = [Folha(formato, grupo.conteudo, notas=list(grupo.notas))]
+    def nova() -> Folha:
+        return Folha(formato, grupo.conteudo, notas=list(grupo.notas),
+                     reserva=altura_notas, com_aco=grupo.com_aco)
+
+    folhas = [nova()]
     topo, x, altura_linha = y1, x0, 0.0
     for v in grupo.vistas:
-        w, h = v.largura, v.altura + FAIXA_TITULO
+        w, h = v.largura, v.altura + v.faixa
         while True:
             base = topo - h
             limite = x1 if base >= oy1 + FOLGA else ox0 - FOLGA
             if x + w <= limite + 1e-6 and base >= y0 - 1e-6:
-                folhas[-1].itens.append((v, x, base + FAIXA_TITULO))
+                folhas[-1].itens.append((v, x, base + v.faixa))
                 x += w + FOLGA
                 altura_linha = max(altura_linha, h)
                 break
@@ -287,11 +346,10 @@ def empacotar(grupo: Grupo) -> list[Folha]:
                 if topo - h >= y0 - 1e-6:
                     continue
             if not folhas[-1].itens:               # não cabe nem sozinha
-                folhas[-1].itens.append((v, x0, y0 + FAIXA_TITULO))
+                folhas[-1].itens.append((v, x0, y0 + v.faixa))
                 topo, x, altura_linha = y0 - FOLGA, x1, 0.0
                 break
-            folhas.append(Folha(formato, grupo.conteudo,
-                                notas=list(grupo.notas)))
+            folhas.append(nova())
             topo, x, altura_linha = y1, x0, 0.0
     for f in folhas:
         if len(f.itens) == 1:
@@ -308,14 +366,51 @@ def _centrar(folha: Folha, altura_notas: float) -> None:
     v, _, _ = folha.itens[0]
     x0, y0, x1, y1 = area_util(folha.formato)
     ox0, _, _, oy1 = obstaculo(folha.formato, altura_notas)
-    w, h = v.largura, v.altura + FAIXA_TITULO
+    w, h = v.largura, v.altura + v.faixa
     if w <= x1 - x0 and h <= y1 - (oy1 + FOLGA):
         xa, xb, ya, yb = x0, x1, oy1 + FOLGA, y1
     else:
         xa, xb, ya, yb = x0, ox0 - FOLGA, y0, y1
     x = xa + max(0.0, (xb - xa - w) / 2.0)
     base = ya + max(0.0, (yb - ya - h) / 2.0)
-    folha.itens[0] = (v, x, base + FAIXA_TITULO)
+    folha.itens[0] = (v, x, base + v.faixa)
+
+
+def numerar(folhas: list[Folha]) -> None:
+    """As posições de armadura numeradas **por folha**: N1, N2, … sem
+    repetir entre as vistas da mesma folha.
+
+    Cada programa de elemento numera as posições dele a partir de N1; numa
+    folha com duas vigas haveria dois N1. A numeração da folha segue a ordem
+    das vistas e, dentro de cada uma, a ordem do motor, e é aplicada a todo
+    texto do desenho — rótulos, chamadas e a tabela de posições —, de modo
+    que o desenho e a tabela dele continuam batendo.
+    """
+    for folha in folhas:
+        proxima = 1
+        for v, _, _ in folha.itens:
+            textos = [e for e in v.entidades
+                      if e.dxftype() in ("TEXT", "MTEXT")]
+            locais = sorted({int(m.group(1)) for e in textos
+                             for m in POSICAO.finditer(_conteudo(e))})
+            if not locais:
+                continue
+            mapa = {k: proxima + i for i, k in enumerate(locais)}
+            for e in textos:
+                antes = _conteudo(e)
+                depois = POSICAO.sub(lambda m: f"N{mapa[int(m.group(1))]}",
+                                     antes)
+                if depois != antes:
+                    if e.dxftype() == "TEXT":
+                        e.dxf.text = depois
+                    else:
+                        e.text = depois
+            v.posicoes = (proxima, proxima + len(locais) - 1)
+            proxima += len(locais)
+
+
+def _conteudo(e) -> str:
+    return e.dxf.text if e.dxftype() == "TEXT" else e.text
 
 
 # ---------------------------------------------------------------------------
@@ -562,10 +657,14 @@ def _texto(msp, texto, x, y, h, camada, registro=None, girado=False,
 
 def desenhar_forma(msp, planta: PlantaDeForma, escala: int,
                    origem: tuple[float, float] = (0.0, 0.0),
-                   registro: _Registro | None = None
+                   registro: _Registro | None = None,
+                   cortes: list[tuple[str, str, float]] | None = None
                    ) -> tuple[float, float, float, float]:
     """Desenha a planta de forma no espaço do modelo, deslocada de
-    ``origem``, e devolve a caixa ocupada (cm)."""
+    ``origem``, e devolve a caixa ocupada (cm).
+
+    ``cortes``: ``(letra, eixo, posição cm)`` — a linha de cada corte
+    esquemático, com a letra nas duas pontas, por fora das cotas."""
     reg = registro if registro is not None else _Registro()
     ox, oy = origem
     desl = np.array([ox, oy])
@@ -725,8 +824,209 @@ def desenhar_forma(msp, planta: PlantaDeForma, escala: int,
     x2 = x1 - 2.6 * ht
     cadeia(ys, x1, False)
     cadeia(extremos_y, x2, False)
-    return (float(x2 - 1.5 * ht), float(ymin), float(xmax),
-            float(y2 + 1.5 * ht))
+    caixa = [float(x2 - 1.5 * ht), float(ymin), float(xmax),
+             float(y2 + 1.5 * ht)]
+
+    for letra, eixo, pos in cortes or []:
+        hl = 1.6 * ht
+        if eixo == "x":                         # plano y = pos
+            y = pos + oy
+            xa, xb = x2 - 1.5 * ht, xmax + 1.0 * ht
+            msp.add_line((xa, y), (xb, y), dxfattribs={"layer": "FORMA-CORTE"})
+            pontas = ((xa - 1.2 * hl, y), (xb + 1.2 * hl, y))
+            caixa[0] = min(caixa[0], xa - 2.0 * hl)
+            caixa[2] = max(caixa[2], xb + 2.0 * hl)
+        else:                                   # plano x = pos
+            x = pos + ox
+            ya, yb = ymin - 1.0 * ht, y2 + 1.5 * ht
+            msp.add_line((x, ya), (x, yb), dxfattribs={"layer": "FORMA-CORTE"})
+            pontas = ((x, ya - 1.2 * hl), (x, yb + 1.2 * hl))
+            caixa[1] = min(caixa[1], ya - 2.0 * hl)
+            caixa[3] = max(caixa[3], yb + 2.0 * hl)
+        for px, py in pontas:
+            _texto(msp, letra, px, py, hl, "FORMA-CORTE", reg)
+    return tuple(caixa)
+
+
+# ---------------------------------------------------------------------------
+# Cortes esquemáticos
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Corte:
+    """Um corte vertical do edifício, no plano ``(s, z)``, cm.
+
+    ``eixo = "x"``: o plano é ``y = posicao`` e ``s`` corre em X, olhando
+    para +Y; ``eixo = "y"``: o plano é ``x = posicao``, ``s`` em Y, olhando
+    para +X.
+    """
+
+    letra: str
+    eixo: str
+    posicao: float
+    cortados: list[tuple[str, Retangulo]] = field(default_factory=list)
+    vistos: list[tuple[str, Retangulo]] = field(default_factory=list)
+    niveis: list[float] = field(default_factory=list)      # cm, topos
+    base: float = 0.0                                       # cm
+
+    def caixa(self) -> tuple[float, float, float, float]:
+        cx = [r.caixa() for _, r in self.cortados + self.vistos]
+        if not cx:
+            return (0.0, self.base, 0.0, self.base)
+        a = np.array(cx)
+        return (float(a[:, 0].min()), min(float(a[:, 1].min()), self.base),
+                float(a[:, 2].max()), float(a[:, 3].max()))
+
+
+def _ret_sz(s0: float, s1: float, z0: float, z1: float) -> Retangulo:
+    return Retangulo(np.array([(s0 + s1) / 2.0, (z0 + z1) / 2.0]),
+                     np.array([1.0, 0.0]), np.array([0.0, 1.0]),
+                     abs(s1 - s0) / 2.0, abs(z1 - z0) / 2.0)
+
+
+def _meio_do_vao(valores) -> float:
+    """O meio do maior intervalo entre linhas de nó vizinhas, procurado do
+    centro para fora: o corte passa pelas lajes, nunca sobre um eixo de
+    pilar ou de viga (onde cortaria a viga ao comprido, ou as duas barras
+    que terminam no nó)."""
+    v = sorted({round(float(x), 1) for x in valores})
+    if not v:
+        return 0.0
+    if len(v) == 1:
+        return v[0] + 100.0
+    vaos = [(b - a, (a + b) / 2.0) for a, b in zip(v, v[1:])]
+    centro = (v[0] + v[-1]) / 2.0
+    # o maior vão; entre iguais, o mais perto do centro
+    return max(vaos, key=lambda t: (round(t[0], 1), -abs(t[1] - centro)))[1]
+
+
+def posicoes_de_corte(modelo) -> tuple[float, float]:
+    """``(x, y)``, cm: o corte B passa em ``x``, o A em ``y`` — entre as
+    linhas de nó de pilares e vigas."""
+    xs, ys = [], []
+    for b in modelo.barras.values():
+        for no in (b.no_i, b.no_j):
+            p = _xy(modelo, no)
+            xs.append(p[0])
+            ys.append(p[1])
+    return _meio_do_vao(xs), _meio_do_vao(ys)
+
+
+def corte(modelo, letra: str, eixo: str, posicao: float) -> Corte:
+    """O corte esquemático: lajes e vigas cortadas pelo plano; além dele, a
+    primeira linha de vigas paralelas e a primeira linha de pilares, vistas.
+    Toda viga e laje com o topo no nível do pavimento (topos nivelados)."""
+    from ..continuidade import _eh_vertical
+    from ..core.lajes import nivel_do_pavimento
+    from ..core.montagem import preparar_barras
+
+    sx, tr = (0, 1) if eixo == "x" else (1, 0)
+    c = Corte(letra, eixo, posicao)
+    c.base = min(float(modelo.ponto(n)[2]) for n in modelo.nos) * 100.0
+    for z in cotas_dos_pavimentos(modelo):
+        planta = planta_de_forma(modelo, z)
+        topo = (nivel_do_pavimento(modelo, z) or z) * 100.0
+        c.niveis.append(topo)
+        for _, r, h in planta.lajes:
+            meio = (r.a, r.b)                  # semi-lados em X e em Y
+            if abs(posicao - r.c[tr]) < meio[tr] - 1e-6:
+                c.cortados.append(("laje", _ret_sz(
+                    r.c[sx] - meio[sx], r.c[sx] + meio[sx], topo - h, topo)))
+        paralelas = []
+        for _, _, r, h in planta.vigas:
+            ao_longo = abs(float(r.u[sx]))
+            if ao_longo < 0.1 and abs(posicao - r.c[tr]) <= r.a + 1e-6:
+                c.cortados.append(("viga", _ret_sz(
+                    r.c[sx] - r.b, r.c[sx] + r.b, topo - h, topo)))
+            elif ao_longo > 0.9:
+                paralelas.append((r, h))
+        alem = [float(r.c[tr]) for r, _ in paralelas
+                if r.c[tr] > posicao + 1e-6]
+        if alem:
+            t = min(alem)
+            for r, h in paralelas:
+                if abs(float(r.c[tr]) - t) < 1.0:
+                    c.vistos.append(("viga", _ret_sz(
+                        r.c[sx] - r.a, r.c[sx] + r.a, topo - h, topo)))
+
+    R = preparar_barras(modelo)
+    lances = []
+    for nome, b in modelo.barras.items():
+        if not _eh_vertical(modelo, b):
+            continue
+        sec = modelo.secoes[b.secao]
+        ey = np.asarray(R[nome].R[1], float)[:2]
+        ez = np.asarray(R[nome].R[2], float)[:2]
+        largura = (abs(ey[sx]) * sec.b + abs(ez[sx]) * sec.h) * 100.0
+        p = _xy(modelo, b.no_i)
+        zb, zt = sorted((float(modelo.ponto(b.no_i)[2]) * 100.0,
+                         float(modelo.ponto(b.no_j)[2]) * 100.0))
+        lances.append((float(p[sx]), float(p[tr]), largura, zb, zt))
+    alem = [t for _, t, *_ in lances if t > posicao + 1e-6]
+    if alem:
+        t0 = min(alem)
+        for s_, t, w, zb, zt in lances:
+            if abs(t - t0) < 1.0:
+                c.vistos.append(("pilar", _ret_sz(s_ - w / 2, s_ + w / 2,
+                                                  zb, zt)))
+    return c
+
+
+def desenhar_corte(msp, c: Corte, escala: int,
+                   origem: tuple[float, float] = (0.0, 0.0),
+                   registro: _Registro | None = None
+                   ) -> tuple[float, float, float, float]:
+    """Desenha o corte (cortados em traço grosso e hachurados, vistos em
+    traço fino, níveis à esquerda) e devolve a caixa ocupada (cm)."""
+    reg = registro if registro is not None else _Registro()
+    ox, oy = origem
+    desl = np.array([ox, oy])
+    ht = H_TEXTO * escala / 10.0
+    cortados = [r for _, r in c.cortados]
+    padrao = 0.2 * escala / 3.175
+
+    for i, r in enumerate(cortados):
+        outros = cortados[:i] + cortados[i + 1:]
+        for a, b in r.arestas():
+            for p0, p1 in recortar(a, b, outros):
+                msp.add_line(tuple(p0 + desl), tuple(p1 + desl),
+                             dxfattribs={"layer": "CORTE-CORTADO",
+                                         "lineweight": 50})
+        hachura = msp.add_hatch(dxfattribs={"layer": "FORMA-HACHURA"})
+        hachura.set_pattern_fill("ANSI31", scale=padrao)
+        hachura.paths.add_polyline_path([tuple(k + desl) for k in r.cantos()],
+                                        is_closed=True)
+    vigas_vistas = [r for t, r in c.vistos if t == "viga"]
+    for tipo, r in c.vistos:
+        obst = cortados + (vigas_vistas if tipo == "pilar" else
+                           [v for v in vigas_vistas if v is not r])
+        for a, b in r.arestas():
+            for p0, p1 in recortar(a, b, obst):
+                msp.add_line(tuple(p0 + desl), tuple(p1 + desl),
+                             dxfattribs={"layer": "CORTE-VISTA"})
+
+    s0, z0, s1, z1 = c.caixa()
+    # linha da base (o nível mais baixo do modelo)
+    msp.add_line((s0 - 2 * ht + ox, c.base + oy), (s1 + 2 * ht + ox,
+                                                   c.base + oy),
+                 dxfattribs={"layer": "CORTE-NIVEL", "lineweight": 35})
+    # níveis à esquerda: marca triangular, traço e o valor em metros
+    xn = s0 + ox - 4.0 * ht
+    largura_n = 0.0
+    for topo in [c.base] + c.niveis:
+        y = topo + oy
+        texto = f"{'+' if topo >= -1e-6 else '-'}{_n(abs(topo) / 100.0)}"
+        msp.add_line((xn - 1.5 * ht, y), (xn + 3.0 * ht, y),
+                     dxfattribs={"layer": "CORTE-NIVEL"})
+        tri = [(xn, y), (xn - 0.5 * ht, y + 0.8 * ht),
+               (xn + 0.5 * ht, y + 0.8 * ht)]
+        msp.add_lwpolyline(tri, close=True, dxfattribs={"layer": "CORTE-NIVEL"})
+        w = largura_texto(texto, ht)
+        largura_n = max(largura_n, w)
+        _texto(msp, texto, xn - 0.8 * ht - w / 2, y + 1.4 * ht, ht,
+               "CORTE-NIVEL", reg)
+    return (float(xn - 2.0 * ht - largura_n), float(z0 + oy - 0.5 * ht),
+            float(s1 + ox + 2.5 * ht), float(z1 + oy + 3.0 * ht))
 
 
 def desenhar_quadro(msp, projeto, x: float, y: float, escala: int
@@ -770,9 +1070,11 @@ def desenhar_quadro(msp, projeto, x: float, y: float, escala: int
 # ---------------------------------------------------------------------------
 
 def _importar(alvo, origem_dxf: Path, x: float, y: float
-              ) -> tuple[tuple[float, float, float, float], float | None] | None:
+              ) -> tuple[tuple[float, float, float, float], float | None,
+                         list] | None:
     """Traz o desenho do motor para o modelo, com o canto inferior esquerdo
-    em ``(x, y)``. Devolve a caixa ocupada e a altura de texto predominante."""
+    em ``(x, y)``. Devolve a caixa ocupada, a altura de texto predominante e
+    as entidades trazidas."""
     import ezdxf
     import ezdxf.bbox
     from ezdxf.addons import Importer
@@ -804,7 +1106,7 @@ def _importar(alvo, origem_dxf: Path, x: float, y: float
         except (AttributeError, TypeError):
             continue
     return ((x, y, x + caixa.size.x, y + caixa.size.y),
-            altura_dominante(novas))
+            altura_dominante(novas), novas)
 
 
 class _Cursor:
@@ -889,16 +1191,55 @@ def _carimbo(folha: Folha, lay, projeto, revisao: str) -> None:
                  x0 + 2, yc + 4.5, H_TITULO)
 
 
+def _resumo_aco(folha: Folha, lay) -> None:
+    """O resumo do aço da folha, por bitola, logo acima do carimbo."""
+    aco = folha.aco
+    if not folha.com_aco or not aco:
+        return
+    W, _ = FORMATOS[folha.formato]
+    x0 = W - MARGEM - CARIMBO_L
+    passo = H_TEXTO * 1.7
+    topo = MARGEM + CARIMBO_H + altura_resumo(len(aco))
+    at = {"layer": "PR-TABELA"}
+    lay.add_lwpolyline([(x0, MARGEM + CARIMBO_H), (x0 + CARIMBO_L,
+                        MARGEM + CARIMBO_H), (x0 + CARIMBO_L, topo),
+                        (x0, topo)], close=True, dxfattribs=at)
+    y = topo - 4.0 - H_TITULO
+    _texto_papel(folha, lay, "RESUMO DO AÇO DA FOLHA", x0 + 2, y, H_TITULO)
+    colunas = (x0 + 2, x0 + 70, x0 + 120, x0 + 172)
+    linhas = [("ø (mm)", "comprimento (m)", "massa (kg)")]
+    total = 0.0
+    for phi, (c, m) in aco.items():
+        linhas.append((_cm(phi).replace(",0", ""), _n(c, 1), _n(m, 1)))
+        total += m
+    linhas.append(("TOTAL", "", _n(total, 1)))
+    linhas.append(("TOTAL + 10 % (perdas)", "", _n(1.10 * total, 1)))
+    for i, linha in enumerate(linhas):
+        y -= passo
+        for k, texto in enumerate(linha):
+            if not texto:
+                continue
+            if k == 0:
+                _texto_papel(folha, lay, texto, colunas[0], y, H_TEXTO)
+            else:
+                _texto_papel(folha, lay, texto, colunas[k + 1], y, H_TEXTO,
+                             alinhar="RIGHT")
+        if i in (0, len(linhas) - 3):
+            yl = y - (passo - H_TEXTO) / 2.0
+            lay.add_line((x0, yl), (x0 + CARIMBO_L, yl), dxfattribs=at)
+
+
 def _notas(folha: Folha, lay) -> None:
     if not folha.notas:
         return
     W, _ = FORMATOS[folha.formato]
     x0 = W - MARGEM - CARIMBO_L
-    y = MARGEM + CARIMBO_H + _altura_notas(folha.notas) - 6.0
+    resumo = altura_resumo(len(folha.aco)) if folha.com_aco else 0.0
+    y = MARGEM + CARIMBO_H + resumo + _altura_notas(folha.notas) - 6.0
     _texto_papel(folha, lay, "NOTAS", x0 + 2, y, H_TITULO)
     y -= H_TEXTO * 2.2
     for i, nota in enumerate(folha.notas, 1):
-        for j, s in enumerate(_quebrar(f"{i}. {nota}", CARIMBO_L - 6.0,
+        for j, s in enumerate(_quebrar(f"{i}. {nota}", CARIMBO_L - 16.0,
                                        H_TEXTO)):
             _texto_papel(folha, lay, ("   " if j else "") + s, x0 + 2, y,
                          H_TEXTO)
@@ -916,6 +1257,7 @@ def desenhar_folha(doc, folha: Folha, projeto, revisao: str) -> None:
                        close=True,
                        dxfattribs={"layer": "PR-MOLDURA", "lineweight": 70})
     _carimbo(folha, lay, projeto, revisao)
+    _resumo_aco(folha, lay)
     _notas(folha, lay)
     for vista, x, y in folha.itens:
         w, h = vista.largura, vista.altura
@@ -925,8 +1267,9 @@ def desenhar_folha(doc, folha: Folha, projeto, revisao: str) -> None:
             view_center_point=((x0 + x1) / 2, (y0 + y1) / 2),
             view_height=h * vista.escala / 10.0)
         janela.dxf.layer = "PR-JANELA"
-        _texto_papel(folha, lay, f"{vista.titulo} — ESC. 1:{vista.escala}",
-                     x, y - 6.0, H_TITULO)
+        for i, linha in enumerate(vista.linhas_titulo()):
+            _texto_papel(folha, lay, linha, x, y - 6.0 - i * H_TITULO * 1.5,
+                         H_TITULO)
 
 
 # ---------------------------------------------------------------------------
@@ -958,6 +1301,65 @@ def _fck(modelo) -> float | None:
     return None
 
 
+def _aco_por_bitola(por_bitola: dict | None, fator: int = 1) -> dict:
+    """``{phi: [comprimento m, massa kg]}`` a partir do ``por_bitola`` dos
+    motores de Vigas e de Lajes."""
+    saida = {}
+    for phi, d in (por_bitola or {}).items():
+        saida[float(phi)] = [float(d.get("comprimento", 0.0)) * fator,
+                             float(d.get("massa", 0.0)) * fator]
+    return saida
+
+
+def _aco_do_pilar(resultado, fator: int = 1) -> dict:
+    """O aço do lance pelo quantitativo do motor de Pilares (a barra
+    longitudinal com a espera, e os estribos), vezes os lances iguais."""
+    from ..elementos.pilares.core import quantitativos as qp
+    from ..elementos.pilares.core.materiais import massa_linear
+
+    try:
+        q = qp.calcular(resultado)
+    except Exception:                                    # noqa: BLE001
+        return {}
+    return {float(phi): [m / massa_linear(phi) * fator, m * fator]
+            for phi, m in q.aco.items()}
+
+
+def assinatura_do_desenho(caminho, nome: str) -> str:
+    """O que o desenho tem, sem o nome da peça: dois lances com a mesma
+    assinatura saem desenhados iguais — mesma seção, armação, estribos,
+    espera e comprimento —, e vão numa vista só."""
+    import hashlib
+
+    import ezdxf
+    import ezdxf.bbox
+
+    doc = ezdxf.readfile(str(caminho))
+    partes = []
+    for e in doc.modelspace():
+        tipo = e.dxftype()
+        if tipo in ("TEXT", "MTEXT"):
+            texto = _conteudo(e).replace(nome, "#")
+            ponto = e.dxf.insert
+            partes.append((tipo, e.dxf.layer, texto,
+                           round(ponto.x, 1), round(ponto.y, 1)))
+            continue
+        try:
+            cx = ezdxf.bbox.extents([e], fast=True)
+        except Exception:                                # noqa: BLE001
+            cx = None
+        caixa = ((round(cx.extmin.x, 1), round(cx.extmin.y, 1),
+                  round(cx.extmax.x, 1), round(cx.extmax.y, 1))
+                 if cx is not None and cx.has_data else ())
+        partes.append((tipo, e.dxf.layer, "", *caixa))
+    texto = repr(sorted(partes, key=repr))
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+NOTA_NUMERACAO = ("Posições numeradas por folha (N1, N2, …): o desenho e a "
+                  "tabela de cada peça usam a numeração da folha.")
+
+
 def montar(projeto, doc, temp: Path) -> list[Folha]:
     """Desenha o modelo e monta as folhas (ainda sem layout)."""
     from ..compatibilizacao import _arranjo_adotado
@@ -971,14 +1373,33 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
     cursor = _Cursor()
     grupos: list[Grupo] = []
     fck = _fck(modelo)
+    px, py = posicoes_de_corte(modelo)
+    marcas = [("A", "x", py), ("B", "y", px)]
 
-    def vista_importada(arquivo, titulo) -> Vista | None:
+    def vista_importada(arquivo, titulo, aco=None) -> Vista | None:
         r = _importar(doc, Path(arquivo), cursor.x, cursor.y)
         if r is None:
             return None
-        caixa, h = r
+        caixa, h, entidades = r
         cursor.ocupar(caixa)
-        return escolher_escala(Vista(titulo, caixa, escala_legivel(h)))
+        return escolher_escala(Vista(titulo, caixa, escala_legivel(h),
+                                     entidades=entidades, aco=aco or {}))
+
+    def escala_que_cabe(largura_cm, altura_cm, reserva, extra) -> int:
+        for e in (50, 75, 100, 125, 150, 200, 250):
+            w = largura_cm * 10.0 / e + extra
+            h = altura_cm * 10.0 / e + extra
+            if any(cabe(w, h + FAIXA_TITULO, f, reserva) for f in FORMATOS):
+                return e
+        return ESCALAS[-1]
+
+    def formato_de(v: Vista, reserva: float) -> Vista:
+        for f in FORMATOS:
+            if cabe(v.largura, v.altura + v.faixa, f, reserva):
+                v.formato = f
+                return v
+        v.formato = "A0"
+        return v
 
     for z in cotas_dos_pavimentos(modelo):
         rotulo = _rotulo_cota(z)
@@ -994,7 +1415,8 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
             notas += ["Pilar hachurado: chega por baixo do pavimento. "
                       "Pilar com X: nasce no pavimento.",
                       "Rótulos: nome e seção b x h (cm); lajes: nome e "
-                      "espessura h (cm)."]
+                      "espessura h (cm).",
+                      "A-A e B-B: linhas dos cortes esquemáticos."]
             if planta.trelicadas:
                 notas.append("TR: laje treliçada, verificada por faixa de "
                              "nervura; o detalhamento dela está na memória "
@@ -1004,26 +1426,15 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
                 notas.append(f"Concreto fck = {_n(fck, 0)} MPa.")
             notas_h = _altura_notas(notas)
             x0, y0, x1, y1 = planta.caixa()
-            escala = ESCALAS[-1]
-            for e in (50, 75, 100, 125, 150, 200, 250):
-                # a cota e os rótulos acrescentam ~9 alturas de texto
-                extra = 9 * H_TEXTO + 2 * PAD
-                w = (x1 - x0) * 10.0 / e + extra
-                h = (y1 - y0) * 10.0 / e + extra
-                if any(cabe(w, h, f, notas_h) for f in FORMATOS):
-                    escala = e
-                    break
+            escala = escala_que_cabe(x1 - x0, y1 - y0, notas_h,
+                                     13 * H_TEXTO + 2 * PAD)
             caixa = desenhar_forma(msp, planta, escala,
-                                   (cursor.x - x0 + 30 * escala / 10.0,
-                                    cursor.y - y0 + 30 * escala / 10.0))
+                                   (cursor.x - x0 + 40 * escala / 10.0,
+                                    cursor.y - y0 + 40 * escala / 10.0),
+                                   cortes=marcas)
             cursor.ocupar(caixa)
-            v = Vista(f"PLANTA DE FORMA — {rotulo}", caixa, escala)
-            for f in FORMATOS:
-                if cabe(v.largura, v.altura, f, notas_h):
-                    v.formato = f
-                    break
-            else:
-                v.formato = "A0"
+            v = formato_de(Vista(f"PLANTA DE FORMA — {rotulo}", caixa,
+                                 escala), notas_h)
             grupos.append(Grupo(f"PLANTA DE FORMA — {rotulo}", [v], notas))
 
         # -- lajes ---------------------------------------------------------
@@ -1039,11 +1450,14 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
             except Exception:                                # noqa: BLE001
                 continue
             if destino.exists():
-                v = vista_importada(destino, f"LAJES — {rotulo}")
+                q = getattr(pav.resultado, "quantitativo", None) or {}
+                v = vista_importada(destino, f"LAJES — {rotulo}",
+                                    _aco_por_bitola(q.get("por_bitola")))
                 if v is not None:
                     lajes.append(v)
         if lajes:
-            grupos.append(Grupo(f"ARMAÇÃO DAS LAJES — {rotulo}", lajes))
+            grupos.append(Grupo(f"ARMAÇÃO DAS LAJES — {rotulo}", lajes,
+                                [NOTA_NUMERACAO], com_aco=True))
 
         # -- vigas ---------------------------------------------------------
         cursor.proxima_linha()
@@ -1059,24 +1473,52 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
                                            com_dxf=True, com_png=False)
             except Exception:                                # noqa: BLE001
                 continue
+            q = getattr(vv.resultado, "quantitativo", None) or {}
             for a in arquivos:
                 if isinstance(a, str) and a.endswith(".dxf") and Path(a).exists():
-                    v = vista_importada(a, f"VIGA {vv.nome}")
+                    v = vista_importada(a, f"VIGA {vv.nome}",
+                                        _aco_por_bitola(q.get("por_bitola")))
                     if v is not None:
                         vigas.append(v)
                     break
         if vigas:
-            grupos.append(Grupo(f"ARMAÇÃO DAS VIGAS — {rotulo}", vigas))
+            grupos.append(Grupo(f"ARMAÇÃO DAS VIGAS — {rotulo}", vigas,
+                                [NOTA_NUMERACAO], com_aco=True))
 
-    # -- pilares, por prumada e de baixo para cima ---------------------------
+    # -- cortes esquemáticos ---------------------------------------------------
+    cursor.proxima_linha()
+    notas_c = ["Elementos cortados pelo plano em traço grosso e hachurados; "
+               "vigas e pilares além do plano em traço fino.",
+               "Níveis em metros: a base do modelo e o topo das vigas e "
+               "lajes de cada pavimento (topos nivelados).",
+               "Posição dos cortes nas plantas de forma."]
+    reserva_c = _altura_notas(notas_c)
+    cortes_v = []
+    for letra, eixo, pos in marcas:
+        c = corte(modelo, letra, eixo, pos)
+        if not c.cortados:
+            continue
+        s0, z0, s1, z1 = c.caixa()
+        escala = escala_que_cabe(s1 - s0, z1 - z0, reserva_c,
+                                 10 * H_TEXTO + 2 * PAD)
+        ht = H_TEXTO * escala / 10.0
+        caixa = desenhar_corte(msp, c, escala,
+                               (cursor.x - s0 + 12 * ht, cursor.y - z0 + ht))
+        cursor.ocupar(caixa)
+        cortes_v.append(formato_de(Vista(f"CORTE {letra}-{letra}", caixa,
+                                         escala), reserva_c))
+    if cortes_v:
+        grupos.append(Grupo("CORTES ESQUEMÁTICOS", cortes_v, notas_c))
+
+    # -- pilares: os iguais numa vista só, por prumada e de baixo para cima ----
     cursor.proxima_linha()
     por_barra: dict[str, list] = {}
     for v in projeto.pilares:
         por_barra.setdefault(v.barra, []).append(v)
     ordem = [l.barra for p in projeto.prumadas for l in p.lances] or \
         sorted(por_barra, key=_ordem_natural)
-    pilares = []
     (temp / "pilares").mkdir(parents=True, exist_ok=True)
+    familias: dict[str, list] = {}            # assinatura → [(barra, res, dxf)]
     for barra in ordem:
         escolhida, _ = _arranjo_adotado(por_barra.get(barra, []))
         if escolhida is None:
@@ -1086,12 +1528,31 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
             dxf_pilar.exportar(escolhida.resultado, str(destino))
         except Exception:                                    # noqa: BLE001
             continue
-        if destino.exists():
-            v = vista_importada(destino, f"PILAR {barra}")
-            if v is not None:
-                pilares.append(v)
+        if not destino.exists():
+            continue
+        try:
+            chave = assinatura_do_desenho(destino, barra)
+        except Exception:                                    # noqa: BLE001
+            chave = barra
+        familias.setdefault(chave, []).append(
+            (barra, escolhida.resultado, destino))
+    pilares = []
+    for membros in familias.values():
+        nomes = [m[0] for m in membros]
+        titulo = (f"PILAR {nomes[0]}" if len(nomes) == 1 else
+                  "PILARES " + " = ".join(nomes))
+        v = vista_importada(membros[0][2], titulo,
+                            _aco_do_pilar(membros[0][1], len(membros)))
+        if v is not None:
+            v.membros = nomes
+            pilares.append(v)
     if pilares:
-        grupos.append(Grupo("ARMAÇÃO DOS PILARES", pilares))
+        grupos.append(Grupo(
+            "ARMAÇÃO DOS PILARES", pilares,
+            ["Lances iguais (mesma seção, armação, estribos, espera e "
+             "comprimento) numa vista só: o desenho traz o nome do primeiro "
+             "e vale para todos os do título; o resumo do aço conta todos.",
+             NOTA_NUMERACAO], com_aco=True))
 
     # -- quadro de quantidades ---------------------------------------------
     cursor.proxima_linha()
@@ -1107,6 +1568,7 @@ def montar(projeto, doc, temp: Path) -> list[Folha]:
     folhas = [f for g in grupos for f in empacotar(g)]
     for i, f in enumerate(folhas, 1):
         f.numero, f.total = i, len(folhas)
+    numerar(folhas)
     return folhas
 
 
@@ -1164,10 +1626,10 @@ def sobreposicoes(folhas: list[Folha], folga: float = 0.0) -> list[tuple]:
                         or a[3] + folga <= b[1] or b[3] + folga <= a[1]):
                     achados.append((f.numero, "texto", a[4], b[4]))
         W, H = FORMATOS[f.formato]
-        ox0, oy0, ox1, oy1 = obstaculo(f.formato, _altura_notas(f.notas))
+        ox0, oy0, ox1, oy1 = obstaculo(f.formato, f.reserva)
         caixas = []
         for v, x, y in f.itens:
-            c = (x, y - FAIXA_TITULO, x + v.largura, y + v.altura)
+            c = (x, y - v.faixa, x + v.largura, y + v.altura)
             if c[0] < MARGEM_ESQ - 1e-6 or c[1] < MARGEM - 1e-6 \
                     or c[2] > W - MARGEM + 1e-6 or c[3] > H - MARGEM + 1e-6:
                 achados.append((f.numero, "fora da moldura", v.titulo, ""))
